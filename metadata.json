@@ -1,0 +1,6 @@
+{
+  "name": "MuseFlow",
+  "description": "A sleek dark-theme-first music application with Home, Search, Library, and Settings screens, featuring modern styling and gradients.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

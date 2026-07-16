@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Deep Pitch Black Background with diagonal linear gradient shift -->
+    <path
+        android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="108"
+                android:endY="108"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#090A0F" />
+                <item android:offset="0.6" android:color="#0F131F" />
+                <item android:offset="1.0" android:color="#00381B" /> <!-- Subtle green corner glow -->
+            </gradient>
+        </aapt:attr>
+    </path>
+    
+    <!-- Subtle sound waves floating in background -->
+    <path
+        android:strokeWidth="1.5"
+        android:strokeColor="#1A26334D"
+        android:fillColor="#00000000"
+        android:pathData="M 10,54 A 44,44 0 0,0 98,54" />
+    <path
+        android:strokeWidth="1.0"
+        android:strokeColor="#1500FF88"
+        android:fillColor="#00000000"
+        android:pathData="M 20,54 A 34,34 0 0,0 88,54" />
+    <path
+        android:strokeWidth="0.5"
+        android:strokeColor="#1000E5FF"
+        android:fillColor="#00000000"
+        android:pathData="M 30,54 A 24,24 0 0,0 78,54" />
+</vector>

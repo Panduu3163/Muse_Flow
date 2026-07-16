@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer vibrant sound wave ring -->
+    <path
+        android:strokeWidth="3"
+        android:strokeColor="#00E5FF"
+        android:fillColor="#00000000"
+        android:pathData="M 54,54 m -32,0 a 32,32 0 1,1 64,0 a 32,32 0 1,1 -64,0" />
+
+    <!-- Inner glowing sound wave ring -->
+    <path
+        android:strokeWidth="2"
+        android:strokeColor="#00FF88"
+        android:fillColor="#00000000"
+        android:pathData="M 54,54 m -25,0 a 25,25 0 1,1 50,0 a 25,25 0 1,1 -50,0" />
+
+    <!-- Left Note Head (Solid Electric Mint) -->
+    <path
+        android:fillColor="#00FF88"
+        android:pathData="M 36,65 A 6,6 0 1,1 42,59 A 6,6 0 1,1 36,65 Z" />
+
+    <!-- Right Note Head (Solid Electric Cyan) -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M 54,58 A 6,6 0 1,1 60,52 A 6,6 0 1,1 54,58 Z" />
+
+    <!-- Note Stems & Connecting Beam -->
+    <!-- Left vertical stem -->
+    <path
+        android:fillColor="#00FF88"
+        android:pathData="M 40,36 L 44,36 L 44,59 L 40,59 Z" />
+    <!-- Right vertical stem -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M 58,29 L 62,29 L 62,52 L 58,52 Z" />
+    <!-- Connecting beam slant -->
+    <path
+        android:fillColor="#00FF88"
+        android:pathData="M 40,31 L 62,24 L 62,30 L 40,37 Z" />
+    
+    <!-- Sound EQ lines on the left and right -->
+    <path
+        android:pathData="M 14,48 L 14,60 M 10,51 L 10,57 M 94,48 L 94,60 M 98,51 L 98,57"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeColor="#00E5FF" />
+</vector>
