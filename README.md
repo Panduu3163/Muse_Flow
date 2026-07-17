@@ -1,70 +1,130 @@
+<div align="center">
+
 # 🎵 MuseFlow
 
-![Android](https://img.shields.io/badge/Platform-Android-3DDC84?logo=android&logoColor=white)
-![Kotlin](https://img.shields.io/badge/Language-Kotlin-7F52FF?logo=kotlin&logoColor=white)
-![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack_Compose-4285F4?logo=android&logoColor=white)
-![Media3](https://img.shields.io/badge/Audio-Media3_ExoPlayer-FF6F00)
+**A free, ad-free music streaming app for Android.**
 
-**MuseFlow** is a personal music player app for Android, built with Kotlin and Jetpack Compose. It searches and streams real songs (via JioSaavn), plays them in the background with a proper media notification, shows synced lyrics, and can save tracks for offline listening.
+Built with Kotlin, Jetpack Compose, and Media3 — a personal project aiming for a Spotify-level experience without the price tag.
 
-> **⚠️ Note:** This is a hobby project, not a commercial product. It is actively being worked on, so expect bugs, rough edges, and features that are visibly still in progress.
+![Kotlin](https://img.shields.io/badge/Kotlin-100%25-7F52FF?style=for-the-badge&logo=kotlin)
+![Platform](https://img.shields.io/badge/Platform-Android-3DDC84?style=for-the-badge&logo=android)
+![License](https://img.shields.io/badge/License-GPL--3.0-blue?style=for-the-badge)
+![Status](https://img.shields.io/badge/Status-Active%20Development-orange?style=for-the-badge)
 
-## 📋 Table of Contents
-- [Features](#-features)
-- [Screenshots](#-screenshots)
-- [Built With](#-built-with)
-- [Run Locally](#-run-locally)
-- [Author](#-author)
+</div>
+
+---
+
+## ⚠️ Before you read further
+
+MuseFlow is a **personal hobby project**, not a commercial product. It has bugs. It's actively being worked on. It exists because I wanted to learn and build something I'd actually use — not to compete with anyone.
+
+It also relies on unofficial/reverse-engineered access to some music platforms' internal APIs (details below), which exists in a legal gray area regarding those platforms' Terms of Service. This is the same trade-off made by several well-known open-source music apps this project draws inspiration and code from. Use accordingly.
 
 ---
 
 ## ✨ Features
 
-*   **🧭 Seamless Navigation:** A single Navigation-Compose `NavHost` manages a proper back stack across Home, Search, Library, Settings, and the Now Playing screen. The system back button predictably returns to the previous screen and only exits from the Home tab.
-*   **👋 First-Launch Onboarding:** A one-time welcome flow for profile setup (display name + optional photo via the Android Photo Picker), persisted securely via DataStore.
-*   **🔎 Real Search & Streaming:** Search returns real songs from JioSaavn's public API and plays them end-to-end through Media3 ExoPlayer.
-*   **🎵 Background Playback:** Playback runs in a `MediaSessionService`, surviving app backgrounding or screen locks. The system derives a MediaStyle notification (cover art, title, play/pause/skip) straight from the session, with automatic audio focus handling.
-*   **🖼️ Dynamic Cover Art:** Pulled from JioSaavn search results and displayed across the mini-player, Now Playing, and notifications—with Coil handling all image loading and caching.
-*   **🎤 Synced Lyrics:** The Now Playing screen displays real, time-synced lyrics fetched from LRCLib, highlighting and auto-scrolling to the current line as the track plays.
-*   **💾 Offline Downloads:** Download any searched track to app-private storage. Downloaded tracks are tracked in a local Room database and play directly from disk. A dedicated "Offline mode" toggle in the Library filters your view to downloaded tracks only.
-*   **🎨 Appearance Theming:** Switch the app's background between AMOLED black and a set of gradient palettes. Changes are applied instantly across every screen and persisted between launches.
-*   **⚙️ Comprehensive Settings:** Organized into Account, Appearance, Player & Audio, Lyrics, Library, and more. 
-    *   *Functional:* Account, About, and Theme picker.
-    *   *Work in Progress:* Lyrics styling, swipe gestures, auto playlists, Listen Together, and Storage management currently display "coming soon" placeholders.
+### 🎧 Playback
+- Background playback with a real, controllable media notification (play/pause/skip, cover art)
+- Gapless queue management — skip, shuffle, repeat
+- Offline downloads for on-the-go listening, no connection required
+- Local device file playback alongside streaming
+
+### 🔍 Discovery
+- Search across **Songs, Albums, Artists, and Playlists**
+- Results merged and deduplicated across multiple sources automatically
+- Real Home feed shelves (Recently Played, mood/genre-based recommendations)
+- Search history
+
+### 🎤 Lyrics
+- Real-time synced lyrics, scrolling in time with playback
+
+### 🎨 Personalization
+- First-launch onboarding with a custom display name and profile photo
+- AMOLED (true black) and Gradient theme modes, with selectable color palettes
+- Deep Appearance/Player/Lyrics customization options
+
+### 📚 Library
+- Liked Songs, Downloaded tracks, Recently Played — all backed by real local data, nothing hardcoded
+- Create and manage your own playlists
 
 ---
 
-## 📱 Screenshots
+## 🛠️ Tech Stack
 
-> *(Add screenshots of your app here to make the repository more engaging. You can drag and drop images directly into GitHub to generate links.)*
+| Layer | Technology |
+|---|---|
+| Language | Kotlin |
+| UI | Jetpack Compose + Material 3 |
+| Playback | Media3 / ExoPlayer |
+| Architecture | MVVM, Hilt (DI), Kotlin Coroutines & Flow |
+| Local Storage | Room, DataStore Preferences |
+| Networking | Retrofit, OkHttp |
+| Images | Coil |
 
-| Home | Now Playing | Lyrics | Settings |
-| :---: | :---: | :---: | :---: |
-| `<img src="link_here" width="200"/>` | `<img src="link_here" width="200"/>` | `<img src="link_here" width="200"/>` | `<img src="link_here" width="200"/>` |
+### How music sourcing works
+
+MuseFlow doesn't host or own any music. It resolves playable audio through a **provider-chain architecture** — multiple independent sources, tried and merged so no single point of failure takes down the app:
+
+- **JioSaavn** — primary catalog source, public API
+- **YouTube Music** — full authenticated streaming pipeline (visitor identity, BotGuard proof-of-origin token generation, signature/cipher deobfuscation) for access to YouTube's much broader catalog
+- **LRCLib** — open, public API for synced lyrics
+
+Each source is isolated behind a shared `Provider` interface, so if one breaks (which does happen — these are unofficial integrations reacting to platform changes), the others keep the app functional.
 
 ---
 
-## 🛠️ Built With
+## 🙏 Credits & Acknowledgements
 
-*   **Kotlin** + **Jetpack Compose** + **Material3** for a modern, declarative UI.
-*   **Media3 / ExoPlayer** for reliable playback, background `MediaSessionService`, and media notifications.
-*   **Navigation-Compose** for robust app routing.
-*   **Room** for structuring the offline-downloads database.
-*   **DataStore Preferences** for persisting application settings and user profiles.
-*   **OkHttp + Moshi/org.json** for robust API client integration (JioSaavn & LRCLib).
-*   **Coil** for fast and efficient image loading.
+MuseFlow wouldn't exist without the open-source music-client community. Significant logic, architecture patterns, and research in this project were adapted from:
+
+- [Metrolist](https://github.com/MetrolistGroup/Metrolist) — reference implementation for YouTube Music integration
+- [zemer-cipher](https://github.com/ZemerTeam/zemer-cipher) — YouTube cipher deobfuscation and PoToken generation
+- [SimpMusic](https://github.com/maxrave-dev/SimpMusic) — cross-reference for YouTube Music streaming
+- [Echo Music](https://github.com/EchoMusicApp/Echo-Music) — architectural inspiration (provider-chain/fallback pattern, feature set)
+- [LRCLib](https://lrclib.net) — synced lyrics API
+
+Genuine thanks to the maintainers of these projects for their work being open enough to learn from.
 
 ---
 
-## 🚀 Run Locally
+## 📦 Getting the App
 
-**Prerequisites:** [Android Studio](https://developer.android.com/studio) or a JDK 17+ command-line setup, and the Android SDK.
+This is currently a personal build, not published to any app store. To build it yourself:
 
-1. **Clone the repository** and open it in Android Studio (or use the command line).
-2. **Configure SDK:** Make sure your `local.properties` file has `sdk.dir` pointing to your Android SDK installation.
-3. **Generate a debug signing key:** Open your terminal and run the following command to create a key (this is required but not checked into the repository):
-   
-   ```bash
-   keytool -genkeypair -v -keystore debug.keystore -storepass android \
-     -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
-     -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+**Prerequisites:** Android Studio (or the Android SDK + JDK 17+ directly), Kotlin 2.2+
+
+1. Clone this repo
+2. Open in Android Studio and let it sync
+3. Build a debug APK: `./gradlew assembleDebug`
+4. Install on your device
+
+---
+
+## 🚧 Roadmap
+
+- [ ] Additional lyrics source fallbacks
+- [ ] Word-by-word synced lyrics
+- [ ] Artist pages with monthly listener counts
+- [ ] Listen Together (real-time synced listening sessions)
+- [ ] Continued UI polish
+
+---
+
+## 📄 License
+
+This project is licensed under **GPL-3.0**, consistent with the licenses of the upstream projects it adapts code and research from. See [LICENSE](LICENSE) for the full text.
+
+---
+
+## 👤 Developer
+
+**Mynul Kabir Nayem**
+📧 mynulkbr@gmail.com
+
+<div align="center">
+
+*Made with a lot of trial, error, and genuine love for music.*
+
+</div>
