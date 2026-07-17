@@ -153,14 +153,41 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
+/** v4 -> v5: adds [HomeShelfCacheEntity]'s table, for Home's offline shelf cache - a brand new
+ * table, so a plain `CREATE TABLE` is enough (nothing to backfill; it starts empty and fills in
+ * as shelves load normally). */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `home_shelf_cache` (" +
+                "`shelfTitle` TEXT NOT NULL, `tracksJson` TEXT NOT NULL, `cachedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`shelfTitle`))"
+        )
+    }
+}
+
+/** v5 -> v6: adds [SearchHistoryEntity]'s table, for Search's recent-queries chips - a brand new
+ * table, so a plain `CREATE TABLE` is enough. */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `search_history` (" +
+                "`query` TEXT NOT NULL, `searchedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`query`))"
+        )
+    }
+}
+
 @Database(
     entities = [
         DownloadedTrackEntity::class,
         PlaybackHistoryEntity::class,
         LikedSongEntity::class,
-        PlaylistEntity::class
+        PlaylistEntity::class,
+        HomeShelfCacheEntity::class,
+        SearchHistoryEntity::class
     ],
-    version = 4,
+    version = 6,
     exportSchema = false
 )
 abstract class MuseFlowDatabase : RoomDatabase() {
@@ -168,6 +195,8 @@ abstract class MuseFlowDatabase : RoomDatabase() {
     abstract fun playbackHistoryDao(): PlaybackHistoryDao
     abstract fun likedSongDao(): LikedSongDao
     abstract fun playlistDao(): PlaylistDao
+    abstract fun homeShelfCacheDao(): HomeShelfCacheDao
+    abstract fun searchHistoryDao(): SearchHistoryDao
 
     companion object {
         @Volatile private var instance: MuseFlowDatabase? = null
@@ -179,7 +208,7 @@ abstract class MuseFlowDatabase : RoomDatabase() {
                     MuseFlowDatabase::class.java,
                     "museflow.db"
                 )
-                    .addMigrations(MIGRATION_3_4)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .build().also { instance = it }
             }
     }

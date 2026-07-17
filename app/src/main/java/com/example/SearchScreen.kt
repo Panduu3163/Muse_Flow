@@ -1,5 +1,10 @@
 package com.example
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -16,6 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -23,10 +29,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
+
+/** Search's two data sources: [ONLINE] is the existing merged JioSaavn+YouTube Music search;
+ * [ON_DEVICE] scans local audio files via [LocalAudioProvider]/MediaStore instead - no network
+ * involved. Only [ONLINE] has Album/Artist/Playlist tabs; MediaStore has no equivalent grouping,
+ * so [ON_DEVICE] shows a single flat song list (via the same [SongResultRows] Online uses). */
+private enum class SearchMode { ONLINE, ON_DEVICE }
+
+private fun audioPermission(): String =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.READ_MEDIA_AUDIO
+    } else {
+        Manifest.permission.READ_EXTERNAL_STORAGE
+    }
 
 @Composable
 fun SearchScreen(
@@ -38,7 +59,28 @@ fun SearchScreen(
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) }
+    var isSearchFieldFocused by remember { mutableStateOf(false) }
+    var searchMode by remember { mutableStateOf(SearchMode.ONLINE) }
     val tabTitles = listOf("Songs", "Albums", "Artists", "Playlists")
+
+    val context = LocalContext.current
+    var hasAudioPermission by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, audioPermission()) == PackageManager.PERMISSION_GRANTED)
+    }
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> hasAudioPermission = granted }
+
+    val searchHistoryViewModel: SearchHistoryViewModel = viewModel()
+    val recentQueries by searchHistoryViewModel.recentQueries.collectAsState()
+
+    // Records a query once the user actually pauses on it (same debounce every results tab
+    // already waits on before firing its own search) - not on every keystroke.
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.isBlank()) return@LaunchedEffect
+        delay(350)
+        searchHistoryViewModel.record(searchQuery)
+    }
 
     ThemedBackground(
         modifier = modifier.fillMaxSize()
@@ -88,39 +130,78 @@ fun SearchScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                    .onFocusChanged { isSearchFieldFocused = it.isFocused }
                     .testTag("search_input_field")
             )
 
-            // Category Tab Row
-            TabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = Color.Transparent,
-                contentColor = MaterialTheme.colorScheme.primary,
-                indicator = { tabPositions ->
-                    TabRowDefaults.SecondaryIndicator(
-                        Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                },
-                divider = {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                },
-                modifier = Modifier.padding(bottom = 12.dp)
+            if ((searchQuery.isEmpty() || isSearchFieldFocused) && recentQueries.isNotEmpty()) {
+                SearchHistoryChips(
+                    queries = recentQueries,
+                    onQueryClick = { searchQuery = it },
+                    onQueryRemove = { searchHistoryViewModel.delete(it) },
+                    onClearAll = { searchHistoryViewModel.clearAll() }
+                )
+            }
+
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                tabTitles.forEachIndexed { index, title ->
-                    Tab(
-                        selected = selectedTab == index,
-                        onClick = { selectedTab = index },
-                        text = {
-                            Text(
-                                text = title,
-                                style = MaterialTheme.typography.titleSmall.copy(
-                                    fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
+                SegmentedButton(
+                    selected = searchMode == SearchMode.ONLINE,
+                    onClick = { searchMode = SearchMode.ONLINE },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    modifier = Modifier.testTag("search_mode_online")
+                ) {
+                    Text("Online")
+                }
+                SegmentedButton(
+                    selected = searchMode == SearchMode.ON_DEVICE,
+                    onClick = {
+                        searchMode = SearchMode.ON_DEVICE
+                        if (!hasAudioPermission) audioPermissionLauncher.launch(audioPermission())
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    modifier = Modifier.testTag("search_mode_on_device")
+                ) {
+                    Text("On device")
+                }
+            }
+
+            // Category Tab Row - Online only; On-device search has no Album/Artist/Playlist
+            // equivalent, just one flat song list (see SongResultRows).
+            if (searchMode == SearchMode.ONLINE) {
+                TabRow(
+                    selectedTabIndex = selectedTab,
+                    containerColor = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    indicator = { tabPositions ->
+                        TabRowDefaults.SecondaryIndicator(
+                            Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    divider = {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    },
+                    modifier = Modifier.padding(bottom = 12.dp)
+                ) {
+                    tabTitles.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = {
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
+                                    )
                                 )
-                            )
-                        },
-                        modifier = Modifier.testTag("search_tab_${title.lowercase()}")
-                    )
+                            },
+                            modifier = Modifier.testTag("search_tab_${title.lowercase()}")
+                        )
+                    }
                 }
             }
 
@@ -130,12 +211,156 @@ fun SearchScreen(
                     .fillMaxWidth()
                     .weight(1f)
             ) {
-                when (selectedTab) {
-                    0 -> SongsResults(searchQuery = searchQuery, onPlayTrack = onPlayTrack)
-                    1 -> AlbumsResults(searchQuery = searchQuery, onAlbumClick = onAlbumClick)
-                    2 -> ArtistsResults(searchQuery = searchQuery, onArtistClick = onArtistClick)
-                    3 -> PlaylistsResults(searchQuery = searchQuery, onPlaylistClick = onPlaylistClick)
+                if (searchMode == SearchMode.ON_DEVICE) {
+                    OnDeviceResults(
+                        searchQuery = searchQuery,
+                        hasPermission = hasAudioPermission,
+                        onRequestPermission = { audioPermissionLauncher.launch(audioPermission()) },
+                        onPlayTrack = onPlayTrack
+                    )
+                } else {
+                    when (selectedTab) {
+                        0 -> SongsResults(searchQuery = searchQuery, onPlayTrack = onPlayTrack)
+                        1 -> AlbumsResults(searchQuery = searchQuery, onAlbumClick = onAlbumClick)
+                        2 -> ArtistsResults(searchQuery = searchQuery, onArtistClick = onArtistClick)
+                        3 -> PlaylistsResults(searchQuery = searchQuery, onPlaylistClick = onPlaylistClick)
+                    }
                 }
+            }
+        }
+    }
+}
+
+/** Search's "On device" mode: searches local audio files via [LocalAudioProvider] (MediaStore) -
+ * no network, no debounce-worthy latency to hide, just a quick local query - and renders through
+ * the exact same [SongResultRows] Online's Songs tab uses, so a result looks identical regardless
+ * of where it came from. */
+@Composable
+private fun OnDeviceResults(
+    searchQuery: String,
+    hasPermission: Boolean,
+    onRequestPermission: () -> Unit,
+    onPlayTrack: (Track, List<Track>) -> Unit
+) {
+    val context = LocalContext.current
+    val localAudioProvider = remember { LocalAudioProvider(context) }
+    var state by remember { mutableStateOf<UiState<List<Track>>>(UiState.Loading) }
+
+    LaunchedEffect(searchQuery, hasPermission) {
+        if (!hasPermission) return@LaunchedEffect
+        state = UiState.Loading
+        delay(150) // still worth a light debounce so fast typing doesn't fire a query per key
+        state = loadAsUiState(errorMessage = "Couldn't scan audio files on this device.") {
+            localAudioProvider.search(searchQuery)
+                .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
+        }
+    }
+
+    if (!hasPermission) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("🎵", fontSize = 48.sp, modifier = Modifier.padding(bottom = 16.dp))
+            Text(
+                text = "Permission needed",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Allow access to audio files to search music stored on this device.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(onClick = onRequestPermission, modifier = Modifier.testTag("on_device_grant_permission")) {
+                Text("Grant access")
+            }
+        }
+        return
+    }
+
+    val currentState = state
+    when {
+        currentState is UiState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
+        currentState is UiState.Error -> EmptySearchState(
+            title = "Couldn't search this device",
+            message = currentState.message
+        )
+        currentState is UiState.Success && currentState.data.isEmpty() -> EmptySearchState(
+            title = if (searchQuery.isBlank()) "No local music found" else "No results found",
+            message = if (searchQuery.isBlank()) {
+                "No audio files were found on this device."
+            } else {
+                "Double check your spelling or search for something else."
+            }
+        )
+        currentState is UiState.Success -> SongResultRows(results = currentState.data, onPlayTrack = onPlayTrack)
+    }
+}
+
+/** Tappable recent-search chips shown below the search box (see [SearchScreen]) - each carries
+ * its own small remove ("x") target, plus a trailing "Clear all" action for the whole list. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun SearchHistoryChips(
+    queries: List<String>,
+    onQueryClick: (String) -> Unit,
+    onQueryRemove: (String) -> Unit,
+    onClearAll: () -> Unit
+) {
+    Column(modifier = Modifier.padding(bottom = 12.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Recent searches",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Clear all",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clickable(onClick = onClearAll)
+                    .testTag("search_history_clear_all")
+            )
+        }
+        FlowRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            queries.forEach { query ->
+                InputChip(
+                    selected = false,
+                    onClick = { onQueryClick(query) },
+                    label = { Text(query, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    trailingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Clear,
+                            contentDescription = "Remove \"$query\" from search history",
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clickable { onQueryRemove(query) }
+                        )
+                    },
+                    modifier = Modifier.testTag("search_history_chip_${query.lowercase().replace(" ", "_")}")
+                )
             }
         }
     }
@@ -212,81 +437,91 @@ fun SongsResults(
             message = currentState.message
         )
         currentState is UiState.Success && currentState.data.isEmpty() -> EmptySearchState()
-        currentState is UiState.Success -> {
-        val results = currentState.data
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            items(results) { track ->
-                val gradientColors = MusicData.Gradients[track.gradientIndex % MusicData.Gradients.size]
-                val isFromYouTube = track.sourceType == MusicSource.YOUTUBE_MUSIC
+        currentState is UiState.Success -> SongResultRows(results = currentState.data, onPlayTrack = onPlayTrack)
+    }
+}
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        // YouTube tracks play directly now, same as JioSaavn - PlaybackService
-                        // resolves a fresh, real stream URL right before actual playback (see
-                        // YouTubeStreamResolver), so no upfront resolve/substitute step is needed
-                        // here anymore.
-                        .clickable { onPlayTrack(track, results) }
-                        .padding(8.dp)
-                        .testTag("search_song_row_${track.title.lowercase().replace(" ", "_")}"),
-                    verticalAlignment = Alignment.CenterVertically
+/** The actual track-row list shared by every song-result source - Online search ([SongsResults])
+ * and On-device search ([OnDeviceResults]) both render through this, so switching modes changes
+ * only where the data comes from, never how a result looks. */
+@Composable
+private fun SongResultRows(results: List<Track>, onPlayTrack: (Track, List<Track>) -> Unit) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(results) { track ->
+            val gradientColors = MusicData.Gradients[track.gradientIndex % MusicData.Gradients.size]
+            val isFromYouTube = track.sourceType == MusicSource.YOUTUBE_MUSIC
+            val isLocalDevice = track.sourceType == MusicSource.LOCAL_DEVICE
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    // YouTube tracks play directly now, same as JioSaavn - PlaybackService
+                    // resolves a fresh, real stream URL right before actual playback (see
+                    // YouTubeStreamResolver), so no upfront resolve/substitute step is needed
+                    // here anymore. A local-device track's content:// URI is already directly
+                    // playable too, same as it always was.
+                    .clickable { onPlayTrack(track, results) }
+                    .padding(8.dp)
+                    .testTag("search_song_row_${track.title.lowercase().replace(" ", "_")}"),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TrackArtwork(
+                    imageUrl = track.imageUrl,
+                    gradientColors = gradientColors,
+                    modifier = Modifier.size(52.dp)
                 ) {
-                    TrackArtwork(
-                        imageUrl = track.imageUrl,
-                        gradientColors = gradientColors,
-                        modifier = Modifier.size(52.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PlayArrow,
-                            contentDescription = "Play Track",
-                            tint = Color.White.copy(alpha = 0.8f),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column(modifier = Modifier.weight(1f)) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = "Play Track",
+                        tint = Color.White.copy(alpha = 0.8f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = track.title,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = track.title,
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                            color = MaterialTheme.colorScheme.onSurface,
+                            text = track.artist,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (isFromYouTube || isLocalDevice) {
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = track.artist,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                text = if (isFromYouTube) "• YouTube Music" else "• On this device",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1
                             )
-                            if (isFromYouTube) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "• YouTube Music",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    maxLines = 1
-                                )
-                            }
                         }
                     }
-                    Text(
-                        text = track.duration,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (!isFromYouTube) {
-                        DownloadButton(track = track, modifier = Modifier.testTag("search_download_button_${track.title.lowercase().replace(" ", "_")}"))
-                    }
+                }
+                Text(
+                    text = track.duration,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                // Neither a YouTube track (streams via a fresh per-play resolve, not a fixed URL)
+                // nor a local-device track (already sitting on-device - nothing to download) needs
+                // this.
+                if (!isFromYouTube && !isLocalDevice) {
+                    DownloadButton(track = track, modifier = Modifier.testTag("search_download_button_${track.title.lowercase().replace(" ", "_")}"))
                 }
             }
-        }
         }
     }
 }
