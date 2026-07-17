@@ -60,13 +60,18 @@ class DownloadRepository private constructor(context: Context) {
         if (activeJobs.containsKey(key)) return
         _failures.update { it - key }
         activeJobs[key] = repositoryScope.launch {
-            _inProgress.update { it + (key to 0) }
+            // -1: no percent known yet (server hasn't reported a size, or the request hasn't
+            // opened yet) - both the in-app button and the system notification show an
+            // indeterminate spinner for this, distinct from an actual 0-99% in progress.
+            _inProgress.update { it + (key to -1) }
+            DownloadNotificationHelper.showProgress(appContext, track, percent = null)
             try {
                 val streamUrl = track.streamUrl ?: resolveStreamUrl(track)
                 ?: error("No playable stream found for \"${track.title}\"")
                 val targetFile = File(downloadsDir(appContext), "$key.audio")
                 downloadToFile(streamUrl, targetFile) { percent ->
                     _inProgress.update { it + (key to percent) }
+                    DownloadNotificationHelper.showProgress(appContext, track, percent)
                 }
                 dao.upsert(
                     DownloadedTrackEntity(
@@ -84,16 +89,19 @@ class DownloadRepository private constructor(context: Context) {
                         sourceType = track.sourceType?.name
                     )
                 )
+                DownloadNotificationHelper.showCompleted(appContext, track)
             } catch (e: CancellationException) {
                 // A user-initiated cancel (see cancelDownload) - not a failure, just clean up
                 // the partial file below and let the cancellation propagate as normal.
                 File(downloadsDir(appContext), "$key.audio").delete()
+                DownloadNotificationHelper.clear(appContext, key)
                 throw e
             } catch (e: Exception) {
                 // Don't leave a stale/broken row around - a partial file is useless, and the user
                 // can just tap download again.
                 File(downloadsDir(appContext), "$key.audio").delete()
                 _failures.update { it + (key to (e.message ?: "Download failed")) }
+                DownloadNotificationHelper.clear(appContext, key)
             } finally {
                 _inProgress.update { it - key }
                 activeJobs.remove(key)
