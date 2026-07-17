@@ -81,7 +81,8 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
                 artist = it.artist,
                 duration = it.duration,
                 source = name,
-                sourceType = MusicSource.YOUTUBE_MUSIC
+                sourceType = MusicSource.YOUTUBE_MUSIC,
+                imageUrl = it.thumbnailUrl
             )
         }
     }
@@ -220,11 +221,32 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
             }
         }
 
+        val thumbnailUrl = renderer
+            .optJSONObject("thumbnail")
+            ?.optJSONObject("musicThumbnailRenderer")
+            ?.optJSONObject("thumbnail")
+            ?.optJSONArray("thumbnails")
+            ?.let { thumbnails ->
+                // Thumbnails are listed smallest-first; the last entry is the highest-res one
+                // YouTube offered, and we upgrade its size params further below.
+                (0 until thumbnails.length()).mapNotNull { thumbnails.optJSONObject(it)?.optString("url") }
+                    .lastOrNull { it.isNotBlank() }
+            }
+            ?.let { upgradeThumbnailUrl(it) }
+
         return YtSearchResult(
             videoId = videoId,
             title = title,
             artist = artist ?: "Unknown artist",
-            duration = duration
+            duration = duration,
+            thumbnailUrl = thumbnailUrl
         )
     }
+
+    /** YouTube's thumbnail URLs (typically googleusercontent.com) encode the requested size in
+     * the URL itself (e.g. "=w120-h120-l90-rj"); search results default to a small size meant
+     * for a list row, so bump it up for sharper Now Playing/notification art. URLs without that
+     * size-param pattern (e.g. a plain i.ytimg.com path) are passed through unchanged. */
+    private fun upgradeThumbnailUrl(rawUrl: String): String =
+        rawUrl.replace(Regex("=w\\d+-h\\d+.*$"), "=w544-h544-l90-rj")
 }

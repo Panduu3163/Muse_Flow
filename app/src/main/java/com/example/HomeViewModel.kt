@@ -41,21 +41,22 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     val shelfTitles: List<String> = moodShelfQueries.map { it.title }
 
-    /** Shelf title -> tracks. A missing/null value means that shelf's search hasn't resolved
-     * yet; an empty list means it resolved but found nothing playable (e.g. offline). */
-    private val _moodShelves = MutableStateFlow<Map<String, List<Track>?>>(emptyMap())
-    val moodShelves: StateFlow<Map<String, List<Track>?>> = _moodShelves
+    /** Shelf title -> [UiState]. A missing entry (or [UiState.Loading]) means that shelf's search
+     * hasn't resolved yet; [UiState.Error] means a genuine failure or timeout, distinct from
+     * [UiState.Success] with an empty list (resolved, just nothing playable found). */
+    private val _moodShelves = MutableStateFlow<Map<String, UiState<List<Track>>>>(emptyMap())
+    val moodShelves: StateFlow<Map<String, UiState<List<Track>>>> = _moodShelves
 
     init {
         moodShelfQueries.forEach { shelf ->
             viewModelScope.launch {
-                val tracks = runCatching {
+                val state = loadAsUiState(errorMessage = "Couldn't load \"${shelf.title}\" right now.") {
                     provider.search(shelf.query)
                         .filter { it.directStreamUrl != null }
                         .take(10)
                         .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
-                }.getOrDefault(emptyList())
-                _moodShelves.update { it + (shelf.title to tracks) }
+                }
+                _moodShelves.update { it + (shelf.title to state) }
             }
         }
     }

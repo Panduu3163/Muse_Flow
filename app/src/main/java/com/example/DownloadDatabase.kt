@@ -14,6 +14,9 @@ import kotlinx.coroutines.flow.Flow
 
 enum class DownloadStatus { DOWNLOADING, COMPLETED, FAILED }
 
+// TODO: sourceId/sourceType not yet persisted here - a YouTube-sourced track reconstructed from
+// this table will fall through to mock-catalog resolution instead of re-resolving via
+// YouTubeStreamResolver. Needs a schema migration to add these fields.
 /**
  * A track downloaded for offline playback. Keyed by [Track.downloadKey] (title/artist) rather
  * than any provider-specific id, since the mock catalog, JioSaavn search results, and this table
@@ -48,6 +51,9 @@ interface DownloadedTrackDao {
     suspend fun deleteByKey(key: String)
 }
 
+// TODO: sourceId/sourceType not yet persisted here - a YouTube-sourced track reconstructed from
+// this table will fall through to mock-catalog resolution instead of re-resolving via
+// YouTubeStreamResolver. Needs a schema migration to add these fields.
 /**
  * One row per distinct track that's actually been played, for Home's real "Recently Played"
  * shelf. Keyed the same way as [DownloadedTrackEntity] (title/artist), so replaying a track
