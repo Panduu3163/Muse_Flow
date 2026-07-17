@@ -8,8 +8,19 @@ data class Track(
     val album: String,
     val duration: String,
     val plays: String,
-    val gradientIndex: Int
+    val gradientIndex: Int,
+    /** Real cover art URL from a provider (e.g. JioSaavn search). Null for the built-in mock
+     * catalog, which falls back to the gradient placeholder wherever it's rendered. */
+    val imageUrl: String? = null,
+    /** Real, directly-playable stream URL. Null for the mock catalog, whose tracks are instead
+     * resolved lazily by [PlaybackService] via a title/artist search. */
+    val streamUrl: String? = null
 )
+
+/** Stable identity for a track across sources (mock catalog, search results, or reconstructed
+ * from a [DownloadedTrackEntity]) - title/artist is all any of them are guaranteed to share, so
+ * downloads are looked up by this rather than by object equality. */
+fun Track.downloadKey(): String = "${title.trim().lowercase()}::${artist.trim().lowercase()}"
 
 /** Parses a "m:ss" duration string into total seconds, falling back to 210s (3:30) if malformed. */
 fun parseDurationToSeconds(duration: String): Int {
@@ -109,12 +120,6 @@ object MusicData {
         Track("Get Lucky", "Daft Punk", "Random Access Memories", "4:08", "450M", 3),
         Track("Intro", "The xx", "xx", "2:08", "89M", 2),
         Track("Bad Guy", "Billie Eilish", "When We All Fall Asleep", "3:14", "1.4B", 9)
-    )
-
-    val downloadedSongs = listOf(
-        Track("Midnight City", "M83", "Hurry Up, We're Dreaming", "4:03", "142M", 0),
-        Track("Starboy", "The Weeknd", "Starboy", "3:50", "1.2B", 4),
-        Track("Lose Yourself", "Eminem", "8 Mile", "5:26", "980M", 5)
     )
 
     val recentlyPlayedSongs = listOf(

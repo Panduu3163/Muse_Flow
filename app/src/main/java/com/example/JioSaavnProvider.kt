@@ -92,13 +92,21 @@ class JioSaavnProvider : Provider<TrackResult> {
         val encryptedMediaUrl = moreInfo?.optString("encrypted_media_url")?.takeIf { it.isNotBlank() }
         val streamUrl = encryptedMediaUrl?.let { decryptMediaUrl(it) }
 
+        // JioSaavn's search results embed a low-res thumbnail URL (e.g. "...50x50.jpg");
+        // every quality JioSaavn actually serves lives at the same path, so upgrading the size
+        // segment gets a much sharper image for the notification/Now Playing art with no extra call.
+        val imageUrl = song.optString("image").takeIf { it.isNotBlank() }
+            ?.let { decodeHtmlEntities(it) }
+            ?.replace(Regex("50x50|150x150"), "500x500")
+
         return TrackResult(
             id = id,
             title = title,
             artist = artist,
             duration = duration,
             source = name,
-            directStreamUrl = streamUrl
+            directStreamUrl = streamUrl,
+            imageUrl = imageUrl
         )
     }
 

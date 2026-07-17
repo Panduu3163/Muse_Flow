@@ -12,7 +12,9 @@ data class TrackResult(
      * JioSaavn's encrypted_media_url), needing no extra network round-trip. Null for providers
      * that require a separate resolve step (e.g. YouTube Music's videoId -> /player call).
      */
-    val directStreamUrl: String? = null
+    val directStreamUrl: String? = null,
+    /** Cover art URL, used as the media notification's large icon when present. */
+    val imageUrl: String? = null
 )
 
 /**

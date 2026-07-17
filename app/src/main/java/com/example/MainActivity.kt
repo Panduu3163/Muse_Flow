@@ -1,9 +1,14 @@
 package com.example
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -43,16 +48,31 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.ui.theme.MyApplicationTheme
-import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
+
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* no-op either way */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        requestNotificationPermissionIfNeeded()
         setContent {
             MyApplicationTheme {
                 MainLayout()
             }
+        }
+    }
+
+    // Android 13+ requires runtime consent to show any notification, including the playback
+    // MediaStyle one - without it the foreground service still runs, but silently.
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 }
@@ -136,34 +156,14 @@ private fun MainApp() {
         "MainLayout must be composed within a ViewModelStoreOwner (e.g. a ComponentActivity)"
     }
 
-    // Global player state
-    var activeTrack by remember { mutableStateOf<Track?>(MusicData.tracks[1]) } // Default to "Blinding Lights"
-    var isPlaying by remember { mutableStateOf(false) }
-
-    // Single source of truth for playback position (0f..1f fraction of track elapsed),
-    // shared by the mini-player and the Now Playing screen so they never drift apart.
-    var playbackProgress by remember { mutableFloatStateOf(0f) }
-
-    // Reset progress whenever the active track changes, regardless of where that
-    // change originated (tapping a track in a tab, or prev/next in Now Playing).
-    LaunchedEffect(activeTrack) {
-        playbackProgress = 0f
-    }
-
-    // Advances progress once per second while playing. Lives here, in a composable
-    // that's always in composition, so it keeps running whether or not the Now
-    // Playing screen is currently shown.
-    LaunchedEffect(isPlaying, activeTrack) {
-        val track = activeTrack ?: return@LaunchedEffect
-        if (isPlaying) {
-            val totalSeconds = parseDurationToSeconds(track.duration)
-            while (true) {
-                delay(1000)
-                val increment = 1f / totalSeconds
-                playbackProgress = (playbackProgress + increment) % 1.0f
-            }
-        }
-    }
+    // Global player state, backed by a MediaController talking to the always-running
+    // PlaybackService - so playback (and this state) keeps going in the background, not just
+    // while MainApp is in composition.
+    val playerViewModel: PlayerViewModel = viewModel()
+    val playerState by playerViewModel.uiState.collectAsState()
+    val activeTrack = playerState.track
+    val isPlaying = playerState.isPlaying
+    val playbackProgress = playerState.progress
 
     // Local, unpersisted Settings toggles. Hoisted here (rather than inside SettingsScreen)
     // because each settings sub-screen is now its own NavHost destination - a separate
@@ -176,10 +176,10 @@ private fun MainApp() {
     var resumeOnBluetooth by remember { mutableStateOf(true) }
     var hideVideoContent by remember { mutableStateOf(false) }
 
-    val onPlayTrack: (Track) -> Unit = {
-        activeTrack = it
-        isPlaying = true
-    }
+    val onPlayTrack: (Track) -> Unit = { playerViewModel.playTrack(it) }
+    // Search results form their own queue (the current results list), rather than the mock
+    // catalog Home/Library browse - so next/previous cycle through what was actually searched.
+    val onPlaySearchResult: (Track, List<Track>) -> Unit = { track, queue -> playerViewModel.playTrack(track, queue) }
 
     // Now Playing is a full destination, not a bottom-bar tab; hide the nav bar/mini-player
     // while it's showing, same as the previous overlay-based design.
@@ -201,8 +201,8 @@ private fun MainApp() {
                             track = track,
                             isPlaying = isPlaying,
                             progress = playbackProgress,
-                            onPlayPauseToggle = { isPlaying = !isPlaying },
-                            onClose = { activeTrack = null },
+                            onPlayPauseToggle = { playerViewModel.togglePlayPause() },
+                            onClose = { playerViewModel.stopPlayback() },
                             onClick = { navController.navigate(Routes.NOW_PLAYING) }
                         )
                     }
@@ -290,7 +290,7 @@ private fun MainApp() {
                 }
                 composable(Routes.SEARCH, enterTransition = tabEnter, exitTransition = tabExit) {
                     Box(Modifier.padding(innerPadding)) {
-                        SearchScreen(onPlayTrack = onPlayTrack)
+                        SearchScreen(onPlayTrack = onPlaySearchResult)
                     }
                 }
                 composable(Routes.LIBRARY, enterTransition = tabEnter, exitTransition = tabExit) {
@@ -519,19 +519,12 @@ private fun MainApp() {
                             track = track,
                             isPlaying = isPlaying,
                             progress = playbackProgress,
-                            onProgressChange = { playbackProgress = it },
-                            onPlayPauseToggle = { isPlaying = !isPlaying },
+                            positionMs = playerState.positionMs,
+                            onProgressChange = { playerViewModel.seekTo(it) },
+                            onPlayPauseToggle = { playerViewModel.togglePlayPause() },
                             onClose = { navController.popBackStack() },
-                            onNext = {
-                                val currentIndex = MusicData.tracks.indexOf(activeTrack)
-                                val nextIndex = (currentIndex + 1) % MusicData.tracks.size
-                                activeTrack = MusicData.tracks[nextIndex]
-                            },
-                            onPrevious = {
-                                val currentIndex = MusicData.tracks.indexOf(activeTrack)
-                                val prevIndex = if (currentIndex - 1 < 0) MusicData.tracks.size - 1 else currentIndex - 1
-                                activeTrack = MusicData.tracks[prevIndex]
-                            }
+                            onNext = { playerViewModel.skipNext() },
+                            onPrevious = { playerViewModel.skipPrevious() }
                         )
                     }
                 }
@@ -572,12 +565,10 @@ fun CompactPlayer(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Track Small Cover Art
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Brush.linearGradient(gradientColors)),
-                    contentAlignment = Alignment.Center
+                TrackArtwork(
+                    imageUrl = track.imageUrl,
+                    gradientColors = gradientColors,
+                    modifier = Modifier.size(44.dp)
                 ) {
                     Text("🎵", fontSize = 16.sp)
                 }

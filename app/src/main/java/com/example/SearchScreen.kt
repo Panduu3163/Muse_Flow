@@ -24,10 +24,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
 @Composable
 fun SearchScreen(
-    onPlayTrack: (Track) -> Unit,
+    onPlayTrack: (Track, List<Track>) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -135,49 +136,89 @@ fun SearchScreen(
     }
 }
 
+/** JioSaavn results mapped to real, playable [Track]s: [Track.streamUrl] and [Track.imageUrl]
+ * carry the actual CDN/cover-art URLs straight from search, so playing one needs no further
+ * resolution step and its artwork is already known everywhere the track flows (mini-player,
+ * Now Playing, notification). Results without a resolvable stream URL are dropped - they'd be
+ * unplayable dead ends if shown. */
+private fun TrackResult.toPlayableTrack(gradientIndex: Int): Track = Track(
+    title = title,
+    artist = artist,
+    album = source,
+    duration = duration ?: "-:--",
+    plays = "",
+    gradientIndex = gradientIndex,
+    imageUrl = imageUrl,
+    streamUrl = directStreamUrl
+)
+
 @Composable
 fun SongsResults(
     searchQuery: String,
-    onPlayTrack: (Track) -> Unit
+    onPlayTrack: (Track, List<Track>) -> Unit
 ) {
-    val filteredTracks = remember(searchQuery) {
+    val provider = remember { JioSaavnProvider() }
+    var results by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(false) }
+    var hasError by remember { mutableStateOf(false) }
+
+    LaunchedEffect(searchQuery) {
         if (searchQuery.isBlank()) {
-            MusicData.tracks
-        } else {
-            MusicData.tracks.filter {
-                it.title.contains(searchQuery, ignoreCase = true) ||
-                it.artist.contains(searchQuery, ignoreCase = true)
-            }
+            results = emptyList()
+            isLoading = false
+            hasError = false
+            return@LaunchedEffect
+        }
+        isLoading = true
+        hasError = false
+        delay(350) // debounce so we don't fire a search per keystroke
+        try {
+            results = provider.search(searchQuery)
+                .filter { it.directStreamUrl != null }
+                .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
+            hasError = false
+        } catch (e: Exception) {
+            results = emptyList()
+            hasError = true
+        } finally {
+            isLoading = false
         }
     }
 
-    if (filteredTracks.isEmpty()) {
-        EmptySearchState()
-    } else {
-        LazyColumn(
+    when {
+        isLoading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
+        hasError -> EmptySearchState(
+            title = "Search failed",
+            message = "Couldn't reach JioSaavn. Check your connection and try again."
+        )
+        searchQuery.isBlank() -> EmptySearchState(
+            title = "Search for a song",
+            message = "Find any track, artist, or album to start listening."
+        )
+        results.isEmpty() -> EmptySearchState()
+        else -> LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(filteredTracks) { track ->
+            items(results) { track ->
                 val gradientColors = MusicData.Gradients[track.gradientIndex % MusicData.Gradients.size]
-                
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { onPlayTrack(track) }
+                        .clickable { onPlayTrack(track, results) }
                         .padding(8.dp)
                         .testTag("search_song_row_${track.title.lowercase().replace(" ", "_")}"),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Small square cover art placeholder
-                    Box(
-                        modifier = Modifier
-                            .size(52.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Brush.linearGradient(gradientColors)),
-                        contentAlignment = Alignment.Center
+                    TrackArtwork(
+                        imageUrl = track.imageUrl,
+                        gradientColors = gradientColors,
+                        modifier = Modifier.size(52.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.PlayArrow,
@@ -208,6 +249,7 @@ fun SongsResults(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    DownloadButton(track = track, modifier = Modifier.testTag("search_download_button_${track.title.lowercase().replace(" ", "_")}"))
                 }
             }
         }
@@ -410,7 +452,10 @@ fun PlaylistsResults(searchQuery: String) {
 }
 
 @Composable
-fun EmptySearchState() {
+fun EmptySearchState(
+    title: String = "No results found",
+    message: String = "Double check your spelling or search for something else."
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -424,13 +469,13 @@ fun EmptySearchState() {
             modifier = Modifier.padding(bottom = 16.dp)
         )
         Text(
-            text = "No results found",
+            text = title,
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
             color = MaterialTheme.colorScheme.onBackground
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "Double check your spelling or search for something else.",
+            text = message,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center

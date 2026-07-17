@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -283,6 +284,11 @@ fun SettingsGroupHeader(title: String) {
     )
 }
 
+/**
+ * @param functional Most settings rows in this app aren't wired to real behavior yet (see
+ * [showComingSoonToast]'s doc). Default `false` so a setting silently does nothing only once
+ * someone deliberately opts it in by passing `functional = true` after actually wiring it up.
+ */
 @Composable
 fun SettingsToggleRow(
     icon: ImageVector,
@@ -290,12 +296,17 @@ fun SettingsToggleRow(
     subtitle: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    tag: String
+    tag: String,
+    functional: Boolean = false
 ) {
+    val context = LocalContext.current
+    val effectiveOnCheckedChange: (Boolean) -> Unit =
+        if (functional) onCheckedChange else { _ -> showComingSoonToast(context, title) }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onCheckedChange(!checked) }
+            .clickable { effectiveOnCheckedChange(!checked) }
             .padding(horizontal = 16.dp, vertical = 12.dp)
             .testTag(tag),
         verticalAlignment = Alignment.CenterVertically
@@ -321,7 +332,7 @@ fun SettingsToggleRow(
         }
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = effectiveOnCheckedChange,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color(0xFF090A0F),
                 checkedTrackColor = MaterialTheme.colorScheme.primary,

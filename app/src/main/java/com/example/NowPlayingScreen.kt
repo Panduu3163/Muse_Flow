@@ -7,9 +7,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -31,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.sin
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -39,6 +43,7 @@ fun NowPlayingScreen(
     track: Track,
     isPlaying: Boolean,
     progress: Float,
+    positionMs: Long,
     onProgressChange: (Float) -> Unit,
     onPlayPauseToggle: () -> Unit,
     onClose: () -> Unit,
@@ -59,6 +64,11 @@ fun NowPlayingScreen(
         BackgroundMode.Gradient -> Modifier.background(Brush.verticalGradient(themeState.palette.colors))
     }
 
+    // Real synced lyrics from LRCLib, keyed to this track; re-fetched whenever the track changes.
+    val lyricsViewModel: LyricsViewModel = viewModel()
+    val lyricsResult by lyricsViewModel.lyricsResult.collectAsState()
+    LaunchedEffect(track) { lyricsViewModel.loadLyricsFor(track) }
+
     // Parse track duration to seconds
     val totalSeconds = remember(track.duration) { parseDurationToSeconds(track.duration) }
 
@@ -71,47 +81,6 @@ fun NowPlayingScreen(
 
     val elapsedSeconds = (progress * totalSeconds).toInt()
     val remainingSeconds = totalSeconds - elapsedSeconds
-
-    // Sample Lyrics DB
-    val sampleLyrics = remember {
-        mapOf(
-            "Blinding Lights" to listOf(
-                "I've been on my own for long enough",
-                "Maybe you can show me how to love, maybe",
-                "I'm going through withdrawals",
-                "You don't even have to do too much",
-                "You can turn me on with just a touch, baby",
-                "I look around and Sin City's cold and empty",
-                "No one's around to judge me",
-                "I can't see clearly when you're gone"
-            ),
-            "Ethereal Drift" to listOf(
-                "Floating through the velvet sky",
-                "Stars are whispering a lullaby",
-                "Gravity begins to fade away",
-                "Into the neon-colored haze",
-                "Lost inside the cosmic stream",
-                "Dancing in an endless dream"
-            ),
-            "Midnight Pulse" to listOf(
-                "Neon lights reflecting on the street",
-                "Feeling the electric pulse of the beat",
-                "Midnight shadows come alive tonight",
-                "Underneath the synthetic violet light",
-                "We ride the frequency so high",
-                "Chasing stars across the cyber sky"
-            )
-        )
-    }
-
-    val currentLyrics = sampleLyrics[track.title] ?: listOf(
-        "Feeling the rhythm deep inside",
-        "Where the electric currents glide",
-        "Let the frequency take control",
-        "Healing the pieces of your soul",
-        "In this immersive flow we meet",
-        "Guided by the cosmic beat"
-    )
 
     // Animated Ambient Canvas / Floating Glow
     val infiniteTransition = rememberInfiniteTransition(label = "ambient_glow")
@@ -248,6 +217,17 @@ fun NowPlayingScreen(
                     .testTag("album_art_container"),
                 contentAlignment = Alignment.Center
             ) {
+                // Real cover art (JioSaavn search results), if this track has one. Mock-catalog
+                // tracks have no imageUrl and keep the emoji placeholder below unchanged.
+                if (track.imageUrl != null) {
+                    coil.compose.AsyncImage(
+                        model = track.imageUrl,
+                        contentDescription = "${track.title} cover art",
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        modifier = Modifier.matchParentSize()
+                    )
+                }
+
                 // If lyrics overlay is requested, show them on top of the cover art beautifully
                 if (showLyrics) {
                     Box(
@@ -256,29 +236,11 @@ fun NowPlayingScreen(
                             .background(Color.Black.copy(alpha = 0.85f))
                             .padding(20.dp)
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            Text(
-                                text = "Lyrics",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                color = Color(0xFFD0BCFF),
-                                modifier = Modifier.padding(bottom = 12.dp)
-                            )
-                            currentLyrics.forEachIndexed { index, line ->
-                                Text(
-                                    text = line,
-                                    style = MaterialTheme.typography.titleMedium.copy(
-                                        fontWeight = if (index == 2) FontWeight.ExtraBold else FontWeight.Medium,
-                                        lineHeight = 26.sp
-                                    ),
-                                    color = if (index == 2) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.7f),
-                                    modifier = Modifier.padding(vertical = 4.dp)
-                                )
-                            }
-                        }
+                        LyricsContent(
+                            lyricsResult = lyricsResult,
+                            positionMs = positionMs,
+                            modifier = Modifier.fillMaxSize()
+                        )
                         // Pill overlay to collapse lyrics
                         Box(
                             modifier = Modifier
@@ -291,8 +253,8 @@ fun NowPlayingScreen(
                             Text("Show Cover", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
-                } else {
-                    // Huge Vinyl/Note Icon representation
+                } else if (track.imageUrl == null) {
+                    // Huge Vinyl/Note Icon representation - only when there's no real art to show
                     Box(
                         modifier = Modifier
                             .size(120.dp)
@@ -501,6 +463,12 @@ fun NowPlayingScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Download the currently playing track for offline playback
+                    DownloadButton(
+                        track = track,
+                        modifier = Modifier.testTag("now_playing_download_button")
+                    )
+
                     // Share Icon
                     IconButton(onClick = { /* Share placeholder trigger */ }) {
                         Icon(
@@ -522,6 +490,90 @@ fun NowPlayingScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Renders whatever [LrcLibProvider.fetchLyrics] came back with. Null means still loading. Synced
+ * lyrics get a scrolling, karaoke-style list that highlights and auto-centers the line whose
+ * timestamp [positionMs] has most recently passed - everything else (plain-only lyrics,
+ * instrumental tracks, no match, a fetch error) gets a plain, non-highlighted message instead,
+ * since none of those have real timing data to sync against.
+ */
+@Composable
+private fun LyricsContent(
+    lyricsResult: LyricsResult?,
+    positionMs: Long,
+    modifier: Modifier = Modifier
+) {
+    when (lyricsResult) {
+        null -> LyricsMessage("Loading lyrics…", modifier)
+        is LyricsResult.Error -> LyricsMessage("Couldn't load lyrics right now.", modifier)
+        LyricsResult.NotFound -> LyricsMessage("No lyrics found for this track.", modifier)
+        LyricsResult.Instrumental -> LyricsMessage("Instrumental - no lyrics.", modifier)
+        is LyricsResult.PlainOnly -> {
+            Column(modifier = modifier.verticalScroll(rememberScrollState())) {
+                LyricsHeader()
+                Text(
+                    text = lyricsResult.text,
+                    style = MaterialTheme.typography.titleMedium.copy(lineHeight = 26.sp),
+                    color = Color(0xFFE6E1E5).copy(alpha = 0.85f)
+                )
+            }
+        }
+        is LyricsResult.Synced -> SyncedLyricsList(lyricsResult.lines, positionMs, modifier)
+    }
+}
+
+@Composable
+private fun LyricsMessage(text: String, modifier: Modifier = Modifier) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleMedium,
+            color = Color(0xFFE6E1E5).copy(alpha = 0.7f),
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun LyricsHeader() {
+    Text(
+        text = "Lyrics",
+        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+        color = Color(0xFFD0BCFF),
+        modifier = Modifier.padding(bottom = 12.dp)
+    )
+}
+
+@Composable
+private fun SyncedLyricsList(lines: List<LyricLine>, positionMs: Long, modifier: Modifier = Modifier) {
+    val currentIndex = remember(lines, positionMs) { LrcLibProvider.currentLineIndex(lines, positionMs) }
+    val listState = rememberLazyListState()
+
+    // +1 to skip past the "Lyrics" header item at index 0; -2 so the current line settles a
+    // little below the top of the visible area rather than being pinned to it.
+    LaunchedEffect(currentIndex) {
+        if (currentIndex >= 0) {
+            listState.animateScrollToItem(max(0, currentIndex + 1 - 2))
+        }
+    }
+
+    LazyColumn(modifier = modifier, state = listState) {
+        item { LyricsHeader() }
+        itemsIndexed(lines) { index, line ->
+            val isCurrent = index == currentIndex
+            Text(
+                text = line.text.ifBlank { "♪" },
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = if (isCurrent) FontWeight.ExtraBold else FontWeight.Medium,
+                    lineHeight = 26.sp
+                ),
+                color = if (isCurrent) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.6f),
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
         }
     }
 }

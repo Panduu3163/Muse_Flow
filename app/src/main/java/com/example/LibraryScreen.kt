@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
 fun LibraryScreen(
@@ -38,6 +39,14 @@ fun LibraryScreen(
     var showNewPlaylistDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
 
+    val downloadViewModel: DownloadViewModel = viewModel()
+    val downloadedTracks by downloadViewModel.downloadedTracks.collectAsState()
+    val downloadedKeys = remember(downloadedTracks) { downloadedTracks.map { it.downloadKey() }.toSet() }
+
+    // When on, every track tab (Liked/Recently Played - Downloads is already downloads-only)
+    // filters down to just what's actually playable offline.
+    var offlineModeEnabled by remember { mutableStateOf(false) }
+
     ThemedBackground(
         modifier = modifier.fillMaxSize()
     ) {
@@ -45,12 +54,31 @@ fun LibraryScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             // Header
-            Text(
-                text = "Your Library",
-                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 12.dp)
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Your Library",
+                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Offline mode",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Switch(
+                        checked = offlineModeEnabled,
+                        onCheckedChange = { offlineModeEnabled = it },
+                        modifier = Modifier.testTag("library_offline_mode_switch")
+                    )
+                }
+            }
 
             // Scrollable Tab Row to accommodate all 4 tabs beautifully on all screens
             ScrollableTabRow(
@@ -175,52 +203,71 @@ fun LibraryScreen(
                         }
                     }
                     1 -> {
-                        // Liked Songs
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            items(MusicData.likedSongs) { song ->
-                                LibrarySongRow(track = song, leadingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Default.Favorite,
-                                        contentDescription = "Liked",
-                                        tint = Color(0xFFFF2D55),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }, onPlayTrack = onPlayTrack)
+                        // Liked Songs - filtered to downloaded-only when Offline mode is on
+                        val songs = MusicData.likedSongs.filterOfflineIfNeeded(offlineModeEnabled, downloadedKeys)
+                        if (songs.isEmpty()) {
+                            OfflineEmptyState()
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                items(songs) { song ->
+                                    LibrarySongRow(track = song, leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Default.Favorite,
+                                            contentDescription = "Liked",
+                                            tint = Color(0xFFFF2D55),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }, onPlayTrack = onPlayTrack)
+                                }
                             }
                         }
                     }
                     2 -> {
-                        // Downloads
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            items(MusicData.downloadedSongs) { song ->
-                                LibrarySongRow(track = song, leadingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Default.DownloadDone,
-                                        contentDescription = "Downloaded",
-                                        tint = MusePrimary,
-                                        modifier = Modifier.size(16.dp)
+                        // Downloads - real, Room-backed downloaded tracks; play straight from disk
+                        if (downloadedTracks.isEmpty()) {
+                            OfflineEmptyState(message = "Nothing downloaded yet. Download a track from Search or Now Playing.")
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                items(downloadedTracks) { song ->
+                                    LibrarySongRow(
+                                        track = song,
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.DownloadDone,
+                                                contentDescription = "Downloaded",
+                                                tint = MusePrimary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        },
+                                        trailingContent = { DownloadButton(track = song, downloadViewModel = downloadViewModel) },
+                                        onPlayTrack = onPlayTrack
                                     )
-                                }, onPlayTrack = onPlayTrack)
+                                }
                             }
                         }
                     }
                     3 -> {
-                        // Recently Played
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            items(MusicData.recentlyPlayedSongs) { song ->
-                                LibrarySongRow(track = song, leadingIcon = null, onPlayTrack = onPlayTrack)
+                        // Recently Played - filtered to downloaded-only when Offline mode is on
+                        val songs = MusicData.recentlyPlayedSongs.filterOfflineIfNeeded(offlineModeEnabled, downloadedKeys)
+                        if (songs.isEmpty()) {
+                            OfflineEmptyState()
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                items(songs) { song ->
+                                    LibrarySongRow(track = song, leadingIcon = null, onPlayTrack = onPlayTrack)
+                                }
                             }
                         }
                     }
@@ -309,6 +356,7 @@ fun LibraryScreen(
 fun LibrarySongRow(
     track: Track,
     leadingIcon: (@Composable () -> Unit)? = null,
+    trailingContent: (@Composable () -> Unit)? = null,
     onPlayTrack: (Track) -> Unit
 ) {
     val gradientColors = MusicData.Gradients[track.gradientIndex % MusicData.Gradients.size]
@@ -322,12 +370,10 @@ fun LibrarySongRow(
             .testTag("library_song_row_${track.title.lowercase().replace(" ", "_")}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(52.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Brush.linearGradient(gradientColors)),
-            contentAlignment = Alignment.Center
+        TrackArtwork(
+            imageUrl = track.imageUrl,
+            gradientColors = gradientColors,
+            modifier = Modifier.size(52.dp)
         ) {
             Text("🎵", fontSize = 20.sp)
         }
@@ -354,10 +400,44 @@ fun LibrarySongRow(
                 )
             }
         }
+        if (trailingContent != null) {
+            trailingContent()
+        } else {
+            Text(
+                text = track.duration,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** When Offline mode is on, keeps only tracks actually available in [downloadedKeys]; otherwise
+ * returns [this] unchanged. */
+private fun List<Track>.filterOfflineIfNeeded(offlineModeEnabled: Boolean, downloadedKeys: Set<String>): List<Track> =
+    if (offlineModeEnabled) filter { downloadedKeys.contains(it.downloadKey()) } else this
+
+@Composable
+private fun OfflineEmptyState(message: String = "No downloaded tracks here yet. Turn off Offline mode, or download some tracks first.") {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.DownloadDone,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.size(40.dp)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = track.duration,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            text = message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
         )
     }
 }
