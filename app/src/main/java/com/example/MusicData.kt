@@ -14,7 +14,13 @@ data class Track(
     val imageUrl: String? = null,
     /** Real, directly-playable stream URL. Null for the mock catalog, whose tracks are instead
      * resolved lazily by [PlaybackService] via a title/artist search. */
-    val streamUrl: String? = null
+    val streamUrl: String? = null,
+    /** Which backend this track was found on, when known (search results). Null for the mock
+     * catalog, downloads, liked songs, and playback history, which don't need this distinction -
+     * they're always either already playable or resolved by title/artist already. A
+     * [MusicSource.YOUTUBE_MUSIC] track has no direct stream and must be resolved to a JioSaavn
+     * match before it can play; see [SearchScreen]'s song tap handler. */
+    val sourceType: MusicSource? = null
 )
 
 /** Stable identity for a track across sources (mock catalog, search results, or reconstructed
@@ -112,20 +118,5 @@ object MusicData {
         Playlist("Focus & Flow", 88, "Deep Work", 5),
         Playlist("Discover Weekly", 30, "MuseFlow", 0),
         Playlist("Coding Session", 145, "Developer", 8)
-    )
-    
-    // Playlists specifically for Liked, Downloads, Recently Played
-    val likedSongs = listOf(
-        Track("Blinding Lights", "The Weeknd", "After Hours", "3:20", "2.1B", 1),
-        Track("Get Lucky", "Daft Punk", "Random Access Memories", "4:08", "450M", 3),
-        Track("Intro", "The xx", "xx", "2:08", "89M", 2),
-        Track("Bad Guy", "Billie Eilish", "When We All Fall Asleep", "3:14", "1.4B", 9)
-    )
-
-    val recentlyPlayedSongs = listOf(
-        Track("Instant Destiny", "Tame Impala", "The Slow Rush", "3:13", "34M", 8),
-        Track("Bohemian Rhapsody", "Queen", "A Night at the Opera", "5:55", "1.1B", 7),
-        Track("Stairway to Heaven", "Led Zeppelin", "Led Zeppelin IV", "8:02", "55M", 6),
-        Track("Midnight City", "M83", "Hurry Up, We're Dreaming", "4:03", "142M", 0)
     )
 }

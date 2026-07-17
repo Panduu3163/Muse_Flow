@@ -89,7 +89,14 @@ class YouTubeMusicProvider : Provider<TrackResult> {
         )
 
         parseSearchResults(responseJson).map {
-            TrackResult(id = it.videoId, title = it.title, artist = it.artist, duration = it.duration, source = name)
+            TrackResult(
+                id = it.videoId,
+                title = it.title,
+                artist = it.artist,
+                duration = it.duration,
+                source = name,
+                sourceType = MusicSource.YOUTUBE_MUSIC
+            )
         }
     }
 

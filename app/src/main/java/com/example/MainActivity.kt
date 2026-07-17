@@ -182,6 +182,14 @@ private fun MainApp() {
     // (MusicData.tracks) won't contain it and it'll silently do nothing.
     val onPlayQueuedTrack: (Track, List<Track>) -> Unit = { track, queue -> playerViewModel.playTrack(track, queue) }
 
+    // The album/artist/playlist a Search result was last tapped for - hoisted here (rather than
+    // passed as a nav argument, which nothing else in this app's NavHost does either) so
+    // AlbumDetail/ArtistDetail/PlaylistDetail can read it after navigating, same pattern as
+    // activeTrack feeding NowPlayingScreen.
+    var selectedAlbum by remember { mutableStateOf<AlbumResult?>(null) }
+    var selectedArtist by remember { mutableStateOf<ArtistResult?>(null) }
+    var selectedPlaylist by remember { mutableStateOf<PlaylistResult?>(null) }
+
     // Surfaces playback failures (overwhelmingly "no network") as a Snackbar - see
     // PlayerViewModel.errorMessage - instead of leaving the user staring at a mini-player that
     // silently never starts.
@@ -300,7 +308,21 @@ private fun MainApp() {
                 }
                 composable(Routes.SEARCH, enterTransition = tabEnter, exitTransition = tabExit) {
                     Box(Modifier.padding(innerPadding)) {
-                        SearchScreen(onPlayTrack = onPlayQueuedTrack)
+                        SearchScreen(
+                            onPlayTrack = onPlayQueuedTrack,
+                            onAlbumClick = {
+                                selectedAlbum = it
+                                navController.navigate(Routes.ALBUM_DETAIL)
+                            },
+                            onArtistClick = {
+                                selectedArtist = it
+                                navController.navigate(Routes.ARTIST_DETAIL)
+                            },
+                            onPlaylistClick = {
+                                selectedPlaylist = it
+                                navController.navigate(Routes.PLAYLIST_DETAIL)
+                            }
+                        )
                     }
                 }
                 composable(Routes.LIBRARY, enterTransition = tabEnter, exitTransition = tabExit) {
@@ -500,6 +522,57 @@ private fun MainApp() {
                             onSelectPalette = { themeViewModel.setPalette(it) },
                             onBack = { navController.popBackStack() }
                         )
+                    }
+                }
+                composable(
+                    Routes.ALBUM_DETAIL,
+                    enterTransition = settingsEnter,
+                    exitTransition = settingsExit,
+                    popEnterTransition = settingsPopEnter,
+                    popExitTransition = settingsPopExit
+                ) {
+                    Box(Modifier.padding(innerPadding)) {
+                        selectedAlbum?.let { album ->
+                            AlbumDetailScreen(
+                                album = album,
+                                onPlayTrack = onPlayQueuedTrack,
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+                    }
+                }
+                composable(
+                    Routes.ARTIST_DETAIL,
+                    enterTransition = settingsEnter,
+                    exitTransition = settingsExit,
+                    popEnterTransition = settingsPopEnter,
+                    popExitTransition = settingsPopExit
+                ) {
+                    Box(Modifier.padding(innerPadding)) {
+                        selectedArtist?.let { artist ->
+                            ArtistDetailScreen(
+                                artist = artist,
+                                onPlayTrack = onPlayQueuedTrack,
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+                    }
+                }
+                composable(
+                    Routes.PLAYLIST_DETAIL,
+                    enterTransition = settingsEnter,
+                    exitTransition = settingsExit,
+                    popEnterTransition = settingsPopEnter,
+                    popExitTransition = settingsPopExit
+                ) {
+                    Box(Modifier.padding(innerPadding)) {
+                        selectedPlaylist?.let { playlist ->
+                            PlaylistDetailScreen(
+                                playlist = playlist,
+                                onPlayTrack = onPlayQueuedTrack,
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
                     }
                 }
                 composable(

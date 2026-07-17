@@ -34,14 +34,19 @@ fun LibraryScreen(
     var selectedTab by remember { mutableStateOf(0) }
     val tabTitles = listOf("Playlists", "Liked Songs", "Downloads", "Recently Played")
 
-    // State for local dynamic playlists
-    var playlistsState by remember { mutableStateOf(MusicData.playlists) }
     var showNewPlaylistDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
 
     val downloadViewModel: DownloadViewModel = viewModel()
     val downloadedTracks by downloadViewModel.downloadedTracks.collectAsState()
     val downloadedKeys = remember(downloadedTracks) { downloadedTracks.map { it.downloadKey() }.toSet() }
+
+    val libraryViewModel: LibraryViewModel = viewModel()
+    val playlists by libraryViewModel.playlists.collectAsState()
+    val recentlyPlayed by libraryViewModel.recentlyPlayed.collectAsState()
+
+    val likedSongsViewModel: LikedSongsViewModel = viewModel()
+    val likedSongs by likedSongsViewModel.likedSongs.collectAsState()
 
     // When on, every track tab (Liked/Recently Played - Downloads is already downloads-only)
     // filters down to just what's actually playable offline.
@@ -156,46 +161,50 @@ fun LibraryScreen(
                             }
 
                             // Playlists List
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                items(playlistsState) { playlist ->
-                                    val gradientColors = MusicData.Gradients[playlist.gradientIndex % MusicData.Gradients.size]
-                                    
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .clickable { }
-                                            .padding(8.dp)
-                                            .testTag("library_playlist_row_${playlist.title.lowercase().replace(" ", "_")}"),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(
+                            if (playlists.isEmpty()) {
+                                OfflineEmptyState(message = "No playlists yet. Tap + New Playlist to create one.")
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    items(playlists) { playlist ->
+                                        val gradientColors = MusicData.Gradients[(playlist.id % MusicData.Gradients.size).toInt()]
+
+                                        Row(
                                             modifier = Modifier
-                                                .size(56.dp)
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(Brush.linearGradient(gradientColors)),
-                                            contentAlignment = Alignment.Center
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .clickable { }
+                                                .padding(8.dp)
+                                                .testTag("library_playlist_row_${playlist.name.lowercase().replace(" ", "_")}"),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text("🎵", fontSize = 24.sp)
-                                        }
-                                        Spacer(modifier = Modifier.width(16.dp))
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = playlist.title,
-                                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            Text(
-                                                text = "Playlist • By ${playlist.creator} • ${playlist.trackCount} Songs",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(56.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(Brush.linearGradient(gradientColors)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text("🎵", fontSize = 24.sp)
+                                            }
+                                            Spacer(modifier = Modifier.width(16.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = playlist.name,
+                                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    text = "Playlist • By You • 0 Songs",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -203,10 +212,10 @@ fun LibraryScreen(
                         }
                     }
                     1 -> {
-                        // Liked Songs - filtered to downloaded-only when Offline mode is on
-                        val songs = MusicData.likedSongs.filterOfflineIfNeeded(offlineModeEnabled, downloadedKeys)
+                        // Liked Songs - real, Room-backed; filtered to downloaded-only when Offline mode is on
+                        val songs = likedSongs.filterOfflineIfNeeded(offlineModeEnabled, downloadedKeys)
                         if (songs.isEmpty()) {
-                            OfflineEmptyState()
+                            OfflineEmptyState(message = "No liked songs yet. Tap the heart on a track to like it.")
                         } else {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
@@ -214,14 +223,21 @@ fun LibraryScreen(
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 items(songs) { song ->
-                                    LibrarySongRow(track = song, queue = songs, leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Default.Favorite,
-                                            contentDescription = "Liked",
-                                            tint = Color(0xFFFF2D55),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }, onPlayTrack = onPlayTrack)
+                                    LibrarySongRow(
+                                        track = song,
+                                        queue = songs,
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Favorite,
+                                                contentDescription = "Unlike",
+                                                tint = Color(0xFFFF2D55),
+                                                modifier = Modifier
+                                                    .size(16.dp)
+                                                    .clickable { likedSongsViewModel.toggle(song) }
+                                            )
+                                        },
+                                        onPlayTrack = onPlayTrack
+                                    )
                                 }
                             }
                         }
@@ -256,10 +272,11 @@ fun LibraryScreen(
                         }
                     }
                     3 -> {
-                        // Recently Played - filtered to downloaded-only when Offline mode is on
-                        val songs = MusicData.recentlyPlayedSongs.filterOfflineIfNeeded(offlineModeEnabled, downloadedKeys)
+                        // Recently Played - real playback history, same source as Home; filtered
+                        // to downloaded-only when Offline mode is on
+                        val songs = recentlyPlayed.filterOfflineIfNeeded(offlineModeEnabled, downloadedKeys)
                         if (songs.isEmpty()) {
-                            OfflineEmptyState()
+                            OfflineEmptyState(message = "No recently played songs yet. Play a track to see it here.")
                         } else {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
@@ -317,16 +334,7 @@ fun LibraryScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        if (newPlaylistName.isNotBlank()) {
-                            // Add playlist to list
-                            val newPlaylist = Playlist(
-                                title = newPlaylistName,
-                                trackCount = 0,
-                                creator = "You",
-                                gradientIndex = (playlistsState.size + 1) % MusicData.Gradients.size
-                            )
-                            playlistsState = listOf(newPlaylist) + playlistsState
-                        }
+                        libraryViewModel.createPlaylist(newPlaylistName)
                         showNewPlaylistDialog = false
                         newPlaylistName = ""
                     },

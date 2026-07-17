@@ -75,14 +75,72 @@ interface PlaybackHistoryDao {
     suspend fun record(entity: PlaybackHistoryEntity)
 }
 
+/**
+ * A track the user has explicitly liked, for Library's real "Liked Songs" tab. Keyed the same way
+ * as [DownloadedTrackEntity]/[PlaybackHistoryEntity] (title/artist), so liking is idempotent and
+ * agrees on identity with the rest of the app.
+ */
+@Entity(tableName = "liked_songs")
+data class LikedSongEntity(
+    @PrimaryKey val key: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val duration: String,
+    val gradientIndex: Int,
+    val imageUrl: String?,
+    val streamUrl: String?,
+    val likedAt: Long
+)
+
+@Dao
+interface LikedSongDao {
+    @Query("SELECT * FROM liked_songs ORDER BY likedAt DESC")
+    fun observeAll(): Flow<List<LikedSongEntity>>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM liked_songs WHERE key = :key)")
+    fun observeIsLiked(key: String): Flow<Boolean>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun like(entity: LikedSongEntity)
+
+    @Query("DELETE FROM liked_songs WHERE key = :key")
+    suspend fun unlike(key: String)
+}
+
+/** A playlist the user has created, for Library's real "Playlists" tab. There's no "add track to
+ * playlist" feature yet, so every playlist starts (and stays) empty. */
+@Entity(tableName = "playlists")
+data class PlaylistEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val createdAt: Long
+)
+
+@Dao
+interface PlaylistDao {
+    @Query("SELECT * FROM playlists ORDER BY createdAt DESC")
+    fun observeAll(): Flow<List<PlaylistEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(entity: PlaylistEntity): Long
+}
+
 @Database(
-    entities = [DownloadedTrackEntity::class, PlaybackHistoryEntity::class],
-    version = 2,
+    entities = [
+        DownloadedTrackEntity::class,
+        PlaybackHistoryEntity::class,
+        LikedSongEntity::class,
+        PlaylistEntity::class
+    ],
+    version = 3,
     exportSchema = false
 )
 abstract class MuseFlowDatabase : RoomDatabase() {
     abstract fun downloadedTrackDao(): DownloadedTrackDao
     abstract fun playbackHistoryDao(): PlaybackHistoryDao
+    abstract fun likedSongDao(): LikedSongDao
+    abstract fun playlistDao(): PlaylistDao
 
     companion object {
         @Volatile private var instance: MuseFlowDatabase? = null
