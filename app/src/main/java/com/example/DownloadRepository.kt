@@ -5,6 +5,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,6 +46,12 @@ class DownloadRepository private constructor(context: Context) {
     /** Key -> percent complete (0..100), or -1 if the server didn't report a content length. */
     val inProgress: StateFlow<Map<String, Int>> = _inProgress
 
+    private val _failures = MutableStateFlow<Map<String, String>>(emptyMap())
+    /** Key -> error message for the most recent failed download attempt, so the UI can tell the
+     * user *why* their download vanished instead of it just silently reverting to "not
+     * downloaded". Cleared as soon as that track's download is retried. */
+    val failures: StateFlow<Map<String, String>> = _failures
+
     val completedDownloads: Flow<List<DownloadedTrackEntity>> = dao.observeCompleted()
 
     fun isDownloading(track: Track): Boolean = activeJobs.containsKey(track.downloadKey())
@@ -52,6 +59,7 @@ class DownloadRepository private constructor(context: Context) {
     fun startDownload(track: Track) {
         val key = track.downloadKey()
         if (activeJobs.containsKey(key)) return
+        _failures.update { it - key }
         activeJobs[key] = repositoryScope.launch {
             _inProgress.update { it + (key to 0) }
             try {
@@ -75,10 +83,16 @@ class DownloadRepository private constructor(context: Context) {
                         updatedAt = System.currentTimeMillis()
                     )
                 )
+            } catch (e: CancellationException) {
+                // A user-initiated cancel (see cancelDownload) - not a failure, just clean up
+                // the partial file below and let the cancellation propagate as normal.
+                File(downloadsDir(appContext), "$key.audio").delete()
+                throw e
             } catch (e: Exception) {
                 // Don't leave a stale/broken row around - a partial file is useless, and the user
                 // can just tap download again.
                 File(downloadsDir(appContext), "$key.audio").delete()
+                _failures.update { it + (key to (e.message ?: "Download failed")) }
             } finally {
                 _inProgress.update { it - key }
                 activeJobs.remove(key)

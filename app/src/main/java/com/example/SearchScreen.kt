@@ -136,22 +136,6 @@ fun SearchScreen(
     }
 }
 
-/** JioSaavn results mapped to real, playable [Track]s: [Track.streamUrl] and [Track.imageUrl]
- * carry the actual CDN/cover-art URLs straight from search, so playing one needs no further
- * resolution step and its artwork is already known everywhere the track flows (mini-player,
- * Now Playing, notification). Results without a resolvable stream URL are dropped - they'd be
- * unplayable dead ends if shown. */
-private fun TrackResult.toPlayableTrack(gradientIndex: Int): Track = Track(
-    title = title,
-    artist = artist,
-    album = source,
-    duration = duration ?: "-:--",
-    plays = "",
-    gradientIndex = gradientIndex,
-    imageUrl = imageUrl,
-    streamUrl = directStreamUrl
-)
-
 @Composable
 fun SongsResults(
     searchQuery: String,

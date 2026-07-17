@@ -39,6 +39,12 @@ fun SettingsScreen(
     val themeViewModel: ThemeViewModel = viewModel()
     val themeState by themeViewModel.themeState.collectAsState()
 
+    // Null when no dialog is showing; otherwise the section name to show "coming soon" for.
+    // These 7 sub-screens aren't wired to real behavior yet (see showComingSoonToast for the
+    // per-toggle version of this same honesty), so tapping into them from here goes straight to
+    // "coming soon" rather than letting the user navigate into a screen full of dead toggles.
+    var comingSoonSection by remember { mutableStateOf<String?>(null) }
+
     ThemedBackground(
         modifier = modifier.fillMaxSize()
     ) {
@@ -70,49 +76,49 @@ fun SettingsScreen(
                     BackgroundMode.Amoled -> "AMOLED Black · player look, layout density"
                     BackgroundMode.Gradient -> "Gradient · ${themeState.palette.label}"
                 },
-                onClick = { navController.navigate(Routes.SETTINGS_APPEARANCE) },
+                onClick = { comingSoonSection = "Appearance" },
                 tag = "action_appearance"
             )
             SettingsActionRow(
                 icon = Icons.Default.PlayCircle,
                 title = "Player & Audio",
                 subtitle = "Playback behavior and Now Playing controls",
-                onClick = { navController.navigate(Routes.SETTINGS_PLAYER_AUDIO) },
+                onClick = { comingSoonSection = "Player & Audio" },
                 tag = "action_player_audio"
             )
             SettingsActionRow(
                 icon = Icons.Default.Lyrics,
                 title = "Lyrics",
                 subtitle = "Lyrics appearance and scrolling behavior",
-                onClick = { navController.navigate(Routes.SETTINGS_LYRICS) },
+                onClick = { comingSoonSection = "Lyrics" },
                 tag = "action_lyrics"
             )
             SettingsActionRow(
                 icon = Icons.Default.LibraryMusic,
                 title = "Library & Playlists",
                 subtitle = "Default tabs, swipe actions, auto playlists",
-                onClick = { navController.navigate(Routes.SETTINGS_LIBRARY_PLAYLISTS) },
+                onClick = { comingSoonSection = "Library & Playlists" },
                 tag = "action_library_playlists"
             )
             SettingsActionRow(
                 icon = Icons.Default.Group,
                 title = "Listen Together",
                 subtitle = "Synced group listening sessions",
-                onClick = { navController.navigate(Routes.SETTINGS_LISTEN_TOGETHER) },
+                onClick = { comingSoonSection = "Listen Together" },
                 tag = "action_listen_together"
             )
             SettingsActionRow(
                 icon = Icons.Default.Cloud,
                 title = "Storage",
                 subtitle = "Cache, downloads, and storage usage",
-                onClick = { navController.navigate(Routes.SETTINGS_STORAGE) },
+                onClick = { comingSoonSection = "Storage" },
                 tag = "action_storage"
             )
             SettingsActionRow(
                 icon = Icons.Default.Dns,
                 title = "Service Uptime",
                 subtitle = "Check online status of all API & metadata providers",
-                onClick = { navController.navigate(Routes.SETTINGS_UPTIME) },
+                onClick = { comingSoonSection = "Service Uptime" },
                 tag = "action_service_uptime"
             )
             SettingsActionRow(
@@ -122,19 +128,24 @@ fun SettingsScreen(
                 onClick = { navController.navigate(Routes.SETTINGS_ABOUT) },
                 tag = "action_about"
             )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Temporary dev-only screen for testing Provider implementations. Safe to remove.
-            SettingsGroupHeader(title = "Developer")
-            SettingsActionRow(
-                icon = Icons.Default.BugReport,
-                title = "Provider Test (temporary)",
-                subtitle = "Search & play a real song via YouTube Music or JioSaavn",
-                onClick = { navController.navigate(Routes.SETTINGS_PROVIDER_TEST) },
-                tag = "action_yt_music_test"
-            )
         }
+    }
+
+    comingSoonSection?.let { section ->
+        AlertDialog(
+            onDismissRequest = { comingSoonSection = null },
+            title = { Text("Coming soon") },
+            text = { Text("$section isn't implemented yet. Check back in a future update.") },
+            confirmButton = {
+                TextButton(
+                    onClick = { comingSoonSection = null },
+                    modifier = Modifier.testTag("coming_soon_dialog_ok")
+                ) {
+                    Text("OK")
+                }
+            },
+            modifier = Modifier.testTag("coming_soon_dialog")
+        )
     }
 }
 

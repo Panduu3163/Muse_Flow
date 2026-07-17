@@ -20,7 +20,6 @@ object Routes {
     const val SETTINGS_ABOUT = "settings/about"
     const val SETTINGS_THEME = "settings/theme"
     const val SETTINGS_PALETTE = "settings/palette"
-    const val SETTINGS_PROVIDER_TEST = "settings/provider_test"
 }
 
 /** Bottom navigation tabs; [route] must be one of the top-level [Routes]. */

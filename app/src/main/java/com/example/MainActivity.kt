@@ -176,10 +176,19 @@ private fun MainApp() {
     var resumeOnBluetooth by remember { mutableStateOf(true) }
     var hideVideoContent by remember { mutableStateOf(false) }
 
-    val onPlayTrack: (Track) -> Unit = { playerViewModel.playTrack(it) }
-    // Search results form their own queue (the current results list), rather than the mock
-    // catalog Home/Library browse - so next/previous cycle through what was actually searched.
-    val onPlaySearchResult: (Track, List<Track>) -> Unit = { track, queue -> playerViewModel.playTrack(track, queue) }
+    // Every screen's tracks come from their own list now (search results, real Home shelves,
+    // downloaded tracks) rather than always the mock catalog, so playTrack needs to be told
+    // which queue a given track actually came from - otherwise its default queue param
+    // (MusicData.tracks) won't contain it and it'll silently do nothing.
+    val onPlayQueuedTrack: (Track, List<Track>) -> Unit = { track, queue -> playerViewModel.playTrack(track, queue) }
+
+    // Surfaces playback failures (overwhelmingly "no network") as a Snackbar - see
+    // PlayerViewModel.errorMessage - instead of leaving the user staring at a mini-player that
+    // silently never starts.
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(playerState.errorMessage) {
+        playerState.errorMessage?.let { snackbarHostState.showSnackbar(it) }
+    }
 
     // Now Playing is a full destination, not a bottom-bar tab; hide the nav bar/mini-player
     // while it's showing, same as the previous overlay-based design.
@@ -275,6 +284,7 @@ private fun MainApp() {
                 }
             }
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         contentWindowInsets = WindowInsets.safeDrawing
     ) { innerPadding ->
         CompositionLocalProvider(LocalViewModelStoreOwner provides activityViewModelStoreOwner) {
@@ -285,17 +295,17 @@ private fun MainApp() {
             ) {
                 composable(Routes.HOME, enterTransition = tabEnter, exitTransition = tabExit) {
                     Box(Modifier.padding(innerPadding)) {
-                        HomeScreen(onPlayTrack = onPlayTrack)
+                        HomeScreen(onPlayTrack = onPlayQueuedTrack)
                     }
                 }
                 composable(Routes.SEARCH, enterTransition = tabEnter, exitTransition = tabExit) {
                     Box(Modifier.padding(innerPadding)) {
-                        SearchScreen(onPlayTrack = onPlaySearchResult)
+                        SearchScreen(onPlayTrack = onPlayQueuedTrack)
                     }
                 }
                 composable(Routes.LIBRARY, enterTransition = tabEnter, exitTransition = tabExit) {
                     Box(Modifier.padding(innerPadding)) {
-                        LibraryScreen(onPlayTrack = onPlayTrack)
+                        LibraryScreen(onPlayTrack = onPlayQueuedTrack)
                     }
                 }
                 composable(Routes.SETTINGS, enterTransition = tabEnter, exitTransition = tabExit) {
@@ -492,18 +502,6 @@ private fun MainApp() {
                         )
                     }
                 }
-                composable(
-                    Routes.SETTINGS_PROVIDER_TEST,
-                    enterTransition = settingsEnter,
-                    exitTransition = settingsExit,
-                    popEnterTransition = settingsPopEnter,
-                    popExitTransition = settingsPopExit
-                ) {
-                    Box(Modifier.padding(innerPadding)) {
-                        YouTubeMusicTestScreen(onBack = { navController.popBackStack() })
-                    }
-                }
-
                 composable(
                     Routes.NOW_PLAYING,
                     enterTransition = nowPlayingEnter,
