@@ -86,7 +86,7 @@ MuseFlow wouldn't exist without the open-source music-client community. Signific
 - [LRCLib](https://lrclib.net) — synced lyrics API
 
 Genuine thanks to the maintainers of these projects for their work being open enough to learn from.
-
+Also Thanks to the tester Md Sakib Rahman for testing and finding bugs.
 ---
 
 ## 📦 Getting the App
