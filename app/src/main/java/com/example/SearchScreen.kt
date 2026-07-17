@@ -293,7 +293,9 @@ fun SongsResults(
 
 @Composable
 fun AlbumsResults(searchQuery: String, onAlbumClick: (AlbumResult) -> Unit) {
-    val provider = remember { JioSaavnProvider() }
+    val context = LocalContext.current
+    val jioSaavnProvider = remember { JioSaavnProvider() }
+    val youTubeProvider = remember { YouTubeMusicProvider(context) }
     var state by remember { mutableStateOf<UiState<List<AlbumResult>>>(UiState.Loading) }
 
     LaunchedEffect(searchQuery) {
@@ -303,8 +305,33 @@ fun AlbumsResults(searchQuery: String, onAlbumClick: (AlbumResult) -> Unit) {
         }
         state = UiState.Loading
         delay(350)
-        state = loadAsUiState(errorMessage = "Couldn't reach JioSaavn. Check your connection and try again.") {
-            provider.searchAlbums(searchQuery)
+        var jioFailed = false
+        var ytFailed = false
+        val (jioResults, ytResults) = coroutineScope {
+            val jioDeferred = async {
+                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
+                    try {
+                        jioSaavnProvider.searchAlbums(searchQuery)
+                    } catch (e: Exception) {
+                        null
+                    }
+                } ?: run { jioFailed = true; emptyList() }
+            }
+            val ytDeferred = async {
+                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
+                    try {
+                        youTubeProvider.searchAlbums(searchQuery)
+                    } catch (e: Exception) {
+                        null
+                    }
+                } ?: run { ytFailed = true; emptyList() }
+            }
+            jioDeferred.await() to ytDeferred.await()
+        }
+        state = if (jioFailed && ytFailed) {
+            UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")
+        } else {
+            UiState.Success(mergeAlbumResults(jioResults, ytResults))
         }
     }
 
@@ -329,6 +356,7 @@ fun AlbumsResults(searchQuery: String, onAlbumClick: (AlbumResult) -> Unit) {
         ) {
             items(currentState.data) { album ->
                 val gradientColors = MusicData.Gradients[(album.id.hashCode().mod(MusicData.Gradients.size))]
+                val isFromYouTube = album.sourceType == MusicSource.YOUTUBE_MUSIC
 
                 Row(
                     modifier = Modifier
@@ -355,13 +383,24 @@ fun AlbumsResults(searchQuery: String, onAlbumClick: (AlbumResult) -> Unit) {
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Text(
-                            text = album.artist + (album.songCount?.let { " • $it Songs" } ?: ""),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = album.artist + (album.songCount?.let { " • $it Songs" } ?: ""),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (isFromYouTube) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "• YouTube Music",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -371,7 +410,9 @@ fun AlbumsResults(searchQuery: String, onAlbumClick: (AlbumResult) -> Unit) {
 
 @Composable
 fun ArtistsResults(searchQuery: String, onArtistClick: (ArtistResult) -> Unit) {
-    val provider = remember { JioSaavnProvider() }
+    val context = LocalContext.current
+    val jioSaavnProvider = remember { JioSaavnProvider() }
+    val youTubeProvider = remember { YouTubeMusicProvider(context) }
     var state by remember { mutableStateOf<UiState<List<ArtistResult>>>(UiState.Loading) }
 
     LaunchedEffect(searchQuery) {
@@ -381,8 +422,33 @@ fun ArtistsResults(searchQuery: String, onArtistClick: (ArtistResult) -> Unit) {
         }
         state = UiState.Loading
         delay(350)
-        state = loadAsUiState(errorMessage = "Couldn't reach JioSaavn. Check your connection and try again.") {
-            provider.searchArtists(searchQuery)
+        var jioFailed = false
+        var ytFailed = false
+        val (jioResults, ytResults) = coroutineScope {
+            val jioDeferred = async {
+                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
+                    try {
+                        jioSaavnProvider.searchArtists(searchQuery)
+                    } catch (e: Exception) {
+                        null
+                    }
+                } ?: run { jioFailed = true; emptyList() }
+            }
+            val ytDeferred = async {
+                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
+                    try {
+                        youTubeProvider.searchArtists(searchQuery)
+                    } catch (e: Exception) {
+                        null
+                    }
+                } ?: run { ytFailed = true; emptyList() }
+            }
+            jioDeferred.await() to ytDeferred.await()
+        }
+        state = if (jioFailed && ytFailed) {
+            UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")
+        } else {
+            UiState.Success(mergeArtistResults(jioResults, ytResults))
         }
     }
 
@@ -407,6 +473,7 @@ fun ArtistsResults(searchQuery: String, onArtistClick: (ArtistResult) -> Unit) {
         ) {
             items(currentState.data) { artist ->
                 val gradientColors = MusicData.Gradients[(artist.id.hashCode().mod(MusicData.Gradients.size))]
+                val isFromYouTube = artist.sourceType == MusicSource.YOUTUBE_MUSIC
 
                 Row(
                     modifier = Modifier
@@ -439,7 +506,7 @@ fun ArtistsResults(searchQuery: String, onArtistClick: (ArtistResult) -> Unit) {
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Artist",
+                            text = if (isFromYouTube) "Artist • YouTube Music" else "Artist",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -452,7 +519,9 @@ fun ArtistsResults(searchQuery: String, onArtistClick: (ArtistResult) -> Unit) {
 
 @Composable
 fun PlaylistsResults(searchQuery: String, onPlaylistClick: (PlaylistResult) -> Unit) {
-    val provider = remember { JioSaavnProvider() }
+    val context = LocalContext.current
+    val jioSaavnProvider = remember { JioSaavnProvider() }
+    val youTubeProvider = remember { YouTubeMusicProvider(context) }
     var state by remember { mutableStateOf<UiState<List<PlaylistResult>>>(UiState.Loading) }
 
     LaunchedEffect(searchQuery) {
@@ -462,8 +531,33 @@ fun PlaylistsResults(searchQuery: String, onPlaylistClick: (PlaylistResult) -> U
         }
         state = UiState.Loading
         delay(350)
-        state = loadAsUiState(errorMessage = "Couldn't reach JioSaavn. Check your connection and try again.") {
-            provider.searchPlaylists(searchQuery)
+        var jioFailed = false
+        var ytFailed = false
+        val (jioResults, ytResults) = coroutineScope {
+            val jioDeferred = async {
+                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
+                    try {
+                        jioSaavnProvider.searchPlaylists(searchQuery)
+                    } catch (e: Exception) {
+                        null
+                    }
+                } ?: run { jioFailed = true; emptyList() }
+            }
+            val ytDeferred = async {
+                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
+                    try {
+                        youTubeProvider.searchPlaylists(searchQuery)
+                    } catch (e: Exception) {
+                        null
+                    }
+                } ?: run { ytFailed = true; emptyList() }
+            }
+            jioDeferred.await() to ytDeferred.await()
+        }
+        state = if (jioFailed && ytFailed) {
+            UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")
+        } else {
+            UiState.Success(mergePlaylistResults(jioResults, ytResults))
         }
     }
 
@@ -488,6 +582,7 @@ fun PlaylistsResults(searchQuery: String, onPlaylistClick: (PlaylistResult) -> U
         ) {
             items(currentState.data) { playlist ->
                 val gradientColors = MusicData.Gradients[(playlist.id.hashCode().mod(MusicData.Gradients.size))]
+                val isFromYouTube = playlist.sourceType == MusicSource.YOUTUBE_MUSIC
 
                 Row(
                     modifier = Modifier
@@ -514,13 +609,24 @@ fun PlaylistsResults(searchQuery: String, onPlaylistClick: (PlaylistResult) -> U
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Text(
-                            text = playlist.subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = playlist.subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (isFromYouTube) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "• YouTube Music",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1
+                                )
+                            }
+                        }
                     }
                 }
             }

@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -16,13 +17,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** Real tracklist for a JioSaavn album search result, fetched via [JioSaavnProvider.getAlbumTracks]. */
+/** Real tracklist for an album search result, fetched via [JioSaavnProvider.getAlbumTracks] or
+ * [YouTubeMusicProvider.getAlbumTracks] depending on [AlbumResult.sourceType]. */
 @Composable
 fun AlbumDetailScreen(
     album: AlbumResult,
@@ -30,12 +33,14 @@ fun AlbumDetailScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     TracklistDetailScreen(
         title = album.title,
         subtitle = album.artist + (album.songCount?.let { " • $it songs" } ?: ""),
         imageUrl = album.imageUrl,
         gradientSeed = album.id,
-        fetchTracks = { provider -> provider.getAlbumTracks(album.id) },
+        sourceType = album.sourceType,
+        fetchTracks = { provider(context, album.sourceType).getAlbumTracks(album.id) },
         onPlayTrack = onPlayTrack,
         onBack = onBack,
         emoji = "💿",
@@ -43,7 +48,8 @@ fun AlbumDetailScreen(
     )
 }
 
-/** Real top-tracks list for a JioSaavn artist search result, fetched via [JioSaavnProvider.getArtistTracks]. */
+/** Real top-tracks list for an artist search result, fetched via [JioSaavnProvider.getArtistTracks]
+ * or [YouTubeMusicProvider.getArtistTracks] depending on [ArtistResult.sourceType]. */
 @Composable
 fun ArtistDetailScreen(
     artist: ArtistResult,
@@ -51,12 +57,14 @@ fun ArtistDetailScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     TracklistDetailScreen(
         title = artist.name,
         subtitle = "Top Songs",
         imageUrl = artist.imageUrl,
         gradientSeed = artist.id,
-        fetchTracks = { provider -> provider.getArtistTracks(artist.id) },
+        sourceType = artist.sourceType,
+        fetchTracks = { provider(context, artist.sourceType).getArtistTracks(artist.id) },
         onPlayTrack = onPlayTrack,
         onBack = onBack,
         emoji = "🎤",
@@ -65,7 +73,8 @@ fun ArtistDetailScreen(
     )
 }
 
-/** Real tracklist for a JioSaavn playlist search result, fetched via [JioSaavnProvider.getPlaylistTracks]. */
+/** Real tracklist for a playlist search result, fetched via [JioSaavnProvider.getPlaylistTracks]
+ * or [YouTubeMusicProvider.getPlaylistTracks] depending on [PlaylistResult.sourceType]. */
 @Composable
 fun PlaylistDetailScreen(
     playlist: PlaylistResult,
@@ -73,17 +82,48 @@ fun PlaylistDetailScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     TracklistDetailScreen(
         title = playlist.title,
         subtitle = playlist.subtitle,
         imageUrl = playlist.imageUrl,
         gradientSeed = playlist.id,
-        fetchTracks = { provider -> provider.getPlaylistTracks(playlist.id) },
+        sourceType = playlist.sourceType,
+        fetchTracks = { provider(context, playlist.sourceType).getPlaylistTracks(playlist.id) },
         onPlayTrack = onPlayTrack,
         onBack = onBack,
         emoji = "🎵",
         modifier = modifier
     )
+}
+
+/** A single, generically-typed handle for whichever provider a detail screen's [sourceType]
+ * needs - both [JioSaavnProvider] and [YouTubeMusicProvider] expose the same
+ * getAlbumTracks/getArtistTracks/getPlaylistTracks shape, just not through a shared interface, so
+ * this picks the concrete instance the caller should invoke. Constructing either is cheap (no I/O
+ * in the constructor), so a fresh one per call is fine here - callers don't remember() it. */
+private fun provider(context: Context, sourceType: MusicSource): TracklistProvider =
+    when (sourceType) {
+        MusicSource.YOUTUBE_MUSIC -> YouTubeMusicTracklistProvider(YouTubeMusicProvider(context))
+        else -> JioSaavnTracklistProvider(JioSaavnProvider())
+    }
+
+private interface TracklistProvider {
+    suspend fun getAlbumTracks(id: String): List<TrackResult>
+    suspend fun getArtistTracks(id: String): List<TrackResult>
+    suspend fun getPlaylistTracks(id: String): List<TrackResult>
+}
+
+private class JioSaavnTracklistProvider(private val provider: JioSaavnProvider) : TracklistProvider {
+    override suspend fun getAlbumTracks(id: String) = provider.getAlbumTracks(id)
+    override suspend fun getArtistTracks(id: String) = provider.getArtistTracks(id)
+    override suspend fun getPlaylistTracks(id: String) = provider.getPlaylistTracks(id)
+}
+
+private class YouTubeMusicTracklistProvider(private val provider: YouTubeMusicProvider) : TracklistProvider {
+    override suspend fun getAlbumTracks(id: String) = provider.getAlbumTracks(id)
+    override suspend fun getArtistTracks(id: String) = provider.getArtistTracks(id)
+    override suspend fun getPlaylistTracks(id: String) = provider.getPlaylistTracks(id)
 }
 
 /** Shared shell for the three detail screens above: a header (art/title/subtitle/back button)
@@ -96,21 +136,25 @@ private fun TracklistDetailScreen(
     subtitle: String,
     imageUrl: String?,
     gradientSeed: String,
-    fetchTracks: suspend (JioSaavnProvider) -> List<TrackResult>,
+    sourceType: MusicSource,
+    fetchTracks: suspend () -> List<TrackResult>,
     onPlayTrack: (Track, List<Track>) -> Unit,
     onBack: () -> Unit,
     emoji: String,
     shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
     modifier: Modifier = Modifier
 ) {
-    val provider = remember { JioSaavnProvider() }
     var state by remember { mutableStateOf<UiState<List<Track>>>(UiState.Loading) }
+    val sourceName = if (sourceType == MusicSource.YOUTUBE_MUSIC) "YouTube Music" else "JioSaavn"
 
     LaunchedEffect(gradientSeed) {
         state = UiState.Loading
-        state = loadAsUiState(errorMessage = "Couldn't reach JioSaavn. Check your connection and try again.") {
-            fetchTracks(provider)
-                .filter { it.directStreamUrl != null }
+        state = loadAsUiState(errorMessage = "Couldn't reach $sourceName. Check your connection and try again.") {
+            fetchTracks()
+                // A JioSaavn row is only worth showing if it's directly playable (a small
+                // fraction fail DES decryption); a YouTube row has no stream URL of its own by
+                // design - it's resolved fresh right before playback - so it's always kept.
+                .filter { it.sourceType == MusicSource.YOUTUBE_MUSIC || it.directStreamUrl != null }
                 .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
         }
     }
@@ -233,7 +277,11 @@ private fun TracklistDetailScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            DownloadButton(track = track)
+                            // YouTube-sourced tracks stream via a fresh per-play resolve, not a
+                            // fixed URL - same reason SongsResults hides this for them too.
+                            if (track.sourceType != MusicSource.YOUTUBE_MUSIC) {
+                                DownloadButton(track = track)
+                            }
                         }
                     }
                 }

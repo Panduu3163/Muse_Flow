@@ -24,29 +24,37 @@ data class TrackResult(
     val imageUrl: String? = null
 )
 
-/** A JioSaavn album search result, enough to render a row and fetch its tracklist. */
+/** An album search result (JioSaavn or YouTube Music), enough to render a row and fetch its
+ * tracklist - [id] is a JioSaavn album id or a YouTube Music browseId depending on [sourceType]. */
 data class AlbumResult(
     val id: String,
     val title: String,
     val artist: String,
     val imageUrl: String?,
-    val songCount: Int?
+    val songCount: Int?,
+    val sourceType: MusicSource = MusicSource.JIOSAAVN
 )
 
-/** A JioSaavn artist search result, enough to render a row and fetch their top tracks. */
+/** An artist search result (JioSaavn or YouTube Music), enough to render a row and fetch their
+ * top tracks - [id] is a JioSaavn artist id or a YouTube Music channel browseId depending on
+ * [sourceType]. */
 data class ArtistResult(
     val id: String,
     val name: String,
-    val imageUrl: String?
+    val imageUrl: String?,
+    val sourceType: MusicSource = MusicSource.JIOSAAVN
 )
 
-/** A JioSaavn playlist search result, enough to render a row and fetch its tracklist. */
+/** A playlist search result (JioSaavn or YouTube Music), enough to render a row and fetch its
+ * tracklist - [id] is a JioSaavn playlist id or a YouTube Music browseId depending on
+ * [sourceType]. */
 data class PlaylistResult(
     val id: String,
     val title: String,
     val subtitle: String,
     val imageUrl: String?,
-    val songCount: Int?
+    val songCount: Int?,
+    val sourceType: MusicSource = MusicSource.JIOSAAVN
 )
 
 /**

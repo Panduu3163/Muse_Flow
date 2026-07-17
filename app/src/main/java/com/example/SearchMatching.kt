@@ -65,6 +65,32 @@ fun mergeSearchResults(jioSaavnResults: List<TrackResult>, youTubeResults: List<
     return jioSaavnResults + uniqueYouTube
 }
 
+/** Merges JioSaavn and YouTube Music album search results the same way [mergeSearchResults]
+ * merges songs: JioSaavn first, then only the YouTube albums that don't plausibly duplicate one
+ * of them (by title + artist). */
+fun mergeAlbumResults(jioSaavnResults: List<AlbumResult>, youTubeResults: List<AlbumResult>): List<AlbumResult> {
+    val uniqueYouTube = youTubeResults.filter { yt ->
+        jioSaavnResults.none { jio -> isLikelyMatch(jio.title, jio.artist, yt.title, yt.artist) }
+    }
+    return jioSaavnResults + uniqueYouTube
+}
+
+/** Merges JioSaavn and YouTube Music artist search results, de-duplicating by name only (an
+ * artist has no separate "artist" field to also compare, unlike a song/album). */
+fun mergeArtistResults(jioSaavnResults: List<ArtistResult>, youTubeResults: List<ArtistResult>): List<ArtistResult> {
+    val uniqueYouTube = youTubeResults.filter { yt ->
+        jioSaavnResults.none { jio -> isLikelyMatch(jio.name, "", yt.name, "") }
+    }
+    return jioSaavnResults + uniqueYouTube
+}
+
+/** Merges JioSaavn and YouTube Music playlist search results. Playlists are user/platform-curated
+ * mixes rather than a fixed canonical work, so - unlike songs/albums/artists - a title match
+ * across sources isn't good evidence of being "the same" playlist; both sources' results are kept
+ * as-is, JioSaavn first. */
+fun mergePlaylistResults(jioSaavnResults: List<PlaylistResult>, youTubeResults: List<PlaylistResult>): List<PlaylistResult> =
+    jioSaavnResults + youTubeResults
+
 /** Finds a JioSaavn track that plausibly matches [title]/[artist], so a YouTube-Music-sourced
  * result (which this app never streams from directly) can be played via JioSaavn instead. Returns
  * null if nothing close enough turns up, so the caller can show an explicit "not available"
