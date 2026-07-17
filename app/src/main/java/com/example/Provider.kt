@@ -3,8 +3,9 @@ package com.example
 /** Which backend a search result came from - lets the UI tag results (e.g. a "YouTube Music"
  * badge) and lets playback decide whether a result is directly playable (JioSaavn) or needs to
  * be resolved to a JioSaavn match first (YouTube Music, which this app never streams from
- * directly). */
-enum class MusicSource { JIOSAAVN, YOUTUBE_MUSIC, NETEASE }
+ * directly). [LOCAL_DEVICE] (a MediaStore content:// URI) is directly playable too, like
+ * JioSaavn. */
+enum class MusicSource { JIOSAAVN, YOUTUBE_MUSIC, NETEASE, LOCAL_DEVICE }
 
 /** A single track found by a [Provider], from any source (YouTube Music, JioSaavn, ...). */
 data class TrackResult(
@@ -37,12 +38,26 @@ data class AlbumResult(
 
 /** An artist search result (JioSaavn or YouTube Music), enough to render a row and fetch their
  * top tracks - [id] is a JioSaavn artist id or a YouTube Music channel browseId depending on
- * [sourceType]. */
+ * [sourceType]. [listenerCount] is a source-formatted monthly-listener-style string (e.g. "54.6M
+ * monthly audience") when the search response happened to include one for free (YouTube Music
+ * does; JioSaavn doesn't - its equivalent, [ArtistTracklist.listenerCount], only comes from the
+ * artist detail page, fetched separately by [ArtistDetailScreen]). */
 data class ArtistResult(
     val id: String,
     val name: String,
     val imageUrl: String?,
-    val sourceType: MusicSource = MusicSource.JIOSAAVN
+    val sourceType: MusicSource = MusicSource.JIOSAAVN,
+    val listenerCount: String? = null
+)
+
+/** An artist's real top-tracks list plus, when the source exposes it, a listener-count string in
+ * whatever format that source presents it (already formatted/abbreviated - e.g. "54.6M monthly
+ * audience" from YouTube Music, "10.7M listeners" from JioSaavn) - null if unavailable for this
+ * particular artist. Bundled together (rather than fetched separately) because for both
+ * providers, both pieces come from the exact same underlying API response. */
+data class ArtistTracklist(
+    val tracks: List<TrackResult>,
+    val listenerCount: String? = null
 )
 
 /** A playlist search result (JioSaavn or YouTube Music), enough to render a row and fetch its

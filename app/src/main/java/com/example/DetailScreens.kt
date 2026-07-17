@@ -40,7 +40,7 @@ fun AlbumDetailScreen(
         imageUrl = album.imageUrl,
         gradientSeed = album.id,
         sourceType = album.sourceType,
-        fetchTracks = { provider(context, album.sourceType).getAlbumTracks(album.id) },
+        fetchTracks = { TracklistFetchResult(provider(context, album.sourceType).getAlbumTracks(album.id)) },
         onPlayTrack = onPlayTrack,
         onBack = onBack,
         emoji = "💿",
@@ -48,8 +48,13 @@ fun AlbumDetailScreen(
     )
 }
 
-/** Real top-tracks list for an artist search result, fetched via [JioSaavnProvider.getArtistTracks]
- * or [YouTubeMusicProvider.getArtistTracks] depending on [ArtistResult.sourceType]. */
+/** Real top-tracks list for an artist search result, fetched via
+ * [JioSaavnProvider.getArtistTracklist] or [YouTubeMusicProvider.getArtistTracklist] depending on
+ * [ArtistResult.sourceType] - including their listener count, shown under the header, when the
+ * source has one. If the artist's own source comes back with zero tracks (seen happening on
+ * JioSaavn's live artist-page API - it can return an empty `topSongs` for an artist who
+ * definitely has real songs), this looks the same artist up by name on the *other* source instead
+ * of showing "nothing here" for an artist search that clearly should have results. */
 @Composable
 fun ArtistDetailScreen(
     artist: ArtistResult,
@@ -58,13 +63,38 @@ fun ArtistDetailScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val jioSaavnProvider = remember { JioSaavnProvider() }
+    val youTubeProvider = remember { YouTubeMusicProvider(context) }
+
     TracklistDetailScreen(
         title = artist.name,
         subtitle = "Top Songs",
         imageUrl = artist.imageUrl,
         gradientSeed = artist.id,
         sourceType = artist.sourceType,
-        fetchTracks = { provider(context, artist.sourceType).getArtistTracks(artist.id) },
+        fetchTracks = {
+            var tracklist = if (artist.sourceType == MusicSource.YOUTUBE_MUSIC) {
+                youTubeProvider.getArtistTracklist(artist.id)
+            } else {
+                jioSaavnProvider.getArtistTracklist(artist.id)
+            }
+            if (tracklist.tracks.isEmpty()) {
+                val fallback = runCatching {
+                    if (artist.sourceType == MusicSource.YOUTUBE_MUSIC) {
+                        jioSaavnProvider.searchArtists(artist.name).firstOrNull()
+                            ?.let { jioSaavnProvider.getArtistTracklist(it.id) }
+                    } else {
+                        youTubeProvider.searchArtists(artist.name).firstOrNull()
+                            ?.let { youTubeProvider.getArtistTracklist(it.id) }
+                    }
+                }.getOrNull()
+                if (fallback != null) tracklist = fallback
+            }
+            TracklistFetchResult(
+                tracks = tracklist.tracks,
+                extraSubtitle = artist.listenerCount ?: tracklist.listenerCount
+            )
+        },
         onPlayTrack = onPlayTrack,
         onBack = onBack,
         emoji = "🎤",
@@ -89,7 +119,7 @@ fun PlaylistDetailScreen(
         imageUrl = playlist.imageUrl,
         gradientSeed = playlist.id,
         sourceType = playlist.sourceType,
-        fetchTracks = { provider(context, playlist.sourceType).getPlaylistTracks(playlist.id) },
+        fetchTracks = { TracklistFetchResult(provider(context, playlist.sourceType).getPlaylistTracks(playlist.id)) },
         onPlayTrack = onPlayTrack,
         onBack = onBack,
         emoji = "🎵",
@@ -97,11 +127,13 @@ fun PlaylistDetailScreen(
     )
 }
 
-/** A single, generically-typed handle for whichever provider a detail screen's [sourceType]
- * needs - both [JioSaavnProvider] and [YouTubeMusicProvider] expose the same
- * getAlbumTracks/getArtistTracks/getPlaylistTracks shape, just not through a shared interface, so
- * this picks the concrete instance the caller should invoke. Constructing either is cheap (no I/O
- * in the constructor), so a fresh one per call is fine here - callers don't remember() it. */
+/** A single, generically-typed handle for whichever provider Album/Playlist detail screens need -
+ * both [JioSaavnProvider] and [YouTubeMusicProvider] expose the same
+ * getAlbumTracks/getPlaylistTracks shape, just not through a shared interface, so this picks the
+ * concrete instance the caller should invoke. (Artist isn't part of this - it needs both
+ * providers at once, for its cross-source fallback - see [ArtistDetailScreen].) Constructing
+ * either is cheap (no I/O in the constructor), so a fresh one per call is fine here - callers
+ * don't remember() it. */
 private fun provider(context: Context, sourceType: MusicSource): TracklistProvider =
     when (sourceType) {
         MusicSource.YOUTUBE_MUSIC -> YouTubeMusicTracklistProvider(YouTubeMusicProvider(context))
@@ -110,21 +142,23 @@ private fun provider(context: Context, sourceType: MusicSource): TracklistProvid
 
 private interface TracklistProvider {
     suspend fun getAlbumTracks(id: String): List<TrackResult>
-    suspend fun getArtistTracks(id: String): List<TrackResult>
     suspend fun getPlaylistTracks(id: String): List<TrackResult>
 }
 
 private class JioSaavnTracklistProvider(private val provider: JioSaavnProvider) : TracklistProvider {
     override suspend fun getAlbumTracks(id: String) = provider.getAlbumTracks(id)
-    override suspend fun getArtistTracks(id: String) = provider.getArtistTracks(id)
     override suspend fun getPlaylistTracks(id: String) = provider.getPlaylistTracks(id)
 }
 
 private class YouTubeMusicTracklistProvider(private val provider: YouTubeMusicProvider) : TracklistProvider {
     override suspend fun getAlbumTracks(id: String) = provider.getAlbumTracks(id)
-    override suspend fun getArtistTracks(id: String) = provider.getArtistTracks(id)
     override suspend fun getPlaylistTracks(id: String) = provider.getPlaylistTracks(id)
 }
+
+/** What [TracklistDetailScreen] needs from a fetch: the tracklist itself, plus an optional extra
+ * metadata line shown under the header subtitle - only [ArtistDetailScreen] currently populates
+ * this, with a listener count. */
+private data class TracklistFetchResult(val tracks: List<TrackResult>, val extraSubtitle: String? = null)
 
 /** Shared shell for the three detail screens above: a header (art/title/subtitle/back button)
  * over a real, network-fetched tracklist, with loading/error/empty states. Tapping a track plays
@@ -137,7 +171,7 @@ private fun TracklistDetailScreen(
     imageUrl: String?,
     gradientSeed: String,
     sourceType: MusicSource,
-    fetchTracks: suspend () -> List<TrackResult>,
+    fetchTracks: suspend () -> TracklistFetchResult,
     onPlayTrack: (Track, List<Track>) -> Unit,
     onBack: () -> Unit,
     emoji: String,
@@ -145,12 +179,16 @@ private fun TracklistDetailScreen(
     modifier: Modifier = Modifier
 ) {
     var state by remember { mutableStateOf<UiState<List<Track>>>(UiState.Loading) }
+    var extraSubtitle by remember(gradientSeed) { mutableStateOf<String?>(null) }
     val sourceName = if (sourceType == MusicSource.YOUTUBE_MUSIC) "YouTube Music" else "JioSaavn"
 
     LaunchedEffect(gradientSeed) {
         state = UiState.Loading
+        extraSubtitle = null
         state = loadAsUiState(errorMessage = "Couldn't reach $sourceName. Check your connection and try again.") {
-            fetchTracks()
+            val result = fetchTracks()
+            extraSubtitle = result.extraSubtitle
+            result.tracks
                 // A JioSaavn row is only worth showing if it's directly playable (a small
                 // fraction fail DES decryption); a YouTube row has no stream URL of its own by
                 // design - it's resolved fresh right before playback - so it's always kept.
@@ -202,6 +240,18 @@ private fun TracklistDetailScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.testTag("detail_title")
                     )
+                    // Only populated once the fetch resolves (e.g. an artist's listener count) -
+                    // absent for Album/Playlist, which have nothing to add here.
+                    extraSubtitle?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag("detail_listener_count")
+                        )
+                    }
                     if (subtitle.isNotBlank()) {
                         Text(
                             text = subtitle,

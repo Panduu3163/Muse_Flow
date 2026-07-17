@@ -170,12 +170,21 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
         parseTrackShelfItems(shelfItems, fallbackArtist = albumArtist)
     }
 
-    /** Fetches an artist's "Top songs" shelf via a `browse` call on [artistId] (the
-     * `UC...`-style channel-id browseId from [searchArtists]'s [ArtistResult.id]) - the closest
-     * this API offers to a flat discography, same limitation [JioSaavnProvider.getArtistTracks]
-     * has. */
-    suspend fun getArtistTracks(artistId: String): List<TrackResult> = withContext(Dispatchers.IO) {
+    /** Fetches an artist's "Top songs" shelf plus their listener count, via a `browse` call on
+     * [artistId] (the `UC...`-style channel-id browseId from [searchArtists]'s
+     * [ArtistResult.id]) - the closest this API offers to a flat discography, same limitation
+     * [JioSaavnProvider.getArtistTracklist] has. Both pieces come from this same browse response -
+     * the listener count from `header.musicImmersiveHeaderRenderer.monthlyListenerCount` (e.g.
+     * "54.6M monthly audience"), the same stat shown on the artist's actual YouTube Music page. */
+    suspend fun getArtistTracklist(artistId: String): ArtistTracklist = withContext(Dispatchers.IO) {
         val root = browse(artistId)
+        val listenerCount = root.optJSONObject("header")
+            ?.optJSONObject("musicImmersiveHeaderRenderer")
+            ?.optJSONObject("monthlyListenerCount")
+            ?.optJSONArray("runs")
+            ?.optJSONObject(0)
+            ?.optString("text")
+            ?.takeIf { it.isNotBlank() }
         val shelfItems = root.optJSONObject("contents")
             ?.optJSONObject("singleColumnBrowseResultsRenderer")
             ?.optJSONArray("tabs")
@@ -188,7 +197,7 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
             ?.optJSONObject("musicShelfRenderer")
             ?.optJSONArray("contents")
             ?: JSONArray()
-        parseTrackShelfItems(shelfItems)
+        ArtistTracklist(tracks = parseTrackShelfItems(shelfItems), listenerCount = listenerCount)
     }
 
     /** Fetches a playlist's full tracklist via a `browse` call on [playlistId] (the
@@ -483,11 +492,16 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
     private fun parseArtistRenderer(renderer: JSONObject): ArtistResult? {
         val browseId = browseIdOf(renderer) ?: return null
         val name = flexColumnFirstText(renderer, 0) ?: return null
+        // Subtitle runs look like ["Artist", " • ", "54.6M monthly audience"] - the first
+        // non-separator run after the category label itself is the listener count, when present.
+        val listenerCount = flexColumnRuns(renderer, 1)
+            ?.let { runs -> (1 until runs.length()).firstNotNullOfOrNull { runs.optJSONObject(it)?.optString("text")?.takeIf { t -> t.isNotBlank() && t != "•" } } }
         return ArtistResult(
             id = browseId,
             name = name,
             imageUrl = extractThumbnailUrl(renderer),
-            sourceType = MusicSource.YOUTUBE_MUSIC
+            sourceType = MusicSource.YOUTUBE_MUSIC,
+            listenerCount = listenerCount
         )
     }
 

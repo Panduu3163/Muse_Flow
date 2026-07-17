@@ -91,13 +91,18 @@ class JioSaavnProvider : Provider<TrackResult> {
         (0 until list.length()).mapNotNull { i -> parseSong(list.optJSONObject(i)) }
     }
 
-    /** Fetches an artist's top tracks, for [ArtistDetailScreen]. There's no "full discography as
-     * a flat tracklist" endpoint - top tracks is the closest JioSaavn's private API offers. */
-    suspend fun getArtistTracks(artistId: String): List<TrackResult> = withContext(Dispatchers.IO) {
+    /** Fetches an artist's top tracks plus their listener count, for [ArtistDetailScreen]. There's
+     * no "full discography as a flat tracklist" endpoint - top tracks is the closest JioSaavn's
+     * private API offers. Both pieces come from this same artist-page response - the same one
+     * whose `subtitle` field reads e.g. "Artist • 10737054 Listeners", matching `fan_count`. */
+    suspend fun getArtistTracklist(artistId: String): ArtistTracklist = withContext(Dispatchers.IO) {
         val url = "${Api.BASE_URL}?__call=artist.getArtistPageDetails&_format=json&_marker=0" +
             "&api_version=4&ctx=web6dot0&artistId=$artistId&n_song=50&n_album=0&page=1&category=&sort_order="
-        val list = fetchJson(url).optJSONArray("topSongs") ?: JSONArray()
-        (0 until list.length()).mapNotNull { i -> parseSong(list.optJSONObject(i)) }
+        val json = fetchJson(url)
+        val list = json.optJSONArray("topSongs") ?: JSONArray()
+        val tracks = (0 until list.length()).mapNotNull { i -> parseSong(list.optJSONObject(i)) }
+        val listenerCount = json.optString("fan_count").toLongOrNull()?.let { formatListenerCount(it) }
+        ArtistTracklist(tracks = tracks, listenerCount = listenerCount)
     }
 
     /**
@@ -246,4 +251,16 @@ class JioSaavnProvider : Provider<TrackResult> {
         .replace("&apos;", "'")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
+
+    /** JioSaavn's `fan_count` is a raw integer (e.g. 10737054); abbreviates it to match the style
+     * YouTube Music's own listener-count text already comes pre-formatted in (e.g. "54.6M"). */
+    private fun formatListenerCount(count: Long): String {
+        val abbreviated = when {
+            count >= 1_000_000_000 -> "%.1fB".format(count / 1_000_000_000.0)
+            count >= 1_000_000 -> "%.1fM".format(count / 1_000_000.0)
+            count >= 1_000 -> "%.1fK".format(count / 1_000.0)
+            else -> count.toString()
+        }
+        return "$abbreviated listeners"
+    }
 }

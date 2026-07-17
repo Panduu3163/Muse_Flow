@@ -42,6 +42,7 @@ fun HomeScreen(
     val homeViewModel: HomeViewModel = viewModel()
     val recentlyPlayed by homeViewModel.recentlyPlayed.collectAsState()
     val moodShelves by homeViewModel.moodShelves.collectAsState()
+    val isOffline by homeViewModel.isOffline.collectAsState()
 
     ThemedBackground(
         modifier = modifier.fillMaxSize()
@@ -53,6 +54,22 @@ fun HomeScreen(
             // Header
             item {
                 HomeHeader()
+            }
+
+            // Shown only when there's no connectivity at all - the mood/genre shelves below are
+            // then showing their last-cached snapshot (see HomeViewModel), not fresh results.
+            if (isOffline) {
+                item {
+                    Text(
+                        text = "Offline — showing cached results",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                            .testTag("home_offline_indicator")
+                    )
+                }
             }
 
             // Shelf: Recently Played - real playback history from Room, not a fixed mock list.
