@@ -121,6 +121,7 @@ fun ProviderTestScreen(
 
             if (selectedSource == MusicSource.YOUTUBE_MUSIC && results.isNotEmpty()) {
                 YtCipherTestSection(videoId = results.first().id)
+                PoTokenTestSection(videoId = results.first().id)
             }
 
             Spacer(Modifier.height(16.dp))
@@ -239,6 +240,52 @@ private fun YtCipherTestSection(videoId: String) {
             Text("Obfuscated s= (input): ${r.obfuscatedSig.take(60)}...", style = MaterialTheme.typography.bodySmall)
             Text("Deciphered URL (output): ${r.decipheredUrl.take(120)}...", style = MaterialTheme.typography.bodySmall)
             Text("Differs from input: ${r.differsFromInput}, looks valid: ${r.looksValid}", style = MaterialTheme.typography.bodySmall)
+        }
+        result?.exceptionOrNull()?.let { e ->
+            Spacer(Modifier.height(8.dp))
+            Text("❌ ${e.message}", color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+/**
+ * TEMPORARY - proves out the `com.example.ytcipher.potoken` module (see [PoTokenIsolationTest])
+ * in isolation: runs a real BotGuard challenge in a headless WebView and mints a PoToken for
+ * [videoId]. Only checks the token is non-empty and structurally plausible - it does NOT validate
+ * the token against a real request yet (that's the next step).
+ */
+@Composable
+private fun PoTokenTestSection(videoId: String) {
+    var isRunning by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Result<PoTokenIsolationTest.Result>?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    Column(modifier = Modifier.padding(bottom = 16.dp)) {
+        Button(
+            onClick = {
+                isRunning = true
+                coroutineScope.launch {
+                    result = runCatching { PoTokenIsolationTest.run(context, videoId) }
+                    isRunning = false
+                }
+            },
+            enabled = !isRunning,
+            modifier = Modifier.testTag("provider_test_potoken_button")
+        ) {
+            Text(if (isRunning) "Generating PoToken..." else "Test PoToken (isolated) - $videoId")
+        }
+
+        result?.getOrNull()?.let { r ->
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = if (r.looksPlausible) "✅ PASS - non-empty, plausible-looking PoToken" else "⚠️ Check output below",
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.testTag("provider_test_potoken_result")
+            )
+            Text("Session id (test): ${r.sessionId}", style = MaterialTheme.typography.bodySmall)
+            Text("playerRequestPoToken (${r.playerRequestPoToken.length} chars): ${r.playerRequestPoToken.take(60)}...", style = MaterialTheme.typography.bodySmall)
+            Text("streamingDataPoToken (${r.streamingDataPoToken.length} chars): ${r.streamingDataPoToken.take(60)}...", style = MaterialTheme.typography.bodySmall)
         }
         result?.exceptionOrNull()?.let { e ->
             Spacer(Modifier.height(8.dp))

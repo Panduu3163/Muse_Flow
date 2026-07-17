@@ -1,0 +1,117 @@
+<!--
+  BotGuard attestation orchestration for MuseFlow's PoToken module
+  (com.example.ytcipher.potoken.PoTokenWebView).
+
+  Loaded into a headless WebView, never attached to any view hierarchy. This page never talks to
+  the network itself (the WebView has blockNetworkLoads set) - the two BotGuard HTTP round trips
+  (Create, GenerateIT) happen from Kotlin via OkHttp, with their responses injected back in here
+  via evaluateJavascript. The functions below only orchestrate and execute the BotGuard VM program
+  Google's own "Create" response embeds.
+
+  Approach follows zemer-cipher's po_token.html (GPL-3.0,
+  https://github.com/ZemerTeam/zemer-cipher), itself informed by BgUtils
+  (https://github.com/LuanRT/BgUtils, MIT) - independently written for this module.
+-->
+<!DOCTYPE html>
+<html lang="en"><head><title></title><script>
+    var botguardVm = null;
+    var botguardProgram = null;
+    var botguardVmFunctions = null;
+    var poTokenMinter = null; // created once during init, reused for every generatePoToken() call
+
+    function loadBotGuard(challengeData) {
+        botguardVm = window[challengeData.globalName];
+        botguardProgram = challengeData.program;
+        botguardVmFunctions = null;
+
+        if (!botguardVm) throw new Error("BotGuard VM not found in global object");
+        if (!botguardVm.a) throw new Error("BotGuard VM has no program loader");
+
+        var onVmFunctionsReady = function (asyncSnapshotFunction) {
+            botguardVmFunctions = { asyncSnapshotFunction: asyncSnapshotFunction };
+        };
+
+        try {
+            botguardVm.a(botguardProgram, onVmFunctionsReady, true, undefined, function () {}, [[], []]);
+        } catch (e) {
+            throw new Error("Failed to execute BotGuard program: " + e.message);
+        }
+
+        return new Promise(function (resolve, reject) {
+            var attempts = 0;
+            var maxAttempts = 10000; // 10s at 1ms polling intervals
+            var interval = setInterval(function () {
+                if (botguardVmFunctions && botguardVmFunctions.asyncSnapshotFunction) {
+                    clearInterval(interval);
+                    resolve(botguardVmFunctions);
+                } else if (attempts++ >= maxAttempts) {
+                    clearInterval(interval);
+                    reject(new Error("Timed out waiting for BotGuard VM functions"));
+                }
+            }, 1);
+        });
+    }
+
+    function snapshot(vmFunctions, webPoSignalOutput) {
+        return new Promise(function (resolve, reject) {
+            if (!vmFunctions.asyncSnapshotFunction) {
+                reject(new Error("BotGuard VM has no async snapshot function"));
+                return;
+            }
+            try {
+                vmFunctions.asyncSnapshotFunction(
+                    function (response) { resolve(response); },
+                    [null, null, webPoSignalOutput, null]
+                );
+            } catch (e) {
+                reject(new Error("BotGuard snapshot failed: " + e.message));
+            }
+        });
+    }
+
+    function runBotGuard(challengeData) {
+        var interpreterJs = challengeData.interpreterJavascript.privateDoNotAccessOrElseSafeScriptWrappedValue;
+        if (!interpreterJs) throw new Error("No BotGuard interpreter JavaScript in challenge data");
+        new Function(interpreterJs)();
+
+        var webPoSignalOutput = [];
+        return loadBotGuard({ globalName: challengeData.globalName, program: challengeData.program })
+            .then(function (vmFunctions) { return snapshot(vmFunctions, webPoSignalOutput); })
+            .then(function (botguardResponse) {
+                return { webPoSignalOutput: webPoSignalOutput, botguardResponse: botguardResponse };
+            });
+    }
+
+    /** MUST be called exactly once, right after runBotGuard() resolves. Stores the mint callback
+     * globally for every later generatePoToken()/obtainPoToken() call to reuse. */
+    async function createPoTokenMinter(webPoSignalOutput, integrityToken) {
+        var getMinter = webPoSignalOutput[0];
+        if (typeof getMinter !== "function") {
+            throw new Error("webPoSignalOutput[0] is not a function (got " + typeof getMinter + ")");
+        }
+
+        var minterResult = getMinter(integrityToken);
+        var mintCallback = (minterResult && typeof minterResult.then === "function")
+            ? await minterResult
+            : minterResult;
+
+        if (typeof mintCallback !== "function") {
+            throw new Error("Minter factory did not return a function (got " + typeof mintCallback + ")");
+        }
+        poTokenMinter = mintCallback;
+    }
+
+    /** Mints one PoToken bound to [identifier] using the minter created by createPoTokenMinter(). */
+    async function obtainPoToken(identifier) {
+        if (!poTokenMinter) throw new Error("poTokenMinter not initialized - call createPoTokenMinter first");
+
+        var mintResult = poTokenMinter(identifier);
+        var result = (mintResult && typeof mintResult.then === "function") ? await mintResult : mintResult;
+
+        if (!result) throw new Error("Mint result is empty");
+        if (!(result instanceof Uint8Array)) {
+            throw new Error("Mint result is not a Uint8Array (got " + Object.prototype.toString.call(result) + ")");
+        }
+        return result;
+    }
+</script></head><body></body></html>
