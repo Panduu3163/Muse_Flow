@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -26,7 +27,11 @@ data class PlayerUiState(
     val progress: Float = 0f,
     /** Real ExoPlayer playback position, in milliseconds - precise enough to time-match
      * against LRC-synced lyrics, unlike [progress] which is only a 0f..1f fraction. */
-    val positionMs: Long = 0L
+    val positionMs: Long = 0L,
+    /** A user-facing message for the most recent playback failure (e.g. no network reaching
+     * JioSaavn), or null when nothing's currently wrong. Cleared as soon as something actually
+     * starts playing again. */
+    val errorMessage: String? = null
 )
 
 /**
@@ -56,6 +61,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     // Track.streamUrl when building queue items, so a downloaded track plays from disk - and
     // works fully offline - even if it's also (or only) reachable by streaming.
     private var downloadedFilePathsByKey: Map<String, String> = emptyMap()
+
+    private val playbackHistoryRepository = PlaybackHistoryRepository.getInstance(application)
 
     init {
         viewModelScope.launch {
@@ -90,6 +97,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         val mediaItems = queue.mapIndexed { index, queuedTrack ->
             queuedTrack.toQueueMediaItem(index, downloadedFilePathsByKey[queuedTrack.downloadKey()])
         }
+        _uiState.update { it.copy(errorMessage = null) }
         controller.setMediaItems(mediaItems, startIndex, 0L)
         controller.prepare()
         controller.play()
@@ -166,13 +174,22 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     private inner class PlayerEventListener : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            _uiState.update { it.copy(isPlaying = isPlaying) }
+            _uiState.update { it.copy(isPlaying = isPlaying, errorMessage = if (isPlaying) null else it.errorMessage) }
+            // Recorded here (actual playback starting), not in playTrack() - so a track that
+            // failed to resolve/stream (see onPlayerError) never shows up in "Recently Played".
+            if (isPlaying) {
+                _uiState.value.track?.let { playbackHistoryRepository.recordPlayed(it) }
+            }
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val index = mediaItem?.mediaId?.toIntOrNull()
             val track = index?.let { activeQueue.getOrNull(it) }
             _uiState.update { it.copy(track = track, progress = 0f, positionMs = 0L) }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            _uiState.update { it.copy(errorMessage = error.toUserMessage()) }
         }
     }
 
@@ -209,3 +226,15 @@ private fun Track.toQueueMediaItem(index: Int, localFilePath: String?): MediaIte
     }
     return itemBuilder.build()
 }
+
+/** Media3 groups every IO-related error (dead link, unreachable host, timeout, the
+ * `.invalid`-URI fallback [PlaybackService] uses for a track it couldn't resolve, ...) into
+ * error codes in the 2000-2999 range - which in this app's case is, in practice, always really
+ * "no network reached JioSaavn". Anything outside that range is a genuine playback/decoding
+ * problem, not a connectivity one. */
+private fun PlaybackException.toUserMessage(): String =
+    if (errorCode in 2000..2999) {
+        "No internet connection. Check your connection and try again."
+    } else {
+        "Playback failed. Please try again."
+    }

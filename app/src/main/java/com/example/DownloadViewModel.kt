@@ -26,6 +26,9 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
         .map { it.keys }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
+    /** Key -> error message, for the most recent failed download attempt per track. */
+    val failures: StateFlow<Map<String, String>> = repository.failures
+
     fun isDownloaded(track: Track): Boolean =
         downloadedTracks.value.any { it.downloadKey() == track.downloadKey() }
 

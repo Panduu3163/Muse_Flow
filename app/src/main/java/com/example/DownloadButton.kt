@@ -1,5 +1,6 @@
 package com.example
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
@@ -8,10 +9,12 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.theme.MusePrimary
@@ -31,10 +34,20 @@ fun DownloadButton(
 ) {
     val downloadedTracks by downloadViewModel.downloadedTracks.collectAsState()
     val downloadingKeys by downloadViewModel.downloadingKeys.collectAsState()
+    val failures by downloadViewModel.failures.collectAsState()
 
     val key = track.downloadKey()
     val isDownloaded = downloadedTracks.any { it.downloadKey() == key }
     val isDownloading = downloadingKeys.contains(key)
+
+    // Otherwise a failed download just silently reverts to "not downloaded" with no explanation
+    // - overwhelmingly because the connection dropped mid-download.
+    val context = LocalContext.current
+    LaunchedEffect(failures[key]) {
+        if (failures[key] != null) {
+            Toast.makeText(context, "Download failed. Check your connection and try again.", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     IconButton(
         onClick = {

@@ -37,3 +37,19 @@ interface Provider<T> {
     suspend fun search(query: String): List<T>
     suspend fun getStreamUrl(item: T): StreamResolution?
 }
+
+/** A provider result mapped to a real, playable [Track]: [Track.streamUrl] and [Track.imageUrl]
+ * carry the actual CDN/cover-art URLs straight from search, so playing one needs no further
+ * resolution step and its artwork is already known everywhere the track flows (search results,
+ * Home shelves, mini-player, Now Playing, notification). Shared by every screen that turns search
+ * results into playable tracks - Search, and Home's real mood/genre shelves. */
+fun TrackResult.toPlayableTrack(gradientIndex: Int): Track = Track(
+    title = title,
+    artist = artist,
+    album = source,
+    duration = duration ?: "-:--",
+    plays = "",
+    gradientIndex = gradientIndex,
+    imageUrl = imageUrl,
+    streamUrl = directStreamUrl
+)

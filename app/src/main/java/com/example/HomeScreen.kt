@@ -1,6 +1,12 @@
 package com.example
 
 import com.example.ui.theme.MusePrimary
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -30,9 +36,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
 fun HomeScreen(
-    onPlayTrack: (Track) -> Unit,
+    onPlayTrack: (Track, List<Track>) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val homeViewModel: HomeViewModel = viewModel()
+    val recentlyPlayed by homeViewModel.recentlyPlayed.collectAsState()
+    val moodShelves by homeViewModel.moodShelves.collectAsState()
+
     ThemedBackground(
         modifier = modifier.fillMaxSize()
     ) {
@@ -45,67 +55,108 @@ fun HomeScreen(
                 HomeHeader()
             }
 
-            // Shelf 1: Recently Played
+            // Shelf: Recently Played - real playback history from Room, not a fixed mock list.
             item {
                 HomeShelf(title = "Recently Played") {
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp)
-                    ) {
-                        items(MusicData.recentlyPlayedSongs) { track ->
-                            TrackCard(track = track, onClick = { onPlayTrack(track) })
-                        }
-                    }
+                    ShelfContent(
+                        tracks = recentlyPlayed,
+                        emptyMessage = "Nothing played yet - your history will show up here.",
+                        onPlayTrack = onPlayTrack
+                    )
                 }
             }
 
-            // Shelf 2: Made For You
-            item {
-                HomeShelf(title = "Made For You") {
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp)
-                    ) {
-                        items(MusicData.playlists.take(3)) { playlist ->
-                            PlaylistCard(playlist = playlist)
-                        }
-                    }
-                }
-            }
-
-            // Shelf 3: Popular Albums
-            item {
-                HomeShelf(title = "Popular Albums") {
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp)
-                    ) {
-                        items(MusicData.albums) { album ->
-                            AlbumCard(album = album)
-                        }
-                    }
-                }
-            }
-
-            // Shelf 4: Charts
-            item {
-                HomeShelf(title = "Charts") {
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp)
-                    ) {
-                        // Custom Charts Data
-                        val charts = listOf(
-                            Triple("Global Top 50", "Weekly updates of the most played tracks", 2),
-                            Triple("USA Viral 50", "The songs blowing up on socials", 8),
-                            Triple("MuseFlow New", "Freshly curated indie & electronic", 0),
-                            Triple("Rock Classics", "Legendary stadium anthems", 7)
+            // Every other shelf: a canned genre/mood search standing in for real
+            // recommendations, until this app has an actual recommendation system.
+            homeViewModel.shelfTitles.forEach { title ->
+                item {
+                    HomeShelf(title = title) {
+                        ShelfContent(
+                            tracks = moodShelves[title],
+                            emptyMessage = "Couldn't load \"$title\" right now.",
+                            onPlayTrack = onPlayTrack
                         )
-                        items(charts) { (title, desc, index) ->
-                            ChartCard(title = title, subtitle = desc, gradientIndex = index)
-                        }
                     }
                 }
+            }
+        }
+    }
+}
+
+/** Shared body for every Home shelf: a shimmer placeholder while [tracks] is null (still
+ * loading), a friendly message if it loaded to empty (no results, likely offline), or the real
+ * track row otherwise. */
+@Composable
+private fun ShelfContent(
+    tracks: List<Track>?,
+    emptyMessage: String,
+    onPlayTrack: (Track, List<Track>) -> Unit
+) {
+    when {
+        tracks == null -> ShimmerTrackRow()
+        tracks.isEmpty() -> Text(
+            text = emptyMessage,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
+        else -> LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp)
+        ) {
+            items(tracks) { track ->
+                TrackCard(track = track, onClick = { onPlayTrack(track, tracks) })
+            }
+        }
+    }
+}
+
+/** A row of pulsing placeholder cards, shown in place of a shelf's real content while it loads. */
+@Composable
+private fun ShimmerTrackRow() {
+    val infiniteTransition = rememberInfiniteTransition(label = "shelf_shimmer")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(700, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "shimmer_alpha"
+    )
+    val placeholderColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = alpha)
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .testTag("shelf_shimmer")
+    ) {
+        repeat(3) {
+            Column(modifier = Modifier.width(140.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(140.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(placeholderColor)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.8f)
+                        .height(14.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(placeholderColor)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.5f)
+                        .height(12.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(placeholderColor)
+                )
             }
         }
     }
@@ -202,18 +253,17 @@ fun TrackCard(
             .clickable { onClick() }
             .testTag("track_card_${track.title.lowercase().replace(" ", "_")}")
     ) {
-        // Rounded Album Cover Art
-        Box(
-            modifier = Modifier
-                .size(140.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Brush.linearGradient(gradientColors))
-        ) {
-            // Hover play overlay simulation
+        // Rounded Album Cover Art, with a play-icon overlay in the bottom-right corner
+        Box(modifier = Modifier.size(140.dp)) {
+            TrackArtwork(
+                imageUrl = track.imageUrl,
+                gradientColors = gradientColors,
+                modifier = Modifier.fillMaxSize()
+            ) {}
             Box(
                 modifier = Modifier
-                    .padding(8.dp)
                     .align(Alignment.BottomEnd)
+                    .padding(8.dp)
                     .size(32.dp)
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.6f)),
@@ -242,143 +292,5 @@ fun TrackCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-    }
-}
-
-@Composable
-fun PlaylistCard(
-    playlist: Playlist,
-    modifier: Modifier = Modifier
-) {
-    val gradientColors = MusicData.Gradients[playlist.gradientIndex % MusicData.Gradients.size]
-
-    Column(
-        modifier = modifier
-            .width(140.dp)
-            .clickable { }
-            .testTag("playlist_card_${playlist.title.lowercase().replace(" ", "_")}")
-    ) {
-        Box(
-            modifier = Modifier
-                .size(140.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Brush.linearGradient(gradientColors)),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "🎵",
-                fontSize = 40.sp
-            )
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = playlist.title,
-            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        Text(
-            text = "${playlist.trackCount} Tracks",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
-fun AlbumCard(
-    album: Album,
-    modifier: Modifier = Modifier
-) {
-    val gradientColors = MusicData.Gradients[album.gradientIndex % MusicData.Gradients.size]
-
-    Column(
-        modifier = modifier
-            .width(140.dp)
-            .clickable { }
-            .testTag("album_card_${album.title.lowercase().replace(" ", "_")}")
-    ) {
-        Box(
-            modifier = Modifier
-                .size(140.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Brush.linearGradient(gradientColors)),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "💿",
-                fontSize = 40.sp
-            )
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = album.title,
-            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        Text(
-            text = album.artist,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-fun ChartCard(
-    title: String,
-    subtitle: String,
-    gradientIndex: Int,
-    modifier: Modifier = Modifier
-) {
-    val gradientColors = MusicData.Gradients[gradientIndex % MusicData.Gradients.size]
-
-    Card(
-        modifier = modifier
-            .width(220.dp)
-            .height(110.dp)
-            .clickable { }
-            .testTag("chart_card_${title.lowercase().replace(" ", "_")}"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Brush.linearGradient(gradientColors))
-                .padding(16.dp),
-            contentAlignment = Alignment.BottomStart
-        ) {
-            Column {
-                Text(
-                    text = "CHART",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
-                    ),
-                    color = Color.White.copy(alpha = 0.8f)
-                )
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.7f),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
     }
 }

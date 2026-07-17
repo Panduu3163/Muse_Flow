@@ -48,9 +48,41 @@ interface DownloadedTrackDao {
     suspend fun deleteByKey(key: String)
 }
 
-@Database(entities = [DownloadedTrackEntity::class], version = 1, exportSchema = false)
+/**
+ * One row per distinct track that's actually been played, for Home's real "Recently Played"
+ * shelf. Keyed the same way as [DownloadedTrackEntity] (title/artist), so replaying a track
+ * updates its [playedAt] via REPLACE rather than growing a duplicate row per play.
+ */
+@Entity(tableName = "playback_history")
+data class PlaybackHistoryEntity(
+    @PrimaryKey val key: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val duration: String,
+    val gradientIndex: Int,
+    val imageUrl: String?,
+    val streamUrl: String?,
+    val playedAt: Long
+)
+
+@Dao
+interface PlaybackHistoryDao {
+    @Query("SELECT * FROM playback_history ORDER BY playedAt DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<PlaybackHistoryEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun record(entity: PlaybackHistoryEntity)
+}
+
+@Database(
+    entities = [DownloadedTrackEntity::class, PlaybackHistoryEntity::class],
+    version = 2,
+    exportSchema = false
+)
 abstract class MuseFlowDatabase : RoomDatabase() {
     abstract fun downloadedTrackDao(): DownloadedTrackDao
+    abstract fun playbackHistoryDao(): PlaybackHistoryDao
 
     companion object {
         @Volatile private var instance: MuseFlowDatabase? = null
@@ -61,7 +93,11 @@ abstract class MuseFlowDatabase : RoomDatabase() {
                     context.applicationContext,
                     MuseFlowDatabase::class.java,
                     "museflow.db"
-                ).build().also { instance = it }
+                )
+                    // No migration path exists yet for this pre-release app, and history/download
+                    // rows are just a local cache - safe to drop and recreate on schema changes.
+                    .fallbackToDestructiveMigration(true)
+                    .build().also { instance = it }
             }
     }
 }

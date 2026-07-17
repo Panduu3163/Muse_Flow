@@ -2,6 +2,7 @@ package com.example
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,6 +24,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -173,9 +175,28 @@ fun ProfileEditorContent(
     nameLabel: String,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri -> if (uri != null) onPhotoUriChange(uri.toString()) }
+    ) { uri ->
+        if (uri != null) {
+            // Without this, the picker's content:// URI only stays readable for the current
+            // process/activity lifetime - it looks fine immediately, then silently fails to
+            // load next time the app starts (or after the picker's temp grant is cleaned up).
+            // Some URIs/OEM pickers don't support persisting at all; failing to persist just
+            // means the same "photo disappears later" bug returns for that URI, so it's worth
+            // catching rather than crashing the whole selection over it.
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: SecurityException) {
+                // Nothing more to do - proceed with the URI anyway, best effort.
+            }
+            onPhotoUriChange(uri.toString())
+        }
+    }
 
     Column(
         modifier = modifier,

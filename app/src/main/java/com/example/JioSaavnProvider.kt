@@ -89,8 +89,12 @@ class JioSaavnProvider : Provider<TrackResult> {
         val durationSeconds = moreInfo?.optString("duration")?.toIntOrNull()
         val duration = durationSeconds?.let { "${it / 60}:${(it % 60).toString().padStart(2, '0')}" }
 
+        // JioSaavn only serves 320kbps to tracks that support it (this flag), and the URL you get
+        // back from decryption always defaults to 96kbps regardless - so picking the true highest
+        // quality means checking this rather than always upgrading to a fixed bitrate.
+        val has320kbps = moreInfo?.optString("320kbps").equals("true", ignoreCase = true)
         val encryptedMediaUrl = moreInfo?.optString("encrypted_media_url")?.takeIf { it.isNotBlank() }
-        val streamUrl = encryptedMediaUrl?.let { decryptMediaUrl(it) }
+        val streamUrl = encryptedMediaUrl?.let { decryptMediaUrl(it, has320kbps) }
 
         // JioSaavn's search results embed a low-res thumbnail URL (e.g. "...50x50.jpg");
         // every quality JioSaavn actually serves lives at the same path, so upgrading the size
@@ -110,16 +114,25 @@ class JioSaavnProvider : Provider<TrackResult> {
         )
     }
 
-    /** Decrypts JioSaavn's DES-ECB-encrypted media URL, then upgrades it to 160kbps quality. */
-    private fun decryptMediaUrl(encryptedMediaUrl: String): String? = try {
+    /**
+     * Decrypts JioSaavn's DES-ECB-encrypted media URL, then upgrades it to the highest quality
+     * actually available for this track: 320kbps when [has320kbps] is set, otherwise 160kbps
+     * (which - unlike 320 - is available for effectively every track, premium or not). The
+     * decrypted URL always defaults to a "_96.mp4" suffix; [bitrateSuffixRegex] replaces whatever
+     * bitrate is actually embedded there, rather than assuming it's always exactly "_96".
+     */
+    private fun decryptMediaUrl(encryptedMediaUrl: String, has320kbps: Boolean): String? = try {
         val encryptedBytes = Base64.decode(encryptedMediaUrl, Base64.DEFAULT)
         val cipher = Cipher.getInstance("DES/ECB/PKCS5Padding")
         cipher.init(Cipher.DECRYPT_MODE, desKey)
         val decrypted = String(cipher.doFinal(encryptedBytes), Charsets.ISO_8859_1)
-        decrypted.replace("_96.mp4", "_160.mp4")
+        val targetBitrate = if (has320kbps) "320" else "160"
+        decrypted.replace(bitrateSuffixRegex, "_$targetBitrate.mp4")
     } catch (e: Exception) {
         null
     }
+
+    private val bitrateSuffixRegex = Regex("_\\d+\\.mp4$")
 
     private fun decodeHtmlEntities(text: String): String = text
         .replace("&amp;", "&")

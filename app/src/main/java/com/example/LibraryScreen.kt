@@ -28,7 +28,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
 fun LibraryScreen(
-    onPlayTrack: (Track) -> Unit,
+    onPlayTrack: (Track, List<Track>) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableStateOf(0) }
@@ -214,7 +214,7 @@ fun LibraryScreen(
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 items(songs) { song ->
-                                    LibrarySongRow(track = song, leadingIcon = {
+                                    LibrarySongRow(track = song, queue = songs, leadingIcon = {
                                         Icon(
                                             imageVector = Icons.Default.Favorite,
                                             contentDescription = "Liked",
@@ -239,6 +239,7 @@ fun LibraryScreen(
                                 items(downloadedTracks) { song ->
                                     LibrarySongRow(
                                         track = song,
+                                        queue = downloadedTracks,
                                         leadingIcon = {
                                             Icon(
                                                 imageVector = Icons.Default.DownloadDone,
@@ -266,7 +267,7 @@ fun LibraryScreen(
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 items(songs) { song ->
-                                    LibrarySongRow(track = song, leadingIcon = null, onPlayTrack = onPlayTrack)
+                                    LibrarySongRow(track = song, queue = songs, leadingIcon = null, onPlayTrack = onPlayTrack)
                                 }
                             }
                         }
@@ -355,9 +356,10 @@ fun LibraryScreen(
 @Composable
 fun LibrarySongRow(
     track: Track,
+    queue: List<Track>,
     leadingIcon: (@Composable () -> Unit)? = null,
     trailingContent: (@Composable () -> Unit)? = null,
-    onPlayTrack: (Track) -> Unit
+    onPlayTrack: (Track, List<Track>) -> Unit
 ) {
     val gradientColors = MusicData.Gradients[track.gradientIndex % MusicData.Gradients.size]
 
@@ -365,7 +367,7 @@ fun LibrarySongRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .clickable { onPlayTrack(track) }
+            .clickable { onPlayTrack(track, queue) }
             .padding(8.dp)
             .testTag("library_song_row_${track.title.lowercase().replace(" ", "_")}"),
         verticalAlignment = Alignment.CenterVertically
