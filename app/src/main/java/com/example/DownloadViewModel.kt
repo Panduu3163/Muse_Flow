@@ -11,8 +11,9 @@ import kotlinx.coroutines.launch
 
 /**
  * Activity-scoped facade over [DownloadRepository] for the UI: which tracks are downloaded (for
- * Library's Downloads tab and the Offline mode filter), which are downloading right now (for a
- * per-row spinner), and the actions to start/cancel/remove a download.
+ * Library's Downloads tab and the Offline mode filter), which are downloading right now and how
+ * far along each one is (for a per-row progress indicator), and the actions to
+ * start/cancel/remove a download.
  */
 class DownloadViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -25,6 +26,11 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
     val downloadingKeys: StateFlow<Set<String>> = repository.inProgress
         .map { it.keys }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
+    /** Key -> percent complete (0..100), or -1 while the total size isn't known yet - the same
+     * real, byte-level progress [DownloadNotificationHelper] shows in the system notification. */
+    val downloadingProgress: StateFlow<Map<String, Int>> = repository.inProgress
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     /** Key -> error message, for the most recent failed download attempt per track. */
     val failures: StateFlow<Map<String, String>> = repository.failures

@@ -21,9 +21,8 @@ import com.example.ui.theme.MusePrimary
 
 /**
  * Tap to download [track] for offline playback; tap again to cancel mid-download, or to remove
- * it once complete. Shared by Now Playing (the currently playing track) and Search results (any
- * searched track) - both the only two places a [Track] is guaranteed to carry a real
- * [Track.streamUrl] to download from.
+ * it once complete. Used from Now Playing, Search results, and Album/Artist/Playlist tracklists -
+ * everywhere a [Track] carries (or can resolve) a real stream to download from.
  */
 @Composable
 fun DownloadButton(
@@ -34,11 +33,16 @@ fun DownloadButton(
 ) {
     val downloadedTracks by downloadViewModel.downloadedTracks.collectAsState()
     val downloadingKeys by downloadViewModel.downloadingKeys.collectAsState()
+    val downloadingProgress by downloadViewModel.downloadingProgress.collectAsState()
     val failures by downloadViewModel.failures.collectAsState()
 
     val key = track.downloadKey()
     val isDownloaded = downloadedTracks.any { it.downloadKey() == key }
     val isDownloading = downloadingKeys.contains(key)
+    // -1 (or a missing entry, e.g. the instant between tapping and the first progress update)
+    // means the total size isn't known yet - an indeterminate spinner, distinct from a real
+    // 0-99% that visibly moves and so is distinguishable from one that's stuck.
+    val percent = downloadingProgress[key] ?: -1
 
     // Otherwise a failed download just silently reverts to "not downloaded" with no explanation
     // - overwhelmingly because the connection dropped mid-download.
@@ -60,6 +64,12 @@ fun DownloadButton(
         modifier = modifier
     ) {
         when {
+            isDownloading && percent in 0..100 -> CircularProgressIndicator(
+                progress = { percent / 100f },
+                modifier = Modifier.size(20.dp),
+                color = tint,
+                strokeWidth = 2.dp
+            )
             isDownloading -> CircularProgressIndicator(
                 modifier = Modifier.size(20.dp),
                 color = tint,
