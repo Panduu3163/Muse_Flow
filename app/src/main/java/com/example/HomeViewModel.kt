@@ -3,6 +3,8 @@ package com.example
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -10,6 +12,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** A Home shelf backed by a canned search query, standing in for a real recommendation system. */
 private data class MoodShelfQuery(val title: String, val query: String)
@@ -24,15 +27,16 @@ private val moodShelfQueries = listOf(
 /**
  * Real data for Home, in place of the static [MusicData] shelves: "Recently Played" comes from
  * actual playback history in Room ([PlaybackHistoryRepository]), and every other shelf is a
- * canned genre/mood search against JioSaavn via [Provider] - a stand-in for a real
+ * canned genre/mood search against JioSaavn and YouTube Music - a stand-in for a real
  * recommendation system, which doesn't exist yet. Each shelf loads independently (its entry in
- * [moodShelves] is null until that one search resolves) so a slow or failed shelf doesn't block
- * the others from appearing.
+ * [moodShelves] is missing until that one search resolves) so a slow or failed shelf doesn't
+ * block the others from appearing.
  */
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val playbackHistoryRepository = PlaybackHistoryRepository.getInstance(application)
-    private val provider: Provider<TrackResult> = JioSaavnProvider()
+    private val jioSaavnProvider = JioSaavnProvider()
+    private val youTubeProvider = YouTubeMusicProvider(application)
 
     /** Null while the first read from Room is still in flight; empty once loaded with no history. */
     val recentlyPlayed: StateFlow<List<Track>?> = playbackHistoryRepository.observeRecent(10)
@@ -50,11 +54,42 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     init {
         moodShelfQueries.forEach { shelf ->
             viewModelScope.launch {
-                val state = loadAsUiState(errorMessage = "Couldn't load \"${shelf.title}\" right now.") {
-                    provider.search(shelf.query)
-                        .filter { it.directStreamUrl != null }
-                        .take(10)
-                        .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
+                // Same JioSaavn-first-with-YouTube-fallback pattern Search uses: both sources are
+                // queried in parallel (so a slow one can't hold up the whole shelf), merged
+                // (JioSaavn results first, then any YouTube ones that aren't already covered), and
+                // only treated as a genuine failure if both come back empty/erroring - this is
+                // what keeps a shelf resilient to a JioSaavn-side outage or regional throttling,
+                // rather than depending on JioSaavn alone the way this shelf used to.
+                var jioFailed = false
+                var ytFailed = false
+                val (jioResults, ytResults) = coroutineScope {
+                    val jioDeferred = async {
+                        withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
+                            try {
+                                jioSaavnProvider.search(shelf.query).filter { it.directStreamUrl != null }
+                            } catch (e: Exception) {
+                                null
+                            }
+                        } ?: run { jioFailed = true; emptyList() }
+                    }
+                    val ytDeferred = async {
+                        withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
+                            try {
+                                youTubeProvider.search(shelf.query)
+                            } catch (e: Exception) {
+                                null
+                            }
+                        } ?: run { ytFailed = true; emptyList() }
+                    }
+                    jioDeferred.await() to ytDeferred.await()
+                }
+                val merged = mergeSearchResults(jioResults, ytResults)
+                    .take(10)
+                    .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
+                val state = if (jioFailed && ytFailed) {
+                    UiState.Error("Couldn't load \"${shelf.title}\" right now.")
+                } else {
+                    UiState.Success(merged)
                 }
                 _moodShelves.update { it + (shelf.title to state) }
             }
