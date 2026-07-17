@@ -4,7 +4,7 @@
 
 **A free, ad-free music streaming app for Android.**
 
-Built with Kotlin, Jetpack Compose, and Media3 — a personal project aiming for a Spotify-level experience without the price tag.
+Built with Kotlin, Jetpack Compose, and Media3 — a personal project aiming for a free music experience without the price tag.
 
 ![Kotlin](https://img.shields.io/badge/Kotlin-100%25-7F52FF?style=for-the-badge&logo=kotlin)
 ![Platform](https://img.shields.io/badge/Platform-Android-3DDC84?style=for-the-badge&logo=android)
