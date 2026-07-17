@@ -44,22 +44,60 @@ class JioSaavnProvider : Provider<TrackResult> {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val url = "${Api.BASE_URL}?__call=search.getResults&_format=json&_marker=0" +
             "&api_version=4&ctx=web6dot0&q=$encodedQuery&p=1&n=20"
-
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", Api.USER_AGENT)
-            .build()
-
-        val bodyString = httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw JioSaavnException("Search failed: HTTP ${response.code}")
-            }
-            response.body?.string() ?: throw JioSaavnException("Empty search response")
-        }
-
-        val root = JSONObject(bodyString)
-        val results = root.optJSONArray("results") ?: JSONArray()
+        val results = fetchJson(url).optJSONArray("results") ?: JSONArray()
         (0 until results.length()).mapNotNull { i -> parseSong(results.optJSONObject(i)) }
+    }
+
+    /** Searches JioSaavn's album catalog, via the same private search API [search] uses. */
+    suspend fun searchAlbums(query: String): List<AlbumResult> = withContext(Dispatchers.IO) {
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        val url = "${Api.BASE_URL}?__call=search.getAlbumResults&_format=json&_marker=0" +
+            "&api_version=4&ctx=web6dot0&q=$encodedQuery&p=1&n=20"
+        val results = fetchJson(url).optJSONArray("results") ?: JSONArray()
+        (0 until results.length()).mapNotNull { i -> parseAlbum(results.optJSONObject(i)) }
+    }
+
+    /** Searches JioSaavn's artist catalog, via the same private search API [search] uses. */
+    suspend fun searchArtists(query: String): List<ArtistResult> = withContext(Dispatchers.IO) {
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        val url = "${Api.BASE_URL}?__call=search.getArtistResults&_format=json&_marker=0" +
+            "&api_version=4&ctx=web6dot0&q=$encodedQuery&p=1&n=20"
+        val results = fetchJson(url).optJSONArray("results") ?: JSONArray()
+        (0 until results.length()).mapNotNull { i -> parseArtist(results.optJSONObject(i)) }
+    }
+
+    /** Searches JioSaavn's playlist catalog, via the same private search API [search] uses. */
+    suspend fun searchPlaylists(query: String): List<PlaylistResult> = withContext(Dispatchers.IO) {
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        val url = "${Api.BASE_URL}?__call=search.getPlaylistResults&_format=json&_marker=0" +
+            "&api_version=4&ctx=web6dot0&q=$encodedQuery&p=1&n=20"
+        val results = fetchJson(url).optJSONArray("results") ?: JSONArray()
+        (0 until results.length()).mapNotNull { i -> parsePlaylist(results.optJSONObject(i)) }
+    }
+
+    /** Fetches an album's full tracklist, for [AlbumDetailScreen]. */
+    suspend fun getAlbumTracks(albumId: String): List<TrackResult> = withContext(Dispatchers.IO) {
+        val url = "${Api.BASE_URL}?__call=content.getAlbumDetails&_format=json&_marker=0" +
+            "&api_version=4&ctx=web6dot0&albumid=$albumId"
+        val list = fetchJson(url).optJSONArray("list") ?: JSONArray()
+        (0 until list.length()).mapNotNull { i -> parseSong(list.optJSONObject(i)) }
+    }
+
+    /** Fetches a playlist's full tracklist, for [PlaylistDetailScreen]. */
+    suspend fun getPlaylistTracks(playlistId: String): List<TrackResult> = withContext(Dispatchers.IO) {
+        val url = "${Api.BASE_URL}?__call=playlist.getDetails&_format=json&_marker=0" +
+            "&api_version=4&ctx=web6dot0&listid=$playlistId"
+        val list = fetchJson(url).optJSONArray("list") ?: JSONArray()
+        (0 until list.length()).mapNotNull { i -> parseSong(list.optJSONObject(i)) }
+    }
+
+    /** Fetches an artist's top tracks, for [ArtistDetailScreen]. There's no "full discography as
+     * a flat tracklist" endpoint - top tracks is the closest JioSaavn's private API offers. */
+    suspend fun getArtistTracks(artistId: String): List<TrackResult> = withContext(Dispatchers.IO) {
+        val url = "${Api.BASE_URL}?__call=artist.getArtistPageDetails&_format=json&_marker=0" +
+            "&api_version=4&ctx=web6dot0&artistId=$artistId&n_song=50&n_album=0&page=1&category=&sort_order="
+        val list = fetchJson(url).optJSONArray("topSongs") ?: JSONArray()
+        (0 until list.length()).mapNotNull { i -> parseSong(list.optJSONObject(i)) }
     }
 
     /**
@@ -68,6 +106,21 @@ class JioSaavnProvider : Provider<TrackResult> {
      */
     override suspend fun getStreamUrl(item: TrackResult): StreamResolution? =
         item.directStreamUrl?.let { StreamResolution(url = it) }
+
+    private fun fetchJson(url: String): JSONObject {
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", Api.USER_AGENT)
+            .build()
+
+        val bodyString = httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw JioSaavnException("Request failed: HTTP ${response.code}")
+            }
+            response.body?.string() ?: throw JioSaavnException("Empty response")
+        }
+        return JSONObject(bodyString)
+    }
 
     private fun parseSong(song: JSONObject?): TrackResult? {
         song ?: return null
@@ -99,9 +152,7 @@ class JioSaavnProvider : Provider<TrackResult> {
         // JioSaavn's search results embed a low-res thumbnail URL (e.g. "...50x50.jpg");
         // every quality JioSaavn actually serves lives at the same path, so upgrading the size
         // segment gets a much sharper image for the notification/Now Playing art with no extra call.
-        val imageUrl = song.optString("image").takeIf { it.isNotBlank() }
-            ?.let { decodeHtmlEntities(it) }
-            ?.replace(Regex("50x50|150x150"), "500x500")
+        val imageUrl = upgradeImageUrl(song.optString("image"))
 
         return TrackResult(
             id = id,
@@ -109,8 +160,62 @@ class JioSaavnProvider : Provider<TrackResult> {
             artist = artist,
             duration = duration,
             source = name,
+            sourceType = MusicSource.JIOSAAVN,
             directStreamUrl = streamUrl,
             imageUrl = imageUrl
+        )
+    }
+
+    /** Upgrades a JioSaavn thumbnail URL (e.g. "...50x50.jpg") to the much sharper 500x500
+     * version served at the same path - shared by every result type's image field. */
+    private fun upgradeImageUrl(rawImageUrl: String): String? =
+        rawImageUrl.takeIf { it.isNotBlank() }
+            ?.let { decodeHtmlEntities(it) }
+            ?.replace(Regex("50x50|150x150"), "500x500")
+
+    private fun parseAlbum(json: JSONObject?): AlbumResult? {
+        json ?: return null
+        val id = json.optString("id").takeIf { it.isNotBlank() } ?: return null
+        val title = decodeHtmlEntities(json.optString("title")).takeIf { it.isNotBlank() } ?: return null
+        val moreInfo = json.optJSONObject("more_info")
+        val artist = moreInfo?.optString("music")?.takeIf { it.isNotBlank() }?.let { decodeHtmlEntities(it) }
+            ?: decodeHtmlEntities(json.optString("subtitle")).takeIf { it.isNotBlank() }
+            ?: "Unknown artist"
+        val songCount = moreInfo?.optString("song_count")?.toIntOrNull()
+        return AlbumResult(
+            id = id,
+            title = title,
+            artist = artist,
+            imageUrl = upgradeImageUrl(json.optString("image")),
+            songCount = songCount
+        )
+    }
+
+    private fun parseArtist(json: JSONObject?): ArtistResult? {
+        json ?: return null
+        val id = json.optString("id").takeIf { it.isNotBlank() } ?: return null
+        val name = decodeHtmlEntities(json.optString("name")).takeIf { it.isNotBlank() } ?: return null
+        // JioSaavn falls back to a generic "artist-default-*.png" placeholder when it has no
+        // real photo - filtering those out lets the UI fall back to its own gradient+initial
+        // avatar instead of showing JioSaavn's placeholder image.
+        val rawImage = json.optString("image").takeIf { it.isNotBlank() && !it.contains("default") }
+        return ArtistResult(id = id, name = name, imageUrl = rawImage?.let { upgradeImageUrl(it) })
+    }
+
+    private fun parsePlaylist(json: JSONObject?): PlaylistResult? {
+        json ?: return null
+        val id = json.optString("id").takeIf { it.isNotBlank() } ?: return null
+        val title = decodeHtmlEntities(json.optString("title")).takeIf { it.isNotBlank() } ?: return null
+        val songCount = json.optJSONObject("more_info")?.optString("song_count")?.toIntOrNull()
+        val subtitle = songCount?.let { "$it songs" }
+            ?: decodeHtmlEntities(json.optString("subtitle")).takeIf { it.isNotBlank() }
+            ?: ""
+        return PlaylistResult(
+            id = id,
+            title = title,
+            subtitle = subtitle,
+            imageUrl = upgradeImageUrl(json.optString("image")),
+            songCount = songCount
         )
     }
 

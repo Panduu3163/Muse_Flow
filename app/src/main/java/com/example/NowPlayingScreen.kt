@@ -52,10 +52,14 @@ fun NowPlayingScreen(
     modifier: Modifier = Modifier
 ) {
     // Interactive states
-    var isLiked by remember { mutableStateOf(false) }
     var isShuffleEnabled by remember { mutableStateOf(false) }
     var isRepeatEnabled by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
+
+    // Real, Room-backed liked state - shared with Library's Liked Songs tab
+    val likedSongsViewModel: LikedSongsViewModel = viewModel()
+    val likedKeys by likedSongsViewModel.likedKeys.collectAsState()
+    val isLiked = likedKeys.contains(track.downloadKey())
 
     val themeViewModel: ThemeViewModel = viewModel()
     val themeState by themeViewModel.themeState.collectAsState()
@@ -296,7 +300,7 @@ fun NowPlayingScreen(
 
                 // Heart Icon
                 IconButton(
-                    onClick = { isLiked = !isLiked },
+                    onClick = { likedSongsViewModel.toggle(track) },
                     modifier = Modifier.testTag("now_playing_heart_button")
                 ) {
                     Icon(

@@ -1,7 +1,7 @@
 package com.example
 
+import android.widget.Toast
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,18 +17,24 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun SearchScreen(
     onPlayTrack: (Track, List<Track>) -> Unit,
+    onAlbumClick: (AlbumResult) -> Unit,
+    onArtistClick: (ArtistResult) -> Unit,
+    onPlaylistClick: (PlaylistResult) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -127,9 +133,9 @@ fun SearchScreen(
             ) {
                 when (selectedTab) {
                     0 -> SongsResults(searchQuery = searchQuery, onPlayTrack = onPlayTrack)
-                    1 -> AlbumsResults(searchQuery = searchQuery)
-                    2 -> ArtistsResults(searchQuery = searchQuery)
-                    3 -> PlaylistsResults(searchQuery = searchQuery)
+                    1 -> AlbumsResults(searchQuery = searchQuery, onAlbumClick = onAlbumClick)
+                    2 -> ArtistsResults(searchQuery = searchQuery, onArtistClick = onArtistClick)
+                    3 -> PlaylistsResults(searchQuery = searchQuery, onPlaylistClick = onPlaylistClick)
                 }
             }
         }
@@ -141,10 +147,17 @@ fun SongsResults(
     searchQuery: String,
     onPlayTrack: (Track, List<Track>) -> Unit
 ) {
-    val provider = remember { JioSaavnProvider() }
+    val jioSaavnProvider = remember { JioSaavnProvider() }
+    val youTubeProvider = remember { YouTubeMusicProvider() }
     var results by remember { mutableStateOf<List<Track>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var hasError by remember { mutableStateOf(false) }
+    // downloadKey() of the row currently being resolved to a JioSaavn match before it can play -
+    // only ever one at a time, since resolution happens synchronously with the tap.
+    var resolvingKey by remember { mutableStateOf<String?>(null) }
+
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     LaunchedEffect(searchQuery) {
         if (searchQuery.isBlank()) {
@@ -156,11 +169,38 @@ fun SongsResults(
         isLoading = true
         hasError = false
         delay(350) // debounce so we don't fire a search per keystroke
+        var jioFailed = false
+        var ytFailed = false
         try {
-            results = provider.search(searchQuery)
-                .filter { it.directStreamUrl != null }
+            // JioSaavn and YouTube Music are queried in parallel - neither should have to wait
+            // on the other, and a failure in one shouldn't block results from the other.
+            val (jioResults, ytResults) = coroutineScope {
+                val jioDeferred = async {
+                    try {
+                        // Unlike YouTube results (never directly playable, resolved on tap
+                        // instead), a JioSaavn row is only worth showing if it's actually
+                        // playable - a small fraction fail DES decryption and come back null.
+                        jioSaavnProvider.search(searchQuery).filter { it.directStreamUrl != null }
+                    } catch (e: Exception) {
+                        jioFailed = true
+                        emptyList()
+                    }
+                }
+                val ytDeferred = async {
+                    try {
+                        youTubeProvider.search(searchQuery)
+                    } catch (e: Exception) {
+                        ytFailed = true
+                        emptyList()
+                    }
+                }
+                jioDeferred.await() to ytDeferred.await()
+            }
+            results = mergeSearchResults(jioResults, ytResults)
                 .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
-            hasError = false
+            // Only a genuine failure (both sources unreachable) counts as an error state -
+            // one source failing while the other succeeds should just show partial results.
+            hasError = jioFailed && ytFailed
         } catch (e: Exception) {
             results = emptyList()
             hasError = true
@@ -175,7 +215,7 @@ fun SongsResults(
         }
         hasError -> EmptySearchState(
             title = "Search failed",
-            message = "Couldn't reach JioSaavn. Check your connection and try again."
+            message = "Couldn't reach JioSaavn or YouTube Music. Check your connection and try again."
         )
         searchQuery.isBlank() -> EmptySearchState(
             title = "Search for a song",
@@ -189,12 +229,41 @@ fun SongsResults(
         ) {
             items(results) { track ->
                 val gradientColors = MusicData.Gradients[track.gradientIndex % MusicData.Gradients.size]
+                val key = track.downloadKey()
+                val isResolving = resolvingKey == key
+                val isFromYouTube = track.sourceType == MusicSource.YOUTUBE_MUSIC
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { onPlayTrack(track, results) }
+                        .clickable(enabled = resolvingKey == null) {
+                            if (isFromYouTube) {
+                                // YouTube Music is search-only in this app - resolve to a
+                                // playable JioSaavn match before attempting to play, and tell the
+                                // user explicitly if nothing close enough is found rather than
+                                // silently doing nothing.
+                                resolvingKey = key
+                                coroutineScope.launch {
+                                    val match = runCatching {
+                                        jioSaavnProvider.findPlayableMatch(track.title, track.artist)
+                                    }.getOrNull()
+                                    resolvingKey = null
+                                    if (match != null) {
+                                        val playableTrack = match.toPlayableTrack(gradientIndex = track.gradientIndex)
+                                        onPlayTrack(playableTrack, listOf(playableTrack))
+                                    } else {
+                                        Toast.makeText(
+                                            context,
+                                            "This track isn't available to play right now",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                            } else {
+                                onPlayTrack(track, results)
+                            }
+                        }
                         .padding(8.dp)
                         .testTag("search_song_row_${track.title.lowercase().replace(" ", "_")}"),
                     verticalAlignment = Alignment.CenterVertically
@@ -220,20 +289,41 @@ fun SongsResults(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = track.artist,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (isFromYouTube) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "• YouTube Music",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                    if (isResolving) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
                         Text(
-                            text = track.artist,
+                            text = track.duration,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Text(
-                        text = track.duration,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    DownloadButton(track = track, modifier = Modifier.testTag("search_download_button_${track.title.lowercase().replace(" ", "_")}"))
+                    if (!isFromYouTube) {
+                        DownloadButton(track = track, modifier = Modifier.testTag("search_download_button_${track.title.lowercase().replace(" ", "_")}"))
+                    }
                 }
             }
         }
@@ -241,44 +331,67 @@ fun SongsResults(
 }
 
 @Composable
-fun AlbumsResults(searchQuery: String) {
-    val filteredAlbums = remember(searchQuery) {
+fun AlbumsResults(searchQuery: String, onAlbumClick: (AlbumResult) -> Unit) {
+    val provider = remember { JioSaavnProvider() }
+    var albums by remember { mutableStateOf<List<AlbumResult>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(false) }
+    var hasError by remember { mutableStateOf(false) }
+
+    LaunchedEffect(searchQuery) {
         if (searchQuery.isBlank()) {
-            MusicData.albums
-        } else {
-            MusicData.albums.filter {
-                it.title.contains(searchQuery, ignoreCase = true) ||
-                it.artist.contains(searchQuery, ignoreCase = true)
-            }
+            albums = emptyList()
+            isLoading = false
+            hasError = false
+            return@LaunchedEffect
+        }
+        isLoading = true
+        hasError = false
+        delay(350)
+        try {
+            albums = provider.searchAlbums(searchQuery)
+            hasError = false
+        } catch (e: Exception) {
+            albums = emptyList()
+            hasError = true
+        } finally {
+            isLoading = false
         }
     }
 
-    if (filteredAlbums.isEmpty()) {
-        EmptySearchState()
-    } else {
-        LazyColumn(
+    when {
+        isLoading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
+        hasError -> EmptySearchState(
+            title = "Search failed",
+            message = "Couldn't reach JioSaavn. Check your connection and try again."
+        )
+        searchQuery.isBlank() -> EmptySearchState(
+            title = "Search for an album",
+            message = "Find any album to browse its tracklist."
+        )
+        albums.isEmpty() -> EmptySearchState()
+        else -> LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(filteredAlbums) { album ->
-                val gradientColors = MusicData.Gradients[album.gradientIndex % MusicData.Gradients.size]
+            items(albums) { album ->
+                val gradientColors = MusicData.Gradients[(album.id.hashCode().mod(MusicData.Gradients.size))]
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { }
+                        .clickable { onAlbumClick(album) }
                         .padding(8.dp)
                         .testTag("search_album_row_${album.title.lowercase().replace(" ", "_")}"),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(56.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Brush.linearGradient(gradientColors)),
-                        contentAlignment = Alignment.Center
+                    TrackArtwork(
+                        imageUrl = album.imageUrl,
+                        gradientColors = gradientColors,
+                        modifier = Modifier.size(56.dp)
                     ) {
                         Text("💿", fontSize = 24.sp)
                     }
@@ -292,7 +405,7 @@ fun AlbumsResults(searchQuery: String) {
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${album.artist} • ${album.trackCount} Songs (${album.year})",
+                            text = album.artist + (album.songCount?.let { " • $it Songs" } ?: ""),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -306,44 +419,68 @@ fun AlbumsResults(searchQuery: String) {
 }
 
 @Composable
-fun ArtistsResults(searchQuery: String) {
-    val filteredArtists = remember(searchQuery) {
+fun ArtistsResults(searchQuery: String, onArtistClick: (ArtistResult) -> Unit) {
+    val provider = remember { JioSaavnProvider() }
+    var artists by remember { mutableStateOf<List<ArtistResult>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(false) }
+    var hasError by remember { mutableStateOf(false) }
+
+    LaunchedEffect(searchQuery) {
         if (searchQuery.isBlank()) {
-            MusicData.artists
-        } else {
-            MusicData.artists.filter {
-                it.name.contains(searchQuery, ignoreCase = true)
-            }
+            artists = emptyList()
+            isLoading = false
+            hasError = false
+            return@LaunchedEffect
+        }
+        isLoading = true
+        hasError = false
+        delay(350)
+        try {
+            artists = provider.searchArtists(searchQuery)
+            hasError = false
+        } catch (e: Exception) {
+            artists = emptyList()
+            hasError = true
+        } finally {
+            isLoading = false
         }
     }
 
-    if (filteredArtists.isEmpty()) {
-        EmptySearchState()
-    } else {
-        LazyColumn(
+    when {
+        isLoading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
+        hasError -> EmptySearchState(
+            title = "Search failed",
+            message = "Couldn't reach JioSaavn. Check your connection and try again."
+        )
+        searchQuery.isBlank() -> EmptySearchState(
+            title = "Search for an artist",
+            message = "Find any artist to browse their top songs."
+        )
+        artists.isEmpty() -> EmptySearchState()
+        else -> LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(filteredArtists) { artist ->
-                val gradientColors = MusicData.Gradients[artist.gradientIndex % MusicData.Gradients.size]
+            items(artists) { artist ->
+                val gradientColors = MusicData.Gradients[(artist.id.hashCode().mod(MusicData.Gradients.size))]
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { }
+                        .clickable { onArtistClick(artist) }
                         .padding(8.dp)
                         .testTag("search_artist_row_${artist.name.lowercase().replace(" ", "_")}"),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Circle avatar for Artist
-                    Box(
-                        modifier = Modifier
-                            .size(56.dp)
-                            .clip(CircleShape)
-                            .background(Brush.linearGradient(gradientColors)),
-                        contentAlignment = Alignment.Center
+                    TrackArtwork(
+                        imageUrl = artist.imageUrl,
+                        gradientColors = gradientColors,
+                        shape = CircleShape,
+                        modifier = Modifier.size(56.dp)
                     ) {
                         Text(
                             text = artist.name.take(1),
@@ -361,7 +498,7 @@ fun ArtistsResults(searchQuery: String) {
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = artist.followers,
+                            text = "Artist",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -373,44 +510,67 @@ fun ArtistsResults(searchQuery: String) {
 }
 
 @Composable
-fun PlaylistsResults(searchQuery: String) {
-    val filteredPlaylists = remember(searchQuery) {
+fun PlaylistsResults(searchQuery: String, onPlaylistClick: (PlaylistResult) -> Unit) {
+    val provider = remember { JioSaavnProvider() }
+    var playlists by remember { mutableStateOf<List<PlaylistResult>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(false) }
+    var hasError by remember { mutableStateOf(false) }
+
+    LaunchedEffect(searchQuery) {
         if (searchQuery.isBlank()) {
-            MusicData.playlists
-        } else {
-            MusicData.playlists.filter {
-                it.title.contains(searchQuery, ignoreCase = true) ||
-                it.creator.contains(searchQuery, ignoreCase = true)
-            }
+            playlists = emptyList()
+            isLoading = false
+            hasError = false
+            return@LaunchedEffect
+        }
+        isLoading = true
+        hasError = false
+        delay(350)
+        try {
+            playlists = provider.searchPlaylists(searchQuery)
+            hasError = false
+        } catch (e: Exception) {
+            playlists = emptyList()
+            hasError = true
+        } finally {
+            isLoading = false
         }
     }
 
-    if (filteredPlaylists.isEmpty()) {
-        EmptySearchState()
-    } else {
-        LazyColumn(
+    when {
+        isLoading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
+        hasError -> EmptySearchState(
+            title = "Search failed",
+            message = "Couldn't reach JioSaavn. Check your connection and try again."
+        )
+        searchQuery.isBlank() -> EmptySearchState(
+            title = "Search for a playlist",
+            message = "Find any playlist to browse its tracklist."
+        )
+        playlists.isEmpty() -> EmptySearchState()
+        else -> LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(filteredPlaylists) { playlist ->
-                val gradientColors = MusicData.Gradients[playlist.gradientIndex % MusicData.Gradients.size]
+            items(playlists) { playlist ->
+                val gradientColors = MusicData.Gradients[(playlist.id.hashCode().mod(MusicData.Gradients.size))]
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { }
+                        .clickable { onPlaylistClick(playlist) }
                         .padding(8.dp)
                         .testTag("search_playlist_row_${playlist.title.lowercase().replace(" ", "_")}"),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(56.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Brush.linearGradient(gradientColors)),
-                        contentAlignment = Alignment.Center
+                    TrackArtwork(
+                        imageUrl = playlist.imageUrl,
+                        gradientColors = gradientColors,
+                        modifier = Modifier.size(56.dp)
                     ) {
                         Text("🎵", fontSize = 24.sp)
                     }
@@ -424,9 +584,11 @@ fun PlaylistsResults(searchQuery: String) {
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "By ${playlist.creator} • ${playlist.trackCount} tracks",
+                            text = playlist.subtitle,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }

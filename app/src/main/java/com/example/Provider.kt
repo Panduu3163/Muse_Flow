@@ -1,5 +1,11 @@
 package com.example
 
+/** Which backend a search result came from - lets the UI tag results (e.g. a "YouTube Music"
+ * badge) and lets playback decide whether a result is directly playable (JioSaavn) or needs to
+ * be resolved to a JioSaavn match first (YouTube Music, which this app never streams from
+ * directly). */
+enum class MusicSource { JIOSAAVN, YOUTUBE_MUSIC }
+
 /** A single track found by a [Provider], from any source (YouTube Music, JioSaavn, ...). */
 data class TrackResult(
     val id: String,
@@ -7,6 +13,7 @@ data class TrackResult(
     val artist: String,
     val duration: String?,
     val source: String,
+    val sourceType: MusicSource,
     /**
      * Set only when the provider can derive a playable URL straight from search results (e.g.
      * JioSaavn's encrypted_media_url), needing no extra network round-trip. Null for providers
@@ -15,6 +22,31 @@ data class TrackResult(
     val directStreamUrl: String? = null,
     /** Cover art URL, used as the media notification's large icon when present. */
     val imageUrl: String? = null
+)
+
+/** A JioSaavn album search result, enough to render a row and fetch its tracklist. */
+data class AlbumResult(
+    val id: String,
+    val title: String,
+    val artist: String,
+    val imageUrl: String?,
+    val songCount: Int?
+)
+
+/** A JioSaavn artist search result, enough to render a row and fetch their top tracks. */
+data class ArtistResult(
+    val id: String,
+    val name: String,
+    val imageUrl: String?
+)
+
+/** A JioSaavn playlist search result, enough to render a row and fetch its tracklist. */
+data class PlaylistResult(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val imageUrl: String?,
+    val songCount: Int?
 )
 
 /**
@@ -51,5 +83,6 @@ fun TrackResult.toPlayableTrack(gradientIndex: Int): Track = Track(
     plays = "",
     gradientIndex = gradientIndex,
     imageUrl = imageUrl,
-    streamUrl = directStreamUrl
+    streamUrl = directStreamUrl,
+    sourceType = sourceType
 )
