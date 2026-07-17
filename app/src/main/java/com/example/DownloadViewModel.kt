@@ -51,5 +51,12 @@ private fun DownloadedTrackEntity.toTrack(): Track = Track(
     plays = "",
     gradientIndex = gradientIndex,
     imageUrl = imageUrl,
-    streamUrl = null
+    // Playback for a downloaded track normally resolves to its local file (looked up separately
+    // by downloadKey() - see PlayerViewModel's downloadedFilePathsByKey), never this streamUrl.
+    // sourceId/sourceType are still reconstructed so a YouTube-sourced download whose local file
+    // has gone missing falls back to a real re-resolve via YouTubeStreamResolver instead of the
+    // mock catalog.
+    streamUrl = null,
+    sourceType = sourceType?.let { runCatching { MusicSource.valueOf(it) }.getOrNull() },
+    sourceId = sourceId
 )

@@ -80,7 +80,9 @@ class DownloadRepository private constructor(context: Context) {
                         imageUrl = track.imageUrl,
                         filePath = targetFile.absolutePath,
                         status = DownloadStatus.COMPLETED.name,
-                        updatedAt = System.currentTimeMillis()
+                        updatedAt = System.currentTimeMillis(),
+                        sourceId = track.sourceId,
+                        sourceType = track.sourceType?.name
                     )
                 )
             } catch (e: CancellationException) {

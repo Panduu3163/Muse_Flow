@@ -33,7 +33,9 @@ class PlaybackHistoryRepository private constructor(context: Context) {
                     gradientIndex = track.gradientIndex,
                     imageUrl = track.imageUrl,
                     streamUrl = track.streamUrl,
-                    playedAt = System.currentTimeMillis()
+                    playedAt = System.currentTimeMillis(),
+                    sourceId = track.sourceId,
+                    sourceType = track.sourceType?.name
                 )
             )
         }
@@ -57,5 +59,7 @@ fun PlaybackHistoryEntity.toTrack(): Track = Track(
     plays = "",
     gradientIndex = gradientIndex,
     imageUrl = imageUrl,
-    streamUrl = streamUrl
+    streamUrl = streamUrl,
+    sourceType = sourceType?.let { runCatching { MusicSource.valueOf(it) }.getOrNull() },
+    sourceId = sourceId
 )

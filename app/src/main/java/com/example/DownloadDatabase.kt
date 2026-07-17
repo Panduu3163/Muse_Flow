@@ -10,13 +10,12 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 enum class DownloadStatus { DOWNLOADING, COMPLETED, FAILED }
 
-// TODO: sourceId/sourceType not yet persisted here - a YouTube-sourced track reconstructed from
-// this table will fall through to mock-catalog resolution instead of re-resolving via
-// YouTubeStreamResolver. Needs a schema migration to add these fields.
 /**
  * A track downloaded for offline playback. Keyed by [Track.downloadKey] (title/artist) rather
  * than any provider-specific id, since the mock catalog, JioSaavn search results, and this table
@@ -33,7 +32,13 @@ data class DownloadedTrackEntity(
     val imageUrl: String?,
     val filePath: String,
     val status: String,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** [Track.sourceId]/[Track.sourceType], persisted (added in [MIGRATION_3_4]) so a
+     * YouTube-sourced download's [Track] can be fully reconstructed - e.g. if its local file is
+     * ever missing, it re-resolves via [YouTubeStreamResolver] instead of falling through to
+     * mock-catalog resolution. Null for sources that never needed either field. */
+    val sourceId: String? = null,
+    val sourceType: String? = null
 )
 
 @Dao
@@ -51,9 +56,6 @@ interface DownloadedTrackDao {
     suspend fun deleteByKey(key: String)
 }
 
-// TODO: sourceId/sourceType not yet persisted here - a YouTube-sourced track reconstructed from
-// this table will fall through to mock-catalog resolution instead of re-resolving via
-// YouTubeStreamResolver. Needs a schema migration to add these fields.
 /**
  * One row per distinct track that's actually been played, for Home's real "Recently Played"
  * shelf. Keyed the same way as [DownloadedTrackEntity] (title/artist), so replaying a track
@@ -69,7 +71,13 @@ data class PlaybackHistoryEntity(
     val gradientIndex: Int,
     val imageUrl: String?,
     val streamUrl: String?,
-    val playedAt: Long
+    val playedAt: Long,
+    /** [Track.sourceId]/[Track.sourceType], persisted (added in [MIGRATION_3_4]) so replaying a
+     * YouTube-sourced track from history re-resolves via [YouTubeStreamResolver] instead of
+     * falling through to mock-catalog resolution (it has no [streamUrl] of its own). Null for
+     * sources that never needed either field. */
+    val sourceId: String? = null,
+    val sourceType: String? = null
 )
 
 @Dao
@@ -132,6 +140,19 @@ interface PlaylistDao {
     suspend fun insert(entity: PlaylistEntity): Long
 }
 
+/** v3 -> v4: adds [DownloadedTrackEntity.sourceId]/[DownloadedTrackEntity.sourceType] and
+ * [PlaybackHistoryEntity.sourceId]/[PlaybackHistoryEntity.sourceType] - both nullable with no
+ * default needed beyond SQLite's implicit NULL, so a plain `ADD COLUMN` is enough; existing rows
+ * simply get NULL for both (read paths already treat that as "not a YouTube-sourced track"). */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE downloaded_tracks ADD COLUMN sourceId TEXT")
+        db.execSQL("ALTER TABLE downloaded_tracks ADD COLUMN sourceType TEXT")
+        db.execSQL("ALTER TABLE playback_history ADD COLUMN sourceId TEXT")
+        db.execSQL("ALTER TABLE playback_history ADD COLUMN sourceType TEXT")
+    }
+}
+
 @Database(
     entities = [
         DownloadedTrackEntity::class,
@@ -139,7 +160,7 @@ interface PlaylistDao {
         LikedSongEntity::class,
         PlaylistEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class MuseFlowDatabase : RoomDatabase() {
@@ -158,9 +179,7 @@ abstract class MuseFlowDatabase : RoomDatabase() {
                     MuseFlowDatabase::class.java,
                     "museflow.db"
                 )
-                    // No migration path exists yet for this pre-release app, and history/download
-                    // rows are just a local cache - safe to drop and recreate on schema changes.
-                    .fallbackToDestructiveMigration(true)
+                    .addMigrations(MIGRATION_3_4)
                     .build().also { instance = it }
             }
     }
