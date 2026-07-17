@@ -27,6 +27,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -569,15 +572,51 @@ private fun SyncedLyricsList(lines: List<LyricLine>, positionMs: Long, modifier:
         item { LyricsHeader() }
         itemsIndexed(lines) { index, line ->
             val isCurrent = index == currentIndex
-            Text(
-                text = line.text.ifBlank { "♪" },
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontWeight = if (isCurrent) FontWeight.ExtraBold else FontWeight.Medium,
-                    lineHeight = 26.sp
-                ),
-                color = if (isCurrent) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.6f),
-                modifier = Modifier.padding(vertical = 4.dp)
-            )
+            // Word-by-word highlighting only makes sense for whichever line is actually
+            // playing right now - every other line is either fully sung already or hasn't
+            // started, so the plain per-line style below covers those with no per-frame
+            // recomputation wasted on lines that aren't animating.
+            if (isCurrent && line.words != null) {
+                WordSyncedLyricLine(words = line.words, positionMs = positionMs)
+            } else {
+                Text(
+                    text = line.text.ifBlank { "♪" },
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = if (isCurrent) FontWeight.ExtraBold else FontWeight.Medium,
+                        lineHeight = 26.sp
+                    ),
+                    color = if (isCurrent) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.6f),
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            }
         }
     }
+}
+
+/** Word-by-word ("karaoke") highlighting for the currently active line, when [LyricLine.words]
+ * provides that granularity (see [BetterLyricsProvider], backed by Kugou's KRC timing) - each
+ * word lights up as playback reaches its start time, rather than the whole line lighting up at
+ * once the way [SyncedLyricsList]'s plain per-line style does for lines without this data. */
+@Composable
+private fun WordSyncedLyricLine(words: List<LyricWord>, positionMs: Long, modifier: Modifier = Modifier) {
+    val annotated = remember(words, positionMs) {
+        buildAnnotatedString {
+            for (word in words) {
+                val sung = positionMs >= word.startMs
+                withStyle(
+                    SpanStyle(
+                        color = if (sung) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.45f),
+                        fontWeight = if (sung) FontWeight.ExtraBold else FontWeight.Medium
+                    )
+                ) {
+                    append(word.text)
+                }
+            }
+        }
+    }
+    Text(
+        text = annotated,
+        style = MaterialTheme.typography.titleMedium.copy(lineHeight = 26.sp),
+        modifier = modifier.padding(vertical = 4.dp)
+    )
 }
