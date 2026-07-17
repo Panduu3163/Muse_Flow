@@ -104,23 +104,14 @@ private fun TracklistDetailScreen(
     modifier: Modifier = Modifier
 ) {
     val provider = remember { JioSaavnProvider() }
-    var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    var hasError by remember { mutableStateOf(false) }
+    var state by remember { mutableStateOf<UiState<List<Track>>>(UiState.Loading) }
 
     LaunchedEffect(gradientSeed) {
-        isLoading = true
-        hasError = false
-        try {
-            tracks = fetchTracks(provider)
+        state = UiState.Loading
+        state = loadAsUiState(errorMessage = "Couldn't reach JioSaavn. Check your connection and try again.") {
+            fetchTracks(provider)
                 .filter { it.directStreamUrl != null }
                 .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
-            hasError = false
-        } catch (e: Exception) {
-            tracks = emptyList()
-            hasError = true
-        } finally {
-            isLoading = false
         }
     }
 
@@ -179,30 +170,31 @@ private fun TracklistDetailScreen(
                 }
             }
 
+            val currentState = state
             when {
-                isLoading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                currentState is UiState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
-                hasError -> EmptySearchState(
+                currentState is UiState.Error -> EmptySearchState(
                     title = "Couldn't load this",
-                    message = "Couldn't reach JioSaavn. Check your connection and try again."
+                    message = currentState.message
                 )
-                tracks.isEmpty() -> EmptySearchState(
+                currentState is UiState.Success && currentState.data.isEmpty() -> EmptySearchState(
                     title = "Nothing here",
                     message = "No playable tracks were found."
                 )
-                else -> LazyColumn(
+                currentState is UiState.Success -> LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 90.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(tracks) { track ->
+                    items(currentState.data) { track ->
                         val rowGradient = MusicData.Gradients[track.gradientIndex % MusicData.Gradients.size]
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
-                                .clickable { onPlayTrack(track, tracks) }
+                                .clickable { onPlayTrack(track, currentState.data) }
                                 .padding(8.dp)
                                 .testTag("detail_track_row_${track.title.lowercase().replace(" ", "_")}"),
                             verticalAlignment = Alignment.CenterVertically

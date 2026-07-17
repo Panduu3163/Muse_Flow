@@ -59,7 +59,7 @@ fun HomeScreen(
             item {
                 HomeShelf(title = "Recently Played") {
                     ShelfContent(
-                        tracks = recentlyPlayed,
+                        state = recentlyPlayed?.let { UiState.Success(it) } ?: UiState.Loading,
                         emptyMessage = "Nothing played yet - your history will show up here.",
                         onPlayTrack = onPlayTrack
                     )
@@ -72,7 +72,7 @@ fun HomeScreen(
                 item {
                     HomeShelf(title = title) {
                         ShelfContent(
-                            tracks = moodShelves[title],
+                            state = moodShelves[title] ?: UiState.Loading,
                             emptyMessage = "Couldn't load \"$title\" right now.",
                             onPlayTrack = onPlayTrack
                         )
@@ -83,29 +83,39 @@ fun HomeScreen(
     }
 }
 
-/** Shared body for every Home shelf: a shimmer placeholder while [tracks] is null (still
- * loading), a friendly message if it loaded to empty (no results, likely offline), or the real
- * track row otherwise. */
+/** Shared body for every Home shelf: a shimmer placeholder while [state] is [UiState.Loading], a
+ * friendly message on a genuine [UiState.Error] (or a [UiState.Success] that resolved to no
+ * results), or the real track row otherwise. Loading never shows an error message - only an
+ * actual thrown failure or timeout (see [loadAsUiState]) does. */
 @Composable
 private fun ShelfContent(
-    tracks: List<Track>?,
+    state: UiState<List<Track>>,
     emptyMessage: String,
     onPlayTrack: (Track, List<Track>) -> Unit
 ) {
-    when {
-        tracks == null -> ShimmerTrackRow()
-        tracks.isEmpty() -> Text(
-            text = emptyMessage,
+    when (state) {
+        is UiState.Loading -> ShimmerTrackRow()
+        is UiState.Error -> Text(
+            text = state.message,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp)
         )
-        else -> LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            contentPadding = PaddingValues(horizontal = 16.dp)
-        ) {
-            items(tracks) { track ->
-                TrackCard(track = track, onClick = { onPlayTrack(track, tracks) })
+        is UiState.Success -> if (state.data.isEmpty()) {
+            Text(
+                text = emptyMessage,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+        } else {
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp)
+            ) {
+                items(state.data) { track ->
+                    TrackCard(track = track, onClick = { onPlayTrack(track, state.data) })
+                }
             }
         }
     }

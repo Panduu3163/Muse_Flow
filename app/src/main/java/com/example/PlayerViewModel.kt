@@ -282,13 +282,25 @@ private fun Track.toQueueMediaItem(index: Int, localFilePath: String?): MediaIte
 }
 
 /** Media3 groups every IO-related error (dead link, unreachable host, timeout, the
- * `.invalid`-URI fallback [PlaybackService] uses for a track it couldn't resolve, ...) into
- * error codes in the 2000-2999 range - which in this app's case is, in practice, always really
- * "no network reached JioSaavn". Anything outside that range is a genuine playback/decoding
- * problem, not a connectivity one. */
-private fun PlaybackException.toUserMessage(): String =
-    if (errorCode in 2000..2999) {
+ * `.invalid`-URI fallback [PlaybackService] uses for a track it couldn't resolve, a
+ * [YouTubeStreamResolver] failure/timeout, ...) into error codes in the 2000-2999 range - but
+ * that range covers more than just "no network": YouTube Music's multi-step authenticated
+ * resolution pipeline can fail or time out for reasons that have nothing to do with connectivity
+ * (an expired PoToken, a blocked video, BotGuard hiccuping) while the network itself is fine.
+ * Only blame "no internet" when the underlying cause is actually a connectivity-flavored
+ * exception; anything else in that range gets an accurate, connectivity-agnostic message instead
+ * of a misleading one. */
+private fun PlaybackException.toUserMessage(): String {
+    if (errorCode !in 2000..2999) return "Playback failed. Please try again."
+    val isGenuineConnectivityFailure = generateSequence(cause as Throwable?) { it.cause }
+        .any {
+            it is java.net.UnknownHostException ||
+                it is java.net.ConnectException ||
+                it is java.net.SocketTimeoutException
+        }
+    return if (isGenuineConnectivityFailure) {
         "No internet connection. Check your connection and try again."
     } else {
-        "Playback failed. Please try again."
+        "Couldn't load this track. Please try again."
     }
+}

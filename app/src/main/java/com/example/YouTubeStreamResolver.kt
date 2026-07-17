@@ -8,9 +8,11 @@ import com.example.ytcipher.YtCipherFunctionExtractor
 import com.example.ytcipher.YtPlayerJsFetcher
 import com.example.ytcipher.potoken.PoTokenGenerator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -51,22 +53,42 @@ object YouTubeStreamResolver {
     private val visitorDataMutex = Mutex()
     private var cachedVisitorData: String? = null
 
-    /** Resolves [videoId] to a directly-playable URL, or null if any step fails. Safe to call
-     * from any thread - internally dispatches to [Dispatchers.IO]. */
+    // The full cold-start pipeline (visitorData, player.js, BotGuard PoToken via a hidden
+    // WebView, cipher deobfuscation, the /player request itself) can legitimately take several
+    // seconds - longer than an ordinary content fetch - but must still be bounded so a stuck step
+    // becomes a genuine, timely failure (handled identically to any other resolve failure by
+    // every caller) instead of hanging playback indefinitely.
+    private const val RESOLVE_TIMEOUT_MS = 20_000L
+
+    /** Resolves [videoId] to a directly-playable URL, or null if any step fails or exceeds
+     * [RESOLVE_TIMEOUT_MS]. Safe to call from any thread - internally dispatches to
+     * [Dispatchers.IO]. */
     suspend fun resolve(context: Context, videoId: String): String? = withContext(Dispatchers.IO) {
         try {
+            withTimeout(RESOLVE_TIMEOUT_MS) { resolveInternal(context, videoId) }
+        } catch (e: TimeoutCancellationException) {
+            Log.w(TAG, "[$videoId] resolve() timed out after ${RESOLVE_TIMEOUT_MS}ms")
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "[$videoId] resolve() failed", e)
+            null
+        }
+    }
+
+    private suspend fun resolveInternal(context: Context, videoId: String): String? {
+        return try {
             YtCipherDeobfuscator.initialize(context)
 
             val visitorData = getVisitorData(forceRefresh = false)
-                ?: run { Log.w(TAG, "[$videoId] could not obtain visitorData"); return@withContext null }
+                ?: run { Log.w(TAG, "[$videoId] could not obtain visitorData"); return null }
 
             val playerJs = YtPlayerJsFetcher.getPlayerJs()
-                ?: run { Log.w(TAG, "[$videoId] could not fetch player.js"); return@withContext null }
+                ?: run { Log.w(TAG, "[$videoId] could not fetch player.js"); return null }
             val signatureTimestamp = YtCipherFunctionExtractor.extractSignatureTimestamp(playerJs.source, context, playerJs.hash)
-                ?: run { Log.w(TAG, "[$videoId] could not determine signatureTimestamp"); return@withContext null }
+                ?: run { Log.w(TAG, "[$videoId] could not determine signatureTimestamp"); return null }
 
             val poToken = PoTokenGenerator.generate(context, videoId, visitorData)
-                ?: run { Log.w(TAG, "[$videoId] PoTokenGenerator.generate() returned null"); return@withContext null }
+                ?: run { Log.w(TAG, "[$videoId] PoTokenGenerator.generate() returned null"); return null }
 
             var playerResponse = requestPlayerEndpoint(videoId, visitorData, signatureTimestamp, poToken.playerRequestPoToken)
             var status = playerResponse.optJSONObject("playabilityStatus")?.optString("status")
@@ -77,18 +99,18 @@ object YouTubeStreamResolver {
             if (status != "OK" && isLikelyAuthFailure(status)) {
                 Log.w(TAG, "[$videoId] playabilityStatus=$status, retrying once with a fresh visitorData")
                 val freshVisitorData = getVisitorData(forceRefresh = true)
-                    ?: return@withContext null
+                    ?: return null
                 playerResponse = requestPlayerEndpoint(videoId, freshVisitorData, signatureTimestamp, poToken.playerRequestPoToken)
                 status = playerResponse.optJSONObject("playabilityStatus")?.optString("status")
             }
 
             if (status != "OK") {
                 Log.w(TAG, "[$videoId] playabilityStatus=$status - not playable")
-                return@withContext null
+                return null
             }
 
             val format = pickBestAudioFormat(playerResponse)
-                ?: run { Log.w(TAG, "[$videoId] no audio format in adaptiveFormats"); return@withContext null }
+                ?: run { Log.w(TAG, "[$videoId] no audio format in adaptiveFormats"); return null }
 
             val directUrl = format.optString("url").takeIf { it.isNotBlank() }
             val signatureCipher = format.optString("signatureCipher").takeIf { it.isNotBlank() }
@@ -98,7 +120,7 @@ object YouTubeStreamResolver {
                 directUrl != null -> directUrl
                 signatureCipher != null -> YtCipherDeobfuscator.deobfuscateStreamUrl(signatureCipher)
                 else -> null
-            } ?: run { Log.w(TAG, "[$videoId] could not resolve a stream URL"); return@withContext null }
+            } ?: run { Log.w(TAG, "[$videoId] could not resolve a stream URL"); return null }
 
             // n-transform (throttle avoidance), THEN append the per-video PoToken - Metrolist's
             // exact ordering (YTPlayerUtils.kt).

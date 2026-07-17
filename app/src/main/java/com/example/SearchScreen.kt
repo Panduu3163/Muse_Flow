@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 
 @Composable
 fun SearchScreen(
@@ -148,74 +149,72 @@ fun SongsResults(
     val context = LocalContext.current
     val jioSaavnProvider = remember { JioSaavnProvider() }
     val youTubeProvider = remember { YouTubeMusicProvider(context) }
-    var results by remember { mutableStateOf<List<Track>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
-    var hasError by remember { mutableStateOf(false) }
+    var state by remember { mutableStateOf<UiState<List<Track>>>(UiState.Loading) }
 
     LaunchedEffect(searchQuery) {
         if (searchQuery.isBlank()) {
-            results = emptyList()
-            isLoading = false
-            hasError = false
+            state = UiState.Loading
             return@LaunchedEffect
         }
-        isLoading = true
-        hasError = false
+        state = UiState.Loading
         delay(350) // debounce so we don't fire a search per keystroke
         var jioFailed = false
         var ytFailed = false
-        try {
-            // JioSaavn and YouTube Music are queried in parallel - neither should have to wait
-            // on the other, and a failure in one shouldn't block results from the other.
-            val (jioResults, ytResults) = coroutineScope {
-                val jioDeferred = async {
+        // JioSaavn and YouTube Music are queried in parallel - neither should have to wait on
+        // the other - and each is individually bounded so a slow one can't hold the whole search
+        // "loading" forever; timing out counts the same as that source throwing.
+        val (jioResults, ytResults) = coroutineScope {
+            val jioDeferred = async {
+                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
                     try {
                         // Unlike YouTube results (never directly playable, resolved on tap
                         // instead), a JioSaavn row is only worth showing if it's actually
                         // playable - a small fraction fail DES decryption and come back null.
                         jioSaavnProvider.search(searchQuery).filter { it.directStreamUrl != null }
                     } catch (e: Exception) {
-                        jioFailed = true
-                        emptyList()
+                        null
                     }
-                }
-                val ytDeferred = async {
+                } ?: run { jioFailed = true; emptyList() }
+            }
+            val ytDeferred = async {
+                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
                     try {
                         youTubeProvider.search(searchQuery)
                     } catch (e: Exception) {
-                        ytFailed = true
-                        emptyList()
+                        null
                     }
-                }
-                jioDeferred.await() to ytDeferred.await()
+                } ?: run { ytFailed = true; emptyList() }
             }
-            results = mergeSearchResults(jioResults, ytResults)
-                .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
-            // Only a genuine failure (both sources unreachable) counts as an error state -
-            // one source failing while the other succeeds should just show partial results.
-            hasError = jioFailed && ytFailed
-        } catch (e: Exception) {
-            results = emptyList()
-            hasError = true
-        } finally {
-            isLoading = false
+            jioDeferred.await() to ytDeferred.await()
+        }
+        val merged = mergeSearchResults(jioResults, ytResults)
+            .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
+        // Only a genuine failure (both sources unreachable or timed out) counts as an error
+        // state - one source failing while the other succeeds should just show partial results.
+        state = if (jioFailed && ytFailed) {
+            UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")
+        } else {
+            UiState.Success(merged)
         }
     }
 
+    val currentState = state
     when {
-        isLoading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-        }
-        hasError -> EmptySearchState(
-            title = "Search failed",
-            message = "Couldn't reach JioSaavn or YouTube Music. Check your connection and try again."
-        )
         searchQuery.isBlank() -> EmptySearchState(
             title = "Search for a song",
             message = "Find any track, artist, or album to start listening."
         )
-        results.isEmpty() -> EmptySearchState()
-        else -> LazyColumn(
+        currentState is UiState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
+        currentState is UiState.Error -> EmptySearchState(
+            title = "Search failed",
+            message = currentState.message
+        )
+        currentState is UiState.Success && currentState.data.isEmpty() -> EmptySearchState()
+        currentState is UiState.Success -> {
+        val results = currentState.data
+        LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -288,56 +287,47 @@ fun SongsResults(
                 }
             }
         }
+        }
     }
 }
 
 @Composable
 fun AlbumsResults(searchQuery: String, onAlbumClick: (AlbumResult) -> Unit) {
     val provider = remember { JioSaavnProvider() }
-    var albums by remember { mutableStateOf<List<AlbumResult>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
-    var hasError by remember { mutableStateOf(false) }
+    var state by remember { mutableStateOf<UiState<List<AlbumResult>>>(UiState.Loading) }
 
     LaunchedEffect(searchQuery) {
         if (searchQuery.isBlank()) {
-            albums = emptyList()
-            isLoading = false
-            hasError = false
+            state = UiState.Loading
             return@LaunchedEffect
         }
-        isLoading = true
-        hasError = false
+        state = UiState.Loading
         delay(350)
-        try {
-            albums = provider.searchAlbums(searchQuery)
-            hasError = false
-        } catch (e: Exception) {
-            albums = emptyList()
-            hasError = true
-        } finally {
-            isLoading = false
+        state = loadAsUiState(errorMessage = "Couldn't reach JioSaavn. Check your connection and try again.") {
+            provider.searchAlbums(searchQuery)
         }
     }
 
+    val currentState = state
     when {
-        isLoading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-        }
-        hasError -> EmptySearchState(
-            title = "Search failed",
-            message = "Couldn't reach JioSaavn. Check your connection and try again."
-        )
         searchQuery.isBlank() -> EmptySearchState(
             title = "Search for an album",
             message = "Find any album to browse its tracklist."
         )
-        albums.isEmpty() -> EmptySearchState()
-        else -> LazyColumn(
+        currentState is UiState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
+        currentState is UiState.Error -> EmptySearchState(
+            title = "Search failed",
+            message = currentState.message
+        )
+        currentState is UiState.Success && currentState.data.isEmpty() -> EmptySearchState()
+        currentState is UiState.Success -> LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(albums) { album ->
+            items(currentState.data) { album ->
                 val gradientColors = MusicData.Gradients[(album.id.hashCode().mod(MusicData.Gradients.size))]
 
                 Row(
@@ -382,50 +372,40 @@ fun AlbumsResults(searchQuery: String, onAlbumClick: (AlbumResult) -> Unit) {
 @Composable
 fun ArtistsResults(searchQuery: String, onArtistClick: (ArtistResult) -> Unit) {
     val provider = remember { JioSaavnProvider() }
-    var artists by remember { mutableStateOf<List<ArtistResult>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
-    var hasError by remember { mutableStateOf(false) }
+    var state by remember { mutableStateOf<UiState<List<ArtistResult>>>(UiState.Loading) }
 
     LaunchedEffect(searchQuery) {
         if (searchQuery.isBlank()) {
-            artists = emptyList()
-            isLoading = false
-            hasError = false
+            state = UiState.Loading
             return@LaunchedEffect
         }
-        isLoading = true
-        hasError = false
+        state = UiState.Loading
         delay(350)
-        try {
-            artists = provider.searchArtists(searchQuery)
-            hasError = false
-        } catch (e: Exception) {
-            artists = emptyList()
-            hasError = true
-        } finally {
-            isLoading = false
+        state = loadAsUiState(errorMessage = "Couldn't reach JioSaavn. Check your connection and try again.") {
+            provider.searchArtists(searchQuery)
         }
     }
 
+    val currentState = state
     when {
-        isLoading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-        }
-        hasError -> EmptySearchState(
-            title = "Search failed",
-            message = "Couldn't reach JioSaavn. Check your connection and try again."
-        )
         searchQuery.isBlank() -> EmptySearchState(
             title = "Search for an artist",
             message = "Find any artist to browse their top songs."
         )
-        artists.isEmpty() -> EmptySearchState()
-        else -> LazyColumn(
+        currentState is UiState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
+        currentState is UiState.Error -> EmptySearchState(
+            title = "Search failed",
+            message = currentState.message
+        )
+        currentState is UiState.Success && currentState.data.isEmpty() -> EmptySearchState()
+        currentState is UiState.Success -> LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(artists) { artist ->
+            items(currentState.data) { artist ->
                 val gradientColors = MusicData.Gradients[(artist.id.hashCode().mod(MusicData.Gradients.size))]
 
                 Row(
@@ -473,50 +453,40 @@ fun ArtistsResults(searchQuery: String, onArtistClick: (ArtistResult) -> Unit) {
 @Composable
 fun PlaylistsResults(searchQuery: String, onPlaylistClick: (PlaylistResult) -> Unit) {
     val provider = remember { JioSaavnProvider() }
-    var playlists by remember { mutableStateOf<List<PlaylistResult>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
-    var hasError by remember { mutableStateOf(false) }
+    var state by remember { mutableStateOf<UiState<List<PlaylistResult>>>(UiState.Loading) }
 
     LaunchedEffect(searchQuery) {
         if (searchQuery.isBlank()) {
-            playlists = emptyList()
-            isLoading = false
-            hasError = false
+            state = UiState.Loading
             return@LaunchedEffect
         }
-        isLoading = true
-        hasError = false
+        state = UiState.Loading
         delay(350)
-        try {
-            playlists = provider.searchPlaylists(searchQuery)
-            hasError = false
-        } catch (e: Exception) {
-            playlists = emptyList()
-            hasError = true
-        } finally {
-            isLoading = false
+        state = loadAsUiState(errorMessage = "Couldn't reach JioSaavn. Check your connection and try again.") {
+            provider.searchPlaylists(searchQuery)
         }
     }
 
+    val currentState = state
     when {
-        isLoading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-        }
-        hasError -> EmptySearchState(
-            title = "Search failed",
-            message = "Couldn't reach JioSaavn. Check your connection and try again."
-        )
         searchQuery.isBlank() -> EmptySearchState(
             title = "Search for a playlist",
             message = "Find any playlist to browse its tracklist."
         )
-        playlists.isEmpty() -> EmptySearchState()
-        else -> LazyColumn(
+        currentState is UiState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
+        currentState is UiState.Error -> EmptySearchState(
+            title = "Search failed",
+            message = currentState.message
+        )
+        currentState is UiState.Success && currentState.data.isEmpty() -> EmptySearchState()
+        currentState is UiState.Success -> LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(playlists) { playlist ->
+            items(currentState.data) { playlist ->
                 val gradientColors = MusicData.Gradients[(playlist.id.hashCode().mod(MusicData.Gradients.size))]
 
                 Row(
