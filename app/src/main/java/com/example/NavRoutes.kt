@@ -10,6 +10,8 @@ object Routes {
     const val ALBUM_DETAIL = "album_detail"
     const val ARTIST_DETAIL = "artist_detail"
     const val PLAYLIST_DETAIL = "playlist_detail"
+    // TEMPORARY - see ProviderTestScreen's doc comment. Delete this route alongside it.
+    const val PROVIDER_TEST = "provider_test"
 
     const val SETTINGS_ACCOUNT = "settings/account"
     const val SETTINGS_ACCOUNT_EDIT = "settings/account/edit"

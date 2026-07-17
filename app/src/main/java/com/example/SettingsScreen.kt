@@ -128,6 +128,14 @@ fun SettingsScreen(
                 onClick = { navController.navigate(Routes.SETTINGS_ABOUT) },
                 tag = "action_about"
             )
+            // TEMPORARY - see ProviderTestScreen's doc comment. Remove this row alongside it.
+            SettingsActionRow(
+                icon = Icons.Default.BugReport,
+                title = "Provider Test (debug)",
+                subtitle = "Search JioSaavn / YouTube Music / NetEase in isolation",
+                onClick = { navController.navigate(Routes.PROVIDER_TEST) },
+                tag = "action_provider_test"
+            )
         }
     }
 

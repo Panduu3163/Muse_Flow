@@ -17,3 +17,4 @@ local.properties
 .env
 debug.keystore
 .claude/settings.local.json
+.scratch/

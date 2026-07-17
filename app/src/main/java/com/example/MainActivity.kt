@@ -575,6 +575,22 @@ private fun MainApp() {
                         }
                     }
                 }
+                // TEMPORARY - see ProviderTestScreen's doc comment. Remove this destination
+                // alongside it.
+                composable(
+                    Routes.PROVIDER_TEST,
+                    enterTransition = settingsEnter,
+                    exitTransition = settingsExit,
+                    popEnterTransition = settingsPopEnter,
+                    popExitTransition = settingsPopExit
+                ) {
+                    Box(Modifier.padding(innerPadding)) {
+                        ProviderTestScreen(
+                            onPlayTrack = onPlayQueuedTrack,
+                            onBack = { navController.popBackStack() }
+                        )
+                    }
+                }
                 composable(
                     Routes.NOW_PLAYING,
                     enterTransition = nowPlayingEnter,

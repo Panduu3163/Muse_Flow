@@ -4,7 +4,7 @@ package com.example
  * badge) and lets playback decide whether a result is directly playable (JioSaavn) or needs to
  * be resolved to a JioSaavn match first (YouTube Music, which this app never streams from
  * directly). */
-enum class MusicSource { JIOSAAVN, YOUTUBE_MUSIC }
+enum class MusicSource { JIOSAAVN, YOUTUBE_MUSIC, NETEASE }
 
 /** A single track found by a [Provider], from any source (YouTube Music, JioSaavn, ...). */
 data class TrackResult(

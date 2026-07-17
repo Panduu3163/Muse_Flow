@@ -2,6 +2,7 @@ package com.example
 
 import android.app.PendingIntent
 import android.content.Intent
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -157,10 +158,20 @@ class PlaybackService : MediaSessionService() {
 
     // Standard media-app pattern: if the user swipes the app away while nothing is actively
     // playing, there's no reason to keep the foreground service (and its notification) alive.
-    // If something IS playing, leave it running - that's the whole point of background playback.
+    // If something IS playing, leave it running - that's the whole point of background playback -
+    // but ONLY if we can actually show the MediaStyle notification that's the user's one
+    // remaining way to see/stop/control it once the app's UI is gone. If POST_NOTIFICATIONS was
+    // never granted (or got revoked - some OEMs, e.g. Nothing OS, are also known to suppress
+    // notifications more aggressively than stock Android), Media3's automatic notification
+    // silently fails to post while the foreground service happily keeps playing regardless -
+    // audio running with literally no way to stop it short of force-closing the app. Stopping
+    // playback outright in that case is strictly better than leaving it invisible.
     override fun onTaskRemoved(rootIntent: Intent?) {
         val player = mediaSession?.player ?: return
-        if (!player.playWhenReady || player.mediaItemCount == 0) {
+        val isActivelyPlaying = player.playWhenReady && player.mediaItemCount > 0
+        val canShowNotification = NotificationManagerCompat.from(this).areNotificationsEnabled()
+        if (!isActivelyPlaying || !canShowNotification) {
+            player.stop()
             stopSelf()
         }
     }
