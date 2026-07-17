@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -113,12 +112,39 @@ class DownloadRepository private constructor(context: Context) {
         dao.deleteByKey(key)
     }
 
-    private fun resolveStreamUrl(track: Track): String? {
-        // Blocking call is fine here - already running on repositoryScope's IO dispatcher.
-        return runBlocking {
-            JioSaavnProvider().search("${track.title} ${track.artist}")
-                .firstOrNull { it.directStreamUrl != null }?.directStreamUrl
+    /** The single download-resolution path, used by every caller of [startDownload] regardless of
+     * which screen triggered it (Search, an Album/Playlist/Artist tracklist, Now Playing, or a
+     * re-download from the Downloads list) - mirrors the exact priority `Track.toQueueMediaItem`
+     * (in PlayerViewModel.kt) already uses to resolve the very same track for *playback*, so a
+     * download never resolves a different recording than what the user actually sees/hears:
+     *
+     * 1. A known [Track.sourceId] on a [MusicSource.YOUTUBE_MUSIC] track resolves directly via
+     *    [YouTubeStreamResolver] - the exact video the track identifies, not a guess.
+     * 2. Otherwise (a mock-catalog track with no known source - the only remaining case, since
+     *    [Track.streamUrl] is already checked by the caller before this is ever called), fall back
+     *    to a fuzzy title+artist text search - JioSaavn first, then YouTube Music if JioSaavn
+     *    comes back empty or throws, same resilience pattern Search/Home use.
+     *
+     * A YouTube-resolved URL is short-lived (see [YouTubeStreamResolver] - it 403s within
+     * minutes), but that's fine here: it's read once, immediately, straight into a local file by
+     * [downloadToFile] below, never stored or reused.
+     */
+    private suspend fun resolveStreamUrl(track: Track): String? {
+        val sourceId = track.sourceId
+        if (track.sourceType == MusicSource.YOUTUBE_MUSIC && sourceId != null) {
+            return runCatching { YouTubeStreamResolver.resolve(appContext, sourceId) }.getOrNull()
         }
+
+        val query = "${track.title} ${track.artist}"
+        val jioStreamUrl = runCatching {
+            JioSaavnProvider().search(query).firstOrNull { it.directStreamUrl != null }?.directStreamUrl
+        }.getOrNull()
+        if (jioStreamUrl != null) return jioStreamUrl
+
+        return runCatching {
+            val match = YouTubeMusicProvider(appContext).search(query).firstOrNull()
+            match?.let { YouTubeStreamResolver.resolve(appContext, it.id) }
+        }.getOrNull()
     }
 
     private fun downloadToFile(url: String, targetFile: File, onProgress: (Int) -> Unit) {
