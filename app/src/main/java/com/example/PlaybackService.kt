@@ -9,7 +9,12 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.google.common.util.concurrent.ListenableFuture
@@ -19,6 +24,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import java.io.IOException
 
 /**
  * Keeps ExoPlayer + a [MediaSession] alive as a foreground service so playback survives the app
@@ -51,6 +58,7 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
 
         val player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(buildResolvingDataSourceFactory()))
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -93,6 +101,37 @@ class PlaybackService : MediaSessionService() {
             .setCallback(PlaybackServiceCallback())
             .setSessionActivity(openAppIntent)
             .build()
+    }
+
+    /**
+     * A [DataSource.Factory] that intercepts every HTTP (re)open for a
+     * [youTubeResolvePlaceholderUri] placeholder and swaps in a freshly-resolved real stream URL
+     * via [YouTubeStreamResolver] - genuinely fresh every single time, never cached across calls.
+     * This is deliberately NOT done in [PlaybackServiceCallback.onAddMediaItems]/[resolveMediaItem]
+     * (Media3's "resolve once when items are added to the queue" hook): that would resolve every
+     * track in a whole queue up front, at add time - stale within minutes for the ones the user
+     * hasn't reached yet by the time they do (skip-to-next/previous, or just leaving a track
+     * paused for a while). [ResolvingDataSource] instead resolves at actual HTTP-open time, which
+     * happens exactly when a track is about to play (or resume after being idle long enough for
+     * the OS/CDN to drop the connection) - covering every case the freshness requirement names.
+     *
+     * Non-YouTube URLs (JioSaavn/NetEase search results, already fully resolved; local
+     * downloaded files, handled separately by [DefaultDataSource]'s own file:// dispatch) pass
+     * through completely unchanged.
+     */
+    private fun buildResolvingDataSourceFactory(): DataSource.Factory {
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+        val resolvingHttpFactory = ResolvingDataSource.Factory(httpDataSourceFactory) { dataSpec ->
+            val videoId = youTubeVideoIdFromResolvePlaceholder(dataSpec.uri)
+                ?: return@Factory dataSpec
+            // Blocks this load's IO thread (not the playback/main thread) for the cold-start
+            // BotGuard+cipher round trip - the same runBlocking-at-an-IO-boundary pattern
+            // DownloadRepository already uses elsewhere in this app.
+            val resolvedUrl = runBlocking { YouTubeStreamResolver.resolve(this@PlaybackService, videoId) }
+                ?: throw IOException("Could not resolve a playable stream for YouTube video $videoId")
+            dataSpec.withUri(resolvedUrl.toUri())
+        }
+        return DefaultDataSource.Factory(this, resolvingHttpFactory)
     }
 
     private inner class PlaybackServiceCallback : MediaSession.Callback {

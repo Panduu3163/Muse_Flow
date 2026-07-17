@@ -1,6 +1,6 @@
 package com.example
 
-import com.squareup.moshi.Moshi
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -16,18 +16,21 @@ import java.util.concurrent.TimeUnit
  * the official web/mobile clients use, reverse-engineered by the open-source community (see
  * Metrolist: https://github.com/MetrolistGroup/Metrolist). There is no public API for this.
  *
- * Two different pretend "clients" are used deliberately:
- *  - WEB_REMIX for search: matches music.youtube.com's own client, gets clean song results.
- *  - ANDROID_VR for stream resolution: this client type returns direct, un-ciphered stream
- *    URLs. Most other clients (including WEB_REMIX) require deciphering a `signatureCipher`/`n`
- *    parameter against YouTube's ever-changing player.js, which in turn requires a JS engine
- *    (WebView) and often a BotGuard-based "poToken" - a whole subsystem on its own. ANDROID_VR
- *    sidesteps all of that at the cost of not working for some restricted/private content.
+ * Search uses the WEB_REMIX pretend "client" (matches music.youtube.com's own client, gets clean
+ * song results). Stream resolution ([getStreamUrl]) also uses WEB_REMIX now, via
+ * [YouTubeStreamResolver] - the fully authenticated (real `visitorData` + BotGuard PoToken +
+ * signature/n-parameter deciphering) pipeline validated in isolation and now wired in for real.
+ * WEB_REMIX requires all of that specifically because it's the client whose formats carry a
+ * `signatureCipher` instead of a direct URL - unlike ANDROID_VR/IOS (this provider's previous
+ * approach), which sidestepped needing a cipher/PoToken at all but is more prone to being blocked
+ * and returns lower/inconsistent quality.
  *
  * This is a from-scratch reimplementation, not copied code, informed by reading Metrolist's
  * (AGPL-3.0) `innertube` module for the request/response shapes and client behavior.
  */
-class YouTubeMusicProvider : Provider<TrackResult> {
+class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
+
+    private val appContext = context.applicationContext
 
     override val name = "YouTube Music"
 
@@ -37,14 +40,12 @@ class YouTubeMusicProvider : Provider<TrackResult> {
         .writeTimeout(20, TimeUnit.SECONDS)
         .build()
 
-    private val moshi = Moshi.Builder().build()
-    private val playerResponseAdapter = moshi.adapter(YtPlayerResponse::class.java)
-
     private object Client {
         const val ORIGIN = "https://music.youtube.com"
         const val API_BASE = "$ORIGIN/youtubei/v1/"
 
-        // WEB_REMIX: music.youtube.com's own web client. Used for search only.
+        // WEB_REMIX: music.youtube.com's own web client. Used for both search and stream
+        // resolution.
         const val WEB_REMIX_NAME = "WEB_REMIX"
         const val WEB_REMIX_VERSION = "1.20260114.03.00"
         const val WEB_REMIX_CLIENT_ID = "67"
@@ -53,21 +54,6 @@ class YouTubeMusicProvider : Provider<TrackResult> {
 
         // "Song" search filter chip (opaque protobuf token YouTube Music uses internally).
         const val SEARCH_FILTER_SONG = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D"
-
-        // ANDROID_VR 1.43.32: returns direct un-ciphered stream URLs, no PoToken required.
-        // Version pinned deliberately - Metrolist's own notes say this exact build avoids
-        // adaptive-bitrate audio stuttering.
-        const val ANDROID_VR_NAME = "ANDROID_VR"
-        const val ANDROID_VR_VERSION = "1.43.32"
-        const val ANDROID_VR_CLIENT_ID = "28"
-        const val ANDROID_VR_USER_AGENT =
-            "com.google.android.apps.youtube.vr.oculus/1.43.32 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/107.0.5284.2)"
-
-        // IOS: fallback client, also useSignatureTimestamp=false / loginSupported=false.
-        const val IOS_NAME = "IOS"
-        const val IOS_VERSION = "21.03.1"
-        const val IOS_CLIENT_ID = "5"
-        const val IOS_USER_AGENT = "com.google.ios.youtube/21.03.1 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X;)"
     }
 
     class YouTubeMusicException(message: String) : Exception(message)
@@ -100,130 +86,15 @@ class YouTubeMusicProvider : Provider<TrackResult> {
         }
     }
 
-    /** A "pretend" YouTube client config, just enough to request un-ciphered stream URLs. */
-    private data class PlayerClient(
-        val name: String,
-        val version: String,
-        val clientId: String,
-        val userAgent: String,
-        val includeUserAgentInContext: Boolean = false,
-        val osName: String? = null,
-        val osVersion: String? = null,
-        val deviceMake: String? = null,
-        val deviceModel: String? = null,
-        val androidSdkVersion: String? = null,
-    )
-
-    // Tried in order. Both avoid signature deciphering/PoToken, but YouTube's bot-check
-    // enforcement varies by client, IP, and over time - what works can change day to day,
-    // hence trying more than one before giving up.
-    private val playerClients = listOf(
-        PlayerClient(
-            name = Client.ANDROID_VR_NAME,
-            version = Client.ANDROID_VR_VERSION,
-            clientId = Client.ANDROID_VR_CLIENT_ID,
-            userAgent = Client.ANDROID_VR_USER_AGENT,
-            includeUserAgentInContext = true,
-            osName = "Android",
-            osVersion = "12",
-            deviceMake = "Oculus",
-            deviceModel = "Quest 3",
-            androidSdkVersion = "32",
-        ),
-        PlayerClient(
-            name = Client.IOS_NAME,
-            version = Client.IOS_VERSION,
-            clientId = Client.IOS_CLIENT_ID,
-            userAgent = Client.IOS_USER_AGENT,
-        ),
-    )
-
     /**
-     * Resolves [item] to a direct, playable audio stream by trying each client in
-     * [playerClients] in turn. Throws with the last failure's detail if every client fails.
-     *
-     * The returned [StreamResolution.userAgent] MUST be used when actually fetching the stream
-     * URL - YouTube's CDN ties the URL to the User-Agent that requested it and rejects a
-     * mismatched one.
+     * Resolves [item] to a directly-playable stream URL via the real, authenticated WEB_REMIX
+     * pipeline - see [YouTubeStreamResolver] for the full visitorData/PoToken/cipher/n-transform
+     * chain. **Never cache this result** - confirmed by testing, a resolved URL 403s within
+     * minutes (the PoToken-bound freshness window). Callers must call this fresh immediately
+     * before every actual playback attempt, never reuse an earlier resolution.
      */
-    override suspend fun getStreamUrl(item: TrackResult): StreamResolution? = withContext(Dispatchers.IO) {
-        var lastError: String? = null
-        for (client in playerClients) {
-            try {
-                val url = resolveStreamUrl(item.id, client) ?: continue
-                return@withContext StreamResolution(url = url, userAgent = client.userAgent)
-            } catch (e: YouTubeMusicException) {
-                lastError = "[${client.name}] ${e.message}"
-            }
-        }
-        throw YouTubeMusicException(lastError ?: "No player client succeeded")
-    }
-
-    private fun resolveStreamUrl(videoId: String, client: PlayerClient): String? {
-        val requestBody = JSONObject().apply {
-            put("context", buildContext(client))
-            put("videoId", videoId)
-            put("playlistId", JSONObject.NULL)
-            put("contentCheckOk", true)
-            put("racyCheckOk", true)
-        }
-
-        val responseJson = postJson(
-            path = "player",
-            body = requestBody,
-            clientId = client.clientId,
-            clientVersion = client.version,
-            userAgent = client.userAgent
-        )
-
-        val playerResponse = playerResponseAdapter.fromJson(responseJson.toString())
-            ?: throw YouTubeMusicException("Could not parse player response")
-
-        val status = playerResponse.playabilityStatus?.status
-        if (status != "OK") {
-            throw YouTubeMusicException(
-                "Video not playable (status=$status): ${playerResponse.playabilityStatus?.reason ?: "unknown reason"}"
-            )
-        }
-
-        val audioFormats = playerResponse.streamingData?.adaptiveFormats
-            ?.filter { it.isAudioOnly && it.url != null }
-            .orEmpty()
-
-        if (audioFormats.isEmpty()) {
-            throw YouTubeMusicException(
-                "No direct audio URL available for this video (it may require signature deciphering, which this provider doesn't implement)"
-            )
-        }
-
-        // Highest bitrate audio-only stream.
-        return audioFormats.maxByOrNull { it.bitrate ?: 0 }?.url
-    }
-
-    private fun buildContext(client: PlayerClient): JSONObject {
-        val clientJson = JSONObject().apply {
-            put("clientName", client.name)
-            put("clientVersion", client.version)
-            put("gl", "US")
-            put("hl", "en")
-            if (client.includeUserAgentInContext) put("userAgent", client.userAgent)
-            client.osName?.let { put("osName", it) }
-            client.osVersion?.let { put("osVersion", it) }
-            client.deviceMake?.let { put("deviceMake", it) }
-            client.deviceModel?.let { put("deviceModel", it) }
-            client.androidSdkVersion?.let { put("androidSdkVersion", it) }
-        }
-        return JSONObject().apply {
-            put("client", clientJson)
-            put("request", JSONObject().apply {
-                put("internalExperimentFlags", JSONArray())
-                put("useSsl", true)
-            })
-            put("user", JSONObject().apply {
-                put("lockedSafetyMode", false)
-            })
-        }
-    }
+    override suspend fun getStreamUrl(item: TrackResult): StreamResolution? =
+        YouTubeStreamResolver.resolve(appContext, item.id)?.let { StreamResolution(url = it) }
 
     private fun buildContext(clientName: String, clientVersion: String): JSONObject {
         val clientJson = JSONObject().apply {

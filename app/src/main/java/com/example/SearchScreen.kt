@@ -1,6 +1,5 @@
 package com.example
 
-import android.widget.Toast
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -27,7 +26,6 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 @Composable
 fun SearchScreen(
@@ -147,17 +145,12 @@ fun SongsResults(
     searchQuery: String,
     onPlayTrack: (Track, List<Track>) -> Unit
 ) {
+    val context = LocalContext.current
     val jioSaavnProvider = remember { JioSaavnProvider() }
-    val youTubeProvider = remember { YouTubeMusicProvider() }
+    val youTubeProvider = remember { YouTubeMusicProvider(context) }
     var results by remember { mutableStateOf<List<Track>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var hasError by remember { mutableStateOf(false) }
-    // downloadKey() of the row currently being resolved to a JioSaavn match before it can play -
-    // only ever one at a time, since resolution happens synchronously with the tap.
-    var resolvingKey by remember { mutableStateOf<String?>(null) }
-
-    val coroutineScope = rememberCoroutineScope()
-    val context = LocalContext.current
 
     LaunchedEffect(searchQuery) {
         if (searchQuery.isBlank()) {
@@ -229,41 +222,17 @@ fun SongsResults(
         ) {
             items(results) { track ->
                 val gradientColors = MusicData.Gradients[track.gradientIndex % MusicData.Gradients.size]
-                val key = track.downloadKey()
-                val isResolving = resolvingKey == key
                 val isFromYouTube = track.sourceType == MusicSource.YOUTUBE_MUSIC
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable(enabled = resolvingKey == null) {
-                            if (isFromYouTube) {
-                                // YouTube Music is search-only in this app - resolve to a
-                                // playable JioSaavn match before attempting to play, and tell the
-                                // user explicitly if nothing close enough is found rather than
-                                // silently doing nothing.
-                                resolvingKey = key
-                                coroutineScope.launch {
-                                    val match = runCatching {
-                                        jioSaavnProvider.findPlayableMatch(track.title, track.artist)
-                                    }.getOrNull()
-                                    resolvingKey = null
-                                    if (match != null) {
-                                        val playableTrack = match.toPlayableTrack(gradientIndex = track.gradientIndex)
-                                        onPlayTrack(playableTrack, listOf(playableTrack))
-                                    } else {
-                                        Toast.makeText(
-                                            context,
-                                            "This track isn't available to play right now",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
-                                }
-                            } else {
-                                onPlayTrack(track, results)
-                            }
-                        }
+                        // YouTube tracks play directly now, same as JioSaavn - PlaybackService
+                        // resolves a fresh, real stream URL right before actual playback (see
+                        // YouTubeStreamResolver), so no upfront resolve/substitute step is needed
+                        // here anymore.
+                        .clickable { onPlayTrack(track, results) }
                         .padding(8.dp)
                         .testTag("search_song_row_${track.title.lowercase().replace(" ", "_")}"),
                     verticalAlignment = Alignment.CenterVertically
@@ -308,19 +277,11 @@ fun SongsResults(
                             }
                         }
                     }
-                    if (isResolving) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    } else {
-                        Text(
-                            text = track.duration,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = track.duration,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     if (!isFromYouTube) {
                         DownloadButton(track = track, modifier = Modifier.testTag("search_download_button_${track.title.lowercase().replace(" ", "_")}"))
                     }
