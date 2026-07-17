@@ -64,6 +64,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     private val playbackHistoryRepository = PlaybackHistoryRepository.getInstance(application)
 
+    // Used only for the "fall back to another provider" step below - a YouTube-sourced track
+    // that still fails after one fresh-resolve retry gets substituted with a matching JioSaavn
+    // track instead. Not the same instance DownloadRepository/TrackStreamResolver use; this one
+    // is scoped to (and lives as long as) this ViewModel, matching its own lifecycle.
+    private val fallbackSearchProvider = JioSaavnProvider()
+
+    // downloadKey() of the YouTube-sourced track most recently retried after a failure - so the
+    // NEXT failure for that same track falls back to another provider instead of retrying
+    // forever. Cleared once something starts playing successfully.
+    private var lastYouTubeRetryKey: String? = null
+
     init {
         viewModelScope.launch {
             downloadRepository.completedDownloads.collect { entities ->
@@ -179,6 +190,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             // failed to resolve/stream (see onPlayerError) never shows up in "Recently Played".
             if (isPlaying) {
                 _uiState.value.track?.let { playbackHistoryRepository.recordPlayed(it) }
+                lastYouTubeRetryKey = null
             }
         }
 
@@ -189,7 +201,44 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            val failedTrack = _uiState.value.track
+            if (failedTrack?.sourceType == MusicSource.YOUTUBE_MUSIC) {
+                val key = failedTrack.downloadKey()
+                if (lastYouTubeRetryKey != key) {
+                    // First failure for this specific track: retry once, guaranteed fresh -
+                    // playTrack() rebuilds the queue's MediaItems from scratch, and
+                    // PlaybackService's resolving data source never caches a YouTube resolution
+                    // across calls, so this is never a repeat of the same stale URL. Handles the
+                    // confirmed-by-testing case (a resolved URL 403ing within minutes) without
+                    // depending on ExoPlayer's own default retry policy actually retrying a 403.
+                    lastYouTubeRetryKey = key
+                    playTrack(failedTrack, activeQueue)
+                    return
+                }
+                // Already retried once for this exact track and it failed again - fall back to
+                // a different provider instead of retrying forever.
+                lastYouTubeRetryKey = null
+                _uiState.update { it.copy(errorMessage = error.toUserMessage()) }
+                attemptFallbackForFailedYouTubeTrack(failedTrack)
+                return
+            }
             _uiState.update { it.copy(errorMessage = error.toUserMessage()) }
+        }
+    }
+
+    /** Called only after a YouTube-sourced track has already failed once AND been retried fresh
+     * once more (see [PlayerEventListener.onPlayerError]) - searches JioSaavn for a matching
+     * track and, if found, plays that instead. Leaves the existing error message in place (set
+     * by the caller) if no match is found, rather than failing silently. */
+    private fun attemptFallbackForFailedYouTubeTrack(failedTrack: Track) {
+        viewModelScope.launch {
+            val match = runCatching {
+                fallbackSearchProvider.findPlayableMatch(failedTrack.title, failedTrack.artist)
+            }.getOrNull()
+            if (match != null) {
+                val fallbackTrack = match.toPlayableTrack(gradientIndex = failedTrack.gradientIndex)
+                playTrack(fallbackTrack, listOf(fallbackTrack))
+            }
         }
     }
 
@@ -202,12 +251,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
 /**
  * Builds this queue entry's [MediaItem]. Priority is: a downloaded local file ([localFilePath],
- * so playback works fully offline) - then a known [Track.streamUrl] (real search results),
- * resolved fully up front - and only otherwise (the mock catalog, never downloaded) a URI-less
- * placeholder, which Media3 routes to [PlaybackService]'s `onAddMediaItems` for lazy resolution.
- * [Track.imageUrl], when present, is set as artwork either way - both the Now Playing screen's
- * controller-driven state and the system media notification read it from the same
- * [MediaMetadata].
+ * so playback works fully offline) - then a YouTube-sourced track ([Track.sourceId], never a
+ * known [Track.streamUrl] since one is never pre-resolved for these - given a `museflow.invalid`
+ * placeholder URI that [PlaybackService]'s resolving data source re-resolves fresh on every
+ * single HTTP (re)open (never once at add-time; see that class's doc comment for why) - then a
+ * known [Track.streamUrl] (JioSaavn/NetEase search results), resolved fully up front - and only
+ * otherwise (the mock catalog, never downloaded) a URI-less placeholder, which Media3 routes to
+ * [PlaybackService]'s `onAddMediaItems` for lazy resolution. [Track.imageUrl], when present, is
+ * set as artwork either way - both the Now Playing screen's controller-driven state and the
+ * system media notification read it from the same [MediaMetadata].
  */
 private fun Track.toQueueMediaItem(index: Int, localFilePath: String?): MediaItem {
     val metadataBuilder = MediaMetadata.Builder()
@@ -222,6 +274,8 @@ private fun Track.toQueueMediaItem(index: Int, localFilePath: String?): MediaIte
         .setMediaMetadata(metadataBuilder.build())
     when {
         localFilePath != null -> itemBuilder.setUri(Uri.fromFile(File(localFilePath)))
+        sourceType == MusicSource.YOUTUBE_MUSIC && sourceId != null ->
+            itemBuilder.setUri(youTubeResolvePlaceholderUri(sourceId))
         streamUrl != null -> itemBuilder.setUri(streamUrl)
     }
     return itemBuilder.build()

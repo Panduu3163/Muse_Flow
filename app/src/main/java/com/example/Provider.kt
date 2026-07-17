@@ -84,5 +84,6 @@ fun TrackResult.toPlayableTrack(gradientIndex: Int): Track = Track(
     gradientIndex = gradientIndex,
     imageUrl = imageUrl,
     streamUrl = directStreamUrl,
-    sourceType = sourceType
+    sourceType = sourceType,
+    sourceId = id
 )

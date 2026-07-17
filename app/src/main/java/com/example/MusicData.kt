@@ -17,10 +17,15 @@ data class Track(
     val streamUrl: String? = null,
     /** Which backend this track was found on, when known (search results). Null for the mock
      * catalog, downloads, liked songs, and playback history, which don't need this distinction -
-     * they're always either already playable or resolved by title/artist already. A
-     * [MusicSource.YOUTUBE_MUSIC] track has no direct stream and must be resolved to a JioSaavn
-     * match before it can play; see [SearchScreen]'s song tap handler. */
-    val sourceType: MusicSource? = null
+     * they're always either already playable directly. A [MusicSource.YOUTUBE_MUSIC] track has
+     * no [streamUrl] of its own - it's resolved fresh, right before every actual playback attempt,
+     * from [sourceId] (its YouTube video id); see [PlaybackService]'s `museflow.invalid` resolving
+     * data source and [YouTubeStreamResolver]. */
+    val sourceType: MusicSource? = null,
+    /** The provider's native id for this track (currently only meaningful for
+     * [MusicSource.YOUTUBE_MUSIC], where it's the YouTube video id) - null for sources whose
+     * [streamUrl] is already resolved and don't need a later re-resolve. */
+    val sourceId: String? = null
 )
 
 /** Stable identity for a track across sources (mock catalog, search results, or reconstructed
