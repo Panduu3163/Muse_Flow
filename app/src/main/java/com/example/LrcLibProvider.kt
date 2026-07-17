@@ -10,8 +10,15 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** A single synced lyric line, in playback order, ready to be time-matched against position. */
-data class LyricLine(val timeMs: Long, val text: String)
+/** A single word/syllable-level timed unit within a line, when the source provides that
+ * granularity (e.g. Kugou's KRC format, via [BetterLyricsProvider]) - lets the UI highlight a
+ * line word-by-word as it's sung, instead of only ever highlighting a whole line at once. */
+data class LyricWord(val startMs: Long, val endMs: Long, val text: String)
+
+/** A single synced lyric line, in playback order, ready to be time-matched against position.
+ * [words], when present, lets [NowPlayingScreen]'s lyrics view highlight word-by-word instead of
+ * just line-by-line - null for sources with only line-level timing (e.g. LRCLib's LRC format). */
+data class LyricLine(val timeMs: Long, val text: String, val words: List<LyricWord>? = null)
 
 sealed interface LyricsResult {
     data class Synced(val lines: List<LyricLine>) : LyricsResult
