@@ -111,7 +111,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 jioDeferred.await() to ytDeferred.await()
             }
-            val merged = mergeSearchResults(jioResults, ytResults)
+            val merged = mergeSearchResults(query, jioResults, ytResults)
                 .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
             songsResultState.value = if (jioFailed && ytFailed) {
                 UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")

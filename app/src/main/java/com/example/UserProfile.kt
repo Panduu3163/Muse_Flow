@@ -145,7 +145,7 @@ fun UserAvatar(
                 .size(size)
                 .clip(CircleShape)
                 .background(
-                    Brush.linearGradient(colors = listOf(Color(0xFF381E72), Color(0xFF4F378B)))
+                    Brush.linearGradient(colors = listOf(MaterialTheme.colorScheme.tertiary, MaterialTheme.colorScheme.secondary))
                 ),
             contentAlignment = Alignment.Center
         ) {

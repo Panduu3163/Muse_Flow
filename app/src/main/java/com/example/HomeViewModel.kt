@@ -174,7 +174,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                val merged = mergeSearchResults(jioResults, ytResults)
+                val merged = mergeSearchResults(shelf.query, jioResults, ytResults)
                     .take(10)
                     .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
                 _moodShelves.update { it + (shelf.title to UiState.Success(merged)) }

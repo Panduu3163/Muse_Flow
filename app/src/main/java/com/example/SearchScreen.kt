@@ -124,7 +124,7 @@ fun SearchScreen(
                     },
                     placeholder = {
                         Text(
-                            text = if (searchMode == SearchMode.ONLINE) "Search online..." else "Search local files...",
+                            text = if (searchMode == SearchMode.ONLINE) "Search songs, artists, or a lyric..." else "Search local files...",
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
                         )
                     },

@@ -26,17 +26,21 @@ It also relies on unofficial/reverse-engineered access to some music platforms' 
 ## ✨ Features
 
 ### 🎧 Playback
-- Background playback with a real, controllable media notification (play/pause, cover art)
-- Offline downloads with real download progress notifications, for on-the-go listening
+- Background playback with a real, controllable media notification (play/pause, cover art), backed by a foreground service so it survives the screen turning off — and stops cleanly when the app is swiped away from Recents, so nothing keeps playing invisibly
+- Real shuffle/repeat (wired to ExoPlayer, not cosmetic toggles), a live queue view, and swipe-left/right on the album art to skip tracks (opt-in, off by default)
+- Sleep timer with a live countdown shown next to the icon
+- Dynamic codec/bitrate display that reflects whatever's actually decoding, not a static label
+- A mini-player with previous/next/close, always in sync with what's really playing even after the app's been fully closed and reopened
+- Offline downloads with real download progress notifications, running in a foreground service so a download in progress survives the screen turning off
 - Local device file playback alongside streaming — toggle search between Online and On-Device
 - Automatic fallback across sources if one is down or has no results
 
 ### 🔍 Discovery
-- Search across **Songs, Albums, Artists, and Playlists**
-- Results merged and deduplicated across multiple sources automatically
-- Recent search history
+- Search across **Songs, Albums, Artists, and Playlists**, with state that survives navigating away and back (no lost query/results/scroll position)
+- Find a song from a remembered lyric line, not just its title — YouTube Music's own search backend (the same one its official app uses) handles the matching; results are ranked for relevance instead of one source's results always burying the other's
+- Recent search history (capped, shown only while the search field is focused)
 - Real artist pages, including monthly listener counts
-- Real Home feed shelves (Recently Played, mood/genre-based shelves) — cached for offline viewing, auto-refreshes when you're back online
+- Real Home feed shelves (Recently Played, mood/genre-based shelves) — cached for offline viewing, auto-refreshes when you're back online, with a dynamic time-of-day greeting on the Home header
 
 ### 🎤 Lyrics
 - Real-time synced lyrics, scrolling in time with playback
@@ -49,8 +53,10 @@ It also relies on unofficial/reverse-engineered access to some music platforms' 
 - Deep Appearance/Player/Lyrics customization options
 
 ### 📚 Library
-- Liked Songs, Downloaded tracks, Recently Played — all backed by real local data, nothing hardcoded
-- Create and manage your own playlists
+- Quick-access tiles for Liked Songs, Downloaded tracks, Cached (Home's offline cache), My Top 50 (real play-count tracking, not just recency), and on-device Local files — all backed by real local data, nothing hardcoded
+- Like/unlike any track from anywhere it's listed, and download every Liked Song in one tap
+- Create playlists and actually add songs to them — from Search, Downloads, or Liked Songs — or save a whole online playlist into your library with one tap
+- Playlist covers are a real image when available, or an auto-generated 2×2 collage built from the playlist's own tracks otherwise
 
 ---
 
@@ -108,9 +114,9 @@ This is currently a personal build, not published to any app store. To build it 
 
 ## 🚧 Roadmap
 
-- [ ] Deeper Now Playing and Library UI polish
+- [ ] A cohesive app-wide color theme overhaul (in progress — current UI mixes hardcoded per-screen colors with the shared Material theme, so a full recolor needs those consolidated first)
 - [ ] Smooth animations and transitions throughout the app
-- [ ] Playlist covers (auto-generated collages), playlist import from online sources
+- [ ] Album/Artist browsing inside Library itself (currently search-only)
 - [ ] Additional music source integrations
 - [ ] Listen Together (real-time synced listening sessions)
 - [ ] Higher audio quality tier for YouTube-sourced tracks
