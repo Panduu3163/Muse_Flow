@@ -298,7 +298,7 @@ fun NowPlayingScreen(
                             modifier = Modifier
                                 .align(Alignment.BottomEnd)
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0xFF4F378B))
+                                .background(MaterialTheme.colorScheme.secondary)
                                 .clickable { showLyrics = false }
                                 .padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
@@ -377,9 +377,9 @@ fun NowPlayingScreen(
                     value = progress,
                     onValueChange = onProgressChange,
                     colors = SliderDefaults.colors(
-                        activeTrackColor = Color(0xFFD0BCFF),
+                        activeTrackColor = MaterialTheme.colorScheme.primary,
                         inactiveTrackColor = Color(0xFFE6E1E5).copy(alpha = 0.2f),
-                        thumbColor = Color(0xFFD0BCFF)
+                        thumbColor = MaterialTheme.colorScheme.primary
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -444,7 +444,7 @@ fun NowPlayingScreen(
                     modifier = Modifier
                         .size(72.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFFD0BCFF))
+                        .background(MaterialTheme.colorScheme.primary)
                         .clickable { onPlayPauseToggle() }
                         .testTag("now_playing_play_pause"),
                     contentAlignment = Alignment.Center
@@ -508,7 +508,7 @@ fun NowPlayingScreen(
                     Icon(
                         imageVector = if (sleepTimerEndAtMs != null) Icons.Default.Bedtime else Icons.Default.BedtimeOff,
                         contentDescription = "Sleep Timer",
-                        tint = if (sleepTimerEndAtMs != null) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.8f),
+                        tint = if (sleepTimerEndAtMs != null) MaterialTheme.colorScheme.primary else Color(0xFFE6E1E5).copy(alpha = 0.8f),
                         modifier = Modifier.size(22.dp)
                     )
                     if (sleepTimerEndAtMs != null) {
@@ -524,7 +524,7 @@ fun NowPlayingScreen(
                         Text(
                             text = "%d:%02d".format(totalSeconds / 60, totalSeconds % 60),
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFD0BCFF),
+                            color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.testTag("now_playing_sleep_timer_remaining")
                         )
                     }
@@ -538,7 +538,7 @@ fun NowPlayingScreen(
                     Icon(
                         imageVector = Icons.Default.Mic,
                         contentDescription = "Lyrics",
-                        tint = if (showLyrics) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.8f),
+                        tint = if (showLyrics) MaterialTheme.colorScheme.primary else Color(0xFFE6E1E5).copy(alpha = 0.8f),
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -551,7 +551,7 @@ fun NowPlayingScreen(
                     Icon(
                         imageVector = Icons.Default.Shuffle,
                         contentDescription = "Shuffle",
-                        tint = if (isShuffleEnabled) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.6f),
+                        tint = if (isShuffleEnabled) MaterialTheme.colorScheme.primary else Color(0xFFE6E1E5).copy(alpha = 0.6f),
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -564,7 +564,7 @@ fun NowPlayingScreen(
                     Icon(
                         imageVector = if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
                         contentDescription = "Repeat",
-                        tint = if (repeatMode != androidx.media3.common.Player.REPEAT_MODE_OFF) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.6f),
+                        tint = if (repeatMode != androidx.media3.common.Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else Color(0xFFE6E1E5).copy(alpha = 0.6f),
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -630,7 +630,7 @@ private fun SleepTimerDialog(
         confirmButton = {
             if (activeEndAtMs != null) {
                 TextButton(onClick = onCancelTimer) {
-                    Text("Turn Off", color = Color(0xFFD0BCFF), fontWeight = FontWeight.Bold)
+                    Text("Turn Off", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                 }
             }
         },
@@ -671,7 +671,7 @@ private fun QueueDialog(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = queuedTrack.title,
-                                    color = if (isCurrent) Color(0xFFD0BCFF) else Color(0xFFE6E1E5),
+                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else Color(0xFFE6E1E5),
                                     fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -691,7 +691,7 @@ private fun QueueDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Close", color = Color(0xFFD0BCFF), fontWeight = FontWeight.Bold)
+                Text("Close", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
             }
         }
     )
@@ -746,7 +746,7 @@ private fun LyricsHeader() {
     Text(
         text = "Lyrics",
         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-        color = Color(0xFFD0BCFF),
+        color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(bottom = 12.dp)
     )
 }
@@ -781,7 +781,7 @@ private fun SyncedLyricsList(lines: List<LyricLine>, positionMs: Long, modifier:
                         fontWeight = if (isCurrent) FontWeight.ExtraBold else FontWeight.Medium,
                         lineHeight = 26.sp
                     ),
-                    color = if (isCurrent) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.6f),
+                    color = if (isCurrent) MaterialTheme.colorScheme.primary else Color(0xFFE6E1E5).copy(alpha = 0.6f),
                     modifier = Modifier.padding(vertical = 4.dp)
                 )
             }
@@ -795,13 +795,14 @@ private fun SyncedLyricsList(lines: List<LyricLine>, positionMs: Long, modifier:
  * once the way [SyncedLyricsList]'s plain per-line style does for lines without this data. */
 @Composable
 private fun WordSyncedLyricLine(words: List<LyricWord>, positionMs: Long, modifier: Modifier = Modifier) {
-    val annotated = remember(words, positionMs) {
+    val sungColor = MaterialTheme.colorScheme.primary
+    val annotated = remember(words, positionMs, sungColor) {
         buildAnnotatedString {
             for (word in words) {
                 val sung = positionMs >= word.startMs
                 withStyle(
                     SpanStyle(
-                        color = if (sung) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.45f),
+                        color = if (sung) sungColor else Color(0xFFE6E1E5).copy(alpha = 0.45f),
                         fontWeight = if (sung) FontWeight.ExtraBold else FontWeight.Medium
                     )
                 ) {

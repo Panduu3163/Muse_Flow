@@ -54,15 +54,53 @@ fun isLikelyMatch(aTitle: String, aArtist: String, bTitle: String, bArtist: Stri
     return titleSim >= 0.82 && artistSim >= 0.5
 }
 
-/** Merges JioSaavn and YouTube Music song search results into one list: JioSaavn results first
- * (they're already directly playable), followed by only the YouTube results that don't plausibly
- * duplicate one of them. A YouTube-only result stays in the list - it just needs to be resolved
- * to a JioSaavn match before it can actually be played; see [findPlayableMatch]. */
-fun mergeSearchResults(jioSaavnResults: List<TrackResult>, youTubeResults: List<TrackResult>): List<TrackResult> {
-    val uniqueYouTube = youTubeResults.filter { yt ->
-        jioSaavnResults.none { jio -> isLikelyMatch(jio.title, jio.artist, yt.title, yt.artist) }
+/** Below this normalized title-to-[query] similarity, a JioSaavn result is noise rather than a
+ * plausible match - a same-named cover/parody/unrelated track with nothing else in common with
+ * what was actually typed. Filtered out entirely rather than just ranked low. Only ever applied
+ * to JioSaavn - see [mergeSearchResults] for why YouTube results never go through this. */
+private const val MIN_QUERY_RELEVANCE = 0.35
+
+/** Merges JioSaavn and YouTube Music song search results into one list, ranked by relevance
+ * rather than always putting every JioSaavn result ahead of YouTube's.
+ *
+ * The two sources get deliberately different treatment, not a shared relevance metric:
+ * - JioSaavn's search is plain text matching with no relevance/popularity ranking of its own, so
+ *   results are filtered by title similarity to [query] - otherwise a same-titled but unrelated
+ *   track (a cover, a different artist entirely) buries the real one.
+ * - YouTube Music's search (the same backend the official YouTube Music app itself uses) already
+ *   does real relevance ranking, including matching a typed *lyric snippet* to the right song -
+ *   something with essentially zero string overlap with that song's actual title, which our own
+ *   title-similarity check would score near zero and wrongly discard. So YouTube's results are
+ *   never filtered or re-scored by title similarity here; its own result order is trusted as-is.
+ *   This is what makes "type a line you remember, not the song name" work at all.
+ *
+ * Final order: primarily by relevance (YouTube results always rank as maximally relevant, trusting
+ * the source); ties broken by each source's own rank position (earlier = that engine's own higher
+ * confidence), with YouTube winning a full tie. A YouTube-only result stays in the list even
+ * unresolved - it just needs resolving to a JioSaavn match before it can actually be played; see
+ * [findPlayableMatch].
+ */
+fun mergeSearchResults(query: String, jioSaavnResults: List<TrackResult>, youTubeResults: List<TrackResult>): List<TrackResult> {
+    data class Ranked(val result: TrackResult, val relevance: Double, val rank: Int, val fromYouTube: Boolean)
+
+    val jioRanked = jioSaavnResults.mapIndexedNotNull { index, r ->
+        val relevance = similarity(query, r.title)
+        if (relevance < MIN_QUERY_RELEVANCE) null else Ranked(r, relevance, index, fromYouTube = false)
     }
-    return jioSaavnResults + uniqueYouTube
+    val youTubeRanked = youTubeResults.mapIndexedNotNull { index, r ->
+        if (jioRanked.any { jio -> isLikelyMatch(jio.result.title, jio.result.artist, r.title, r.artist) }) {
+            return@mapIndexedNotNull null
+        }
+        Ranked(r, relevance = 1.0, rank = index, fromYouTube = true)
+    }
+
+    return (jioRanked + youTubeRanked)
+        .sortedWith(
+            compareByDescending<Ranked> { it.relevance }
+                .thenBy { it.rank }
+                .thenBy { !it.fromYouTube } // false < true, so YouTube wins a full tie
+        )
+        .map { it.result }
 }
 
 /** Merges JioSaavn and YouTube Music album search results the same way [mergeSearchResults]

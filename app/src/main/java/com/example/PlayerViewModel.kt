@@ -215,8 +215,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun syncStateFromController(controller: MediaController) {
-        val index = controller.currentMediaItem?.mediaId?.toIntOrNull()
-        val track = index?.let { activeQueue.getOrNull(it) }
+        val track = resolveTrackFromMediaItem(controller.currentMediaItem)
         _uiState.update {
             it.copy(
                 track = track,
@@ -226,6 +225,28 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 isShuffleEnabled = controller.shuffleModeEnabled,
                 repeatMode = controller.repeatMode
             )
+        }
+    }
+
+    /** Resolves [mediaItem] to a [Track] for display. [activeQueue] only reflects reality when
+     * this exact ViewModel instance is the one that called [playTrack] - a fresh instance
+     * reconnecting to an already-playing session (e.g. the Activity was recreated from scratch
+     * while [PlaybackService] kept running) starts with [activeQueue] defaulted back to
+     * [MusicData.tracks], so a raw index lookup can silently return the wrong track instead of
+     * null. Guards against that by only trusting the lookup when its title actually matches the
+     * MediaItem's own metadata - otherwise falls back to reconstructing a [Track] straight from
+     * that metadata (always present - [Track.toQueueMediaItem]/[PlaybackService.resolveMediaItem]
+     * both set it), which is always correct even if incomplete (no [Track.sourceId], for
+     * instance - fine for display; playback itself keeps working via the controller's own
+     * session regardless of what we show here). */
+    private fun resolveTrackFromMediaItem(mediaItem: MediaItem?): Track? {
+        val index = mediaItem?.mediaId?.toIntOrNull()
+        val candidate = index?.let { activeQueue.getOrNull(it) }
+        val metadataTitle = mediaItem?.mediaMetadata?.title?.toString()
+        return if (candidate != null && (metadataTitle == null || candidate.title.equals(metadataTitle, ignoreCase = true))) {
+            candidate
+        } else {
+            trackFromMediaMetadata(mediaItem, controller?.duration ?: C.TIME_UNSET)
         }
     }
 
@@ -267,8 +288,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            val index = mediaItem?.mediaId?.toIntOrNull()
-            val track = index?.let { activeQueue.getOrNull(it) }
+            val track = resolveTrackFromMediaItem(mediaItem)
             _uiState.update { it.copy(track = track, progress = 0f, positionMs = 0L, audioFormatLabel = null) }
         }
 
@@ -338,6 +358,23 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         controller = null
         super.onCleared()
     }
+}
+
+/** Reconstructs a display-only [Track] straight from a [MediaItem]'s own [MediaMetadata] - see
+ * [PlayerViewModel.resolveTrackFromMediaItem] for why this exists. Returns null only if the
+ * MediaItem has no title at all (nothing playable to show). */
+private fun trackFromMediaMetadata(mediaItem: MediaItem?, durationMs: Long): Track? {
+    val title = mediaItem?.mediaMetadata?.title?.toString()?.takeIf { it.isNotBlank() } ?: return null
+    val hasDuration = durationMs > 0 && durationMs != C.TIME_UNSET
+    return Track(
+        title = title,
+        artist = mediaItem.mediaMetadata.artist?.toString() ?: "",
+        album = mediaItem.mediaMetadata.albumTitle?.toString() ?: "",
+        duration = if (hasDuration) "%d:%02d".format((durationMs / 1000) / 60, (durationMs / 1000) % 60) else "-:--",
+        plays = "",
+        gradientIndex = title.hashCode(),
+        imageUrl = mediaItem.mediaMetadata.artworkUri?.toString()
+    )
 }
 
 /** Turns a real ExoPlayer [Format] into a label like "OPUS · 165 kbps" - codec from

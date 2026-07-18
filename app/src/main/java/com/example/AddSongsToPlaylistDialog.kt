@@ -179,7 +179,7 @@ private fun SearchSourceTab(
                 }
                 jioDeferred.await() to ytDeferred.await()
             }
-            mergeSearchResults(jioResults, ytResults).mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
+            mergeSearchResults(query, jioResults, ytResults).mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
         }
     }
 
