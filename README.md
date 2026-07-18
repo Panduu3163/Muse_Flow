@@ -4,7 +4,7 @@
 
 **A free, ad-free music streaming app for Android.**
 
-Built with Kotlin, Jetpack Compose, and Media3 — a personal project aiming for a free music experience without the price tag.
+Built with Kotlin, Jetpack Compose, and Media3 — a personal project aiming for a Spotify-level experience without the price tag.
 
 ![Kotlin](https://img.shields.io/badge/Kotlin-100%25-7F52FF?style=for-the-badge&logo=kotlin)
 ![Platform](https://img.shields.io/badge/Platform-Android-3DDC84?style=for-the-badge&logo=android)
@@ -26,19 +26,22 @@ It also relies on unofficial/reverse-engineered access to some music platforms' 
 ## ✨ Features
 
 ### 🎧 Playback
-- Background playback with a real, controllable media notification (play/pause/skip, cover art)
-- Gapless queue management — skip, shuffle, repeat
-- Offline downloads for on-the-go listening, no connection required
-- Local device file playback alongside streaming
+- Background playback with a real, controllable media notification (play/pause, cover art)
+- Offline downloads with real download progress notifications, for on-the-go listening
+- Local device file playback alongside streaming — toggle search between Online and On-Device
+- Automatic fallback across sources if one is down or has no results
 
 ### 🔍 Discovery
 - Search across **Songs, Albums, Artists, and Playlists**
 - Results merged and deduplicated across multiple sources automatically
-- Real Home feed shelves (Recently Played, mood/genre-based recommendations)
-- Search history
+- Recent search history
+- Real artist pages, including monthly listener counts
+- Real Home feed shelves (Recently Played, mood/genre-based shelves) — cached for offline viewing, auto-refreshes when you're back online
 
 ### 🎤 Lyrics
 - Real-time synced lyrics, scrolling in time with playback
+- Word-by-word lyric highlighting where available
+- Multiple lyrics sources with automatic fallback for better coverage
 
 ### 🎨 Personalization
 - First-launch onboarding with a custom display name and profile photo
@@ -68,10 +71,10 @@ It also relies on unofficial/reverse-engineered access to some music platforms' 
 MuseFlow doesn't host or own any music. It resolves playable audio through a **provider-chain architecture** — multiple independent sources, tried and merged so no single point of failure takes down the app:
 
 - **JioSaavn** — primary catalog source, public API
-- **YouTube Music** — full authenticated streaming pipeline (visitor identity, BotGuard proof-of-origin token generation, signature/cipher deobfuscation) for access to YouTube's much broader catalog
-- **LRCLib** — open, public API for synced lyrics
+- **YouTube Music** — a full authenticated streaming pipeline (visitor identity, BotGuard proof-of-origin token generation, signature/cipher deobfuscation) for access to YouTube's much broader catalog
+- **LRCLib + BetterLyrics** — synced lyrics, with automatic fallback between sources for better coverage
 
-Each source is isolated behind a shared `Provider` interface, so if one breaks (which does happen — these are unofficial integrations reacting to platform changes), the others keep the app functional.
+Each source is isolated behind a shared `Provider` interface, so if one breaks (which does happen — these are unofficial integrations reacting to platform changes), the others keep the app functional. Search results are merged and deduplicated across sources automatically.
 
 ---
 
@@ -84,9 +87,10 @@ MuseFlow wouldn't exist without the open-source music-client community. Signific
 - [SimpMusic](https://github.com/maxrave-dev/SimpMusic) — cross-reference for YouTube Music streaming
 - [Echo Music](https://github.com/EchoMusicApp/Echo-Music) — architectural inspiration (provider-chain/fallback pattern, feature set)
 - [LRCLib](https://lrclib.net) — synced lyrics API
+- [Better Lyrics](https://github.com/better-lyrics/better-lyrics) — lyrics fallback source
 
 Genuine thanks to the maintainers of these projects for their work being open enough to learn from.
-Also Thanks to the tester Md Sakib Rahman for testing and finding bugs.
+
 ---
 
 ## 📦 Getting the App
@@ -104,11 +108,12 @@ This is currently a personal build, not published to any app store. To build it 
 
 ## 🚧 Roadmap
 
-- [ ] Additional lyrics source fallbacks
-- [ ] Word-by-word synced lyrics
-- [ ] Artist pages with monthly listener counts
+- [ ] Deeper Now Playing and Library UI polish
+- [ ] Smooth animations and transitions throughout the app
+- [ ] Playlist covers (auto-generated collages), playlist import from online sources
+- [ ] Additional music source integrations
 - [ ] Listen Together (real-time synced listening sessions)
-- [ ] Continued UI polish
+- [ ] Higher audio quality tier for YouTube-sourced tracks
 
 ---
 
