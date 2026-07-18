@@ -21,11 +21,19 @@ class PlaybackHistoryRepository private constructor(context: Context) {
 
     fun observeRecent(limit: Int): Flow<List<PlaybackHistoryEntity>> = dao.observeRecent(limit)
 
+    /** For Library's "My Top 50" tile - real play counts, not just recency. */
+    fun observeTopPlayed(limit: Int): Flow<List<PlaybackHistoryEntity>> = dao.observeTopPlayed(limit)
+
     fun recordPlayed(track: Track) {
         repositoryScope.launch {
-            dao.record(
+            val key = track.downloadKey()
+            // Increments the existing row's playCount rather than a plain REPLACE overwrite, so
+            // "My Top 50" reflects how often a track has actually been played, not just whether
+            // it's ever been played once.
+            val existingCount = dao.getByKey(key)?.playCount ?: 0
+            dao.upsert(
                 PlaybackHistoryEntity(
-                    key = track.downloadKey(),
+                    key = key,
                     title = track.title,
                     artist = track.artist,
                     album = track.album,
@@ -35,7 +43,8 @@ class PlaybackHistoryRepository private constructor(context: Context) {
                     streamUrl = track.streamUrl,
                     playedAt = System.currentTimeMillis(),
                     sourceId = track.sourceId,
-                    sourceType = track.sourceType?.name
+                    sourceType = track.sourceType?.name,
+                    playCount = existingCount + 1
                 )
             )
         }

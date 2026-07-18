@@ -7,14 +7,17 @@ import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
 import java.io.File
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,7 +34,17 @@ data class PlayerUiState(
     /** A user-facing message for the most recent playback failure (e.g. no network reaching
      * JioSaavn), or null when nothing's currently wrong. Cleared as soon as something actually
      * starts playing again. */
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    /** Real codec/bitrate of the audio actually being decoded right now (e.g. "OPUS · 165 kbps"),
+     * read straight from ExoPlayer's selected [androidx.media3.common.Format] - not a display
+     * gimmick derived from the track's nominal source quality. Null until the first track/format
+     * selection event fires. */
+    val audioFormatLabel: String? = null,
+    val isShuffleEnabled: Boolean = false,
+    @Player.RepeatMode val repeatMode: Int = Player.REPEAT_MODE_ALL,
+    /** Wall-clock time (epoch ms) the sleep timer will pause playback at, or null when no timer
+     * is running. */
+    val sleepTimerEndAtMs: Long? = null
 )
 
 /**
@@ -75,6 +88,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     // forever. Cleared once something starts playing successfully.
     private var lastYouTubeRetryKey: String? = null
 
+    // Backs the Now Playing queue view - the same list playTrack() built the controller's
+    // MediaItems from, so index i here always corresponds to mediaId i on the controller.
+    private val _queue = MutableStateFlow<List<Track>>(emptyList())
+    val queue: StateFlow<List<Track>> = _queue
+
+    private var sleepTimerJob: Job? = null
+
     init {
         viewModelScope.launch {
             downloadRepository.completedDownloads.collect { entities ->
@@ -105,6 +125,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         val startIndex = queue.indexOf(track)
         if (startIndex == -1) return
         activeQueue = queue
+        _queue.value = queue
         val mediaItems = queue.mapIndexed { index, queuedTrack ->
             queuedTrack.toQueueMediaItem(index, downloadedFilePathsByKey[queuedTrack.downloadKey()])
         }
@@ -114,9 +135,58 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         controller.play()
     }
 
+    /** Jumps straight to [index] within the current queue (see [queue]) - used by the Now Playing
+     * queue view, so tapping an upcoming track plays it immediately instead of skipping through
+     * one at a time. */
+    fun jumpToQueueIndex(index: Int) {
+        controller?.seekTo(index, 0L)
+    }
+
     fun togglePlayPause() {
         val controller = controller ?: return
         if (controller.isPlaying) controller.pause() else controller.play()
+    }
+
+    /** Toggles real ExoPlayer shuffle mode - the controller reorders playback itself
+     * ([Player.setShuffleModeEnabled]), this isn't a cosmetic UI-only toggle. */
+    fun toggleShuffle() {
+        val controller = controller ?: return
+        controller.shuffleModeEnabled = !controller.shuffleModeEnabled
+    }
+
+    /** Cycles OFF -> ALL -> ONE -> OFF, applied straight to the real [Player.repeatMode] so it
+     * actually changes how skip/auto-advance behaves, not just an icon. */
+    fun cycleRepeatMode() {
+        val controller = controller ?: return
+        controller.repeatMode = when (controller.repeatMode) {
+            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+            else -> Player.REPEAT_MODE_OFF
+        }
+    }
+
+    /** Starts a real countdown that pauses playback after [minutes] - replaces any timer already
+     * running. Passing null/0 cancels without scheduling a new one. */
+    fun startSleepTimer(minutes: Int) {
+        sleepTimerJob?.cancel()
+        if (minutes <= 0) {
+            _uiState.update { it.copy(sleepTimerEndAtMs = null) }
+            return
+        }
+        val durationMs = minutes * 60_000L
+        val endAt = System.currentTimeMillis() + durationMs
+        _uiState.update { it.copy(sleepTimerEndAtMs = endAt) }
+        sleepTimerJob = viewModelScope.launch {
+            delay(durationMs)
+            controller?.pause()
+            _uiState.update { it.copy(sleepTimerEndAtMs = null) }
+        }
+    }
+
+    fun cancelSleepTimer() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        _uiState.update { it.copy(sleepTimerEndAtMs = null) }
     }
 
     fun seekTo(fraction: Float) {
@@ -152,7 +222,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 track = track,
                 isPlaying = controller.isPlaying,
                 progress = progressFraction(controller),
-                positionMs = controller.currentPosition.coerceAtLeast(0L)
+                positionMs = controller.currentPosition.coerceAtLeast(0L),
+                isShuffleEnabled = controller.shuffleModeEnabled,
+                repeatMode = controller.repeatMode
             )
         }
     }
@@ -197,7 +269,25 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val index = mediaItem?.mediaId?.toIntOrNull()
             val track = index?.let { activeQueue.getOrNull(it) }
-            _uiState.update { it.copy(track = track, progress = 0f, positionMs = 0L) }
+            _uiState.update { it.copy(track = track, progress = 0f, positionMs = 0L, audioFormatLabel = null) }
+        }
+
+        override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+            _uiState.update { it.copy(isShuffleEnabled = shuffleModeEnabled) }
+        }
+
+        override fun onRepeatModeChanged(repeatMode: Int) {
+            _uiState.update { it.copy(repeatMode = repeatMode) }
+        }
+
+        // Fires whenever the actually-decoding audio format becomes known/changes (track
+        // selection, quality switch, or a fresh media item) - real playback data, not derived
+        // from the track's nominal/advertised quality.
+        override fun onTracksChanged(tracks: Tracks) {
+            val format = tracks.groups
+                .firstOrNull { it.type == C.TRACK_TYPE_AUDIO && it.isSelected }
+                ?.let { group -> (0 until group.length).firstOrNull { group.isTrackSelected(it) }?.let(group::getTrackFormat) }
+            _uiState.update { it.copy(audioFormatLabel = format?.toAudioFormatLabel()) }
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -243,9 +333,34 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
+        sleepTimerJob?.cancel()
         MediaController.releaseFuture(controllerFuture)
         controller = null
         super.onCleared()
+    }
+}
+
+/** Turns a real ExoPlayer [Format] into a label like "OPUS · 165 kbps" - codec from
+ * [Format.sampleMimeType], bitrate from [Format.bitrate] (bits/sec, converted to kbps). Either
+ * half is dropped if genuinely unknown (a local/downloaded file's container not reporting a
+ * fixed bitrate, for instance), rather than showing a made-up number. */
+private fun Format.toAudioFormatLabel(): String? {
+    val codec = sampleMimeType?.substringAfterLast('/')?.let {
+        when (it.lowercase()) {
+            "mp4a-latm", "mp4a.40.2" -> "AAC"
+            "opus" -> "OPUS"
+            "mpeg", "mp3" -> "MP3"
+            "vorbis" -> "VORBIS"
+            "flac" -> "FLAC"
+            else -> it.uppercase()
+        }
+    }
+    val kbps = bitrate.takeIf { it != Format.NO_VALUE && it > 0 }?.let { it / 1000 }
+    return when {
+        codec != null && kbps != null -> "$codec · $kbps kbps"
+        codec != null -> codec
+        kbps != null -> "$kbps kbps"
+        else -> null
     }
 }
 

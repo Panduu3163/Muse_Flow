@@ -108,14 +108,6 @@ fun AppearanceLayoutSection(state: AppSettingsState, viewModel: AppSettingsViewM
 fun PlayerAudioNowPlayingSection(state: AppSettingsState, viewModel: AppSettingsViewModel) {
     SettingsGroupHeader(title = "Now Playing")
     SettingsToggleRow(
-        icon = Icons.Default.SwipeLeft,
-        title = "Enable swipe to change song",
-        subtitle = "Swipe the player to skip tracks",
-        checked = state.swipeToChangeSong,
-        onCheckedChange = viewModel::setSwipeToChangeSong,
-        tag = "toggle_swipe_to_change_song"
-    )
-    SettingsToggleRow(
         icon = Icons.Default.Animation,
         title = "Canvas",
         subtitle = "Show animated album covers when available",

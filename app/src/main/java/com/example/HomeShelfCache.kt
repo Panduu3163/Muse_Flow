@@ -30,6 +30,11 @@ interface HomeShelfCacheDao {
     @Query("SELECT * FROM home_shelf_cache WHERE shelfTitle = :shelfTitle LIMIT 1")
     suspend fun get(shelfTitle: String): HomeShelfCacheEntity?
 
+    /** Every cached shelf, for Library's "Cached" tile - which shows whatever Home has actually
+     * cached for offline browsing, not a separate cache of its own. */
+    @Query("SELECT * FROM home_shelf_cache")
+    fun observeAll(): kotlinx.coroutines.flow.Flow<List<HomeShelfCacheEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: HomeShelfCacheEntity)
 }

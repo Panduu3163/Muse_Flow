@@ -49,7 +49,7 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
     }
 }
 
-private fun DownloadedTrackEntity.toTrack(): Track = Track(
+fun DownloadedTrackEntity.toTrack(): Track = Track(
     title = title,
     artist = artist,
     album = album,

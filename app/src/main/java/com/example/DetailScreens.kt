@@ -10,6 +10,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.LibraryAdd
+import androidx.compose.material.icons.filled.LibraryAddCheck
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -104,7 +106,9 @@ fun ArtistDetailScreen(
 }
 
 /** Real tracklist for a playlist search result, fetched via [JioSaavnProvider.getPlaylistTracks]
- * or [YouTubeMusicProvider.getPlaylistTracks] depending on [PlaylistResult.sourceType]. */
+ * or [YouTubeMusicProvider.getPlaylistTracks] depending on [PlaylistResult.sourceType]. Also the
+ * only tracklist screen with an "Add to my library" action - saves the playlist's real cover and
+ * its fetched tracks as a new local playlist (see [LibraryViewModel.importPlaylist]). */
 @Composable
 fun PlaylistDetailScreen(
     playlist: PlaylistResult,
@@ -113,6 +117,7 @@ fun PlaylistDetailScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val libraryViewModel: LibraryViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     TracklistDetailScreen(
         title = playlist.title,
         subtitle = playlist.subtitle,
@@ -123,6 +128,7 @@ fun PlaylistDetailScreen(
         onPlayTrack = onPlayTrack,
         onBack = onBack,
         emoji = "🎵",
+        onSaveToLibrary = { tracks -> libraryViewModel.importPlaylist(playlist.title, playlist.imageUrl, tracks) },
         modifier = modifier
     )
 }
@@ -176,11 +182,16 @@ private fun TracklistDetailScreen(
     onBack: () -> Unit,
     emoji: String,
     shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
+    /** Only [PlaylistDetailScreen] passes this - Album/Artist detail have no "add to my library"
+     * equivalent. Called once, with whatever tracklist actually finished loading. */
+    onSaveToLibrary: ((List<Track>) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var state by remember { mutableStateOf<UiState<List<Track>>>(UiState.Loading) }
     var extraSubtitle by remember(gradientSeed) { mutableStateOf<String?>(null) }
+    var savedToLibrary by remember(gradientSeed) { mutableStateOf(false) }
     val sourceName = if (sourceType == MusicSource.YOUTUBE_MUSIC) "YouTube Music" else "JioSaavn"
+    val context = LocalContext.current
 
     LaunchedEffect(gradientSeed) {
         state = UiState.Loading
@@ -205,6 +216,7 @@ private fun TracklistDetailScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack, modifier = Modifier.testTag("detail_back_button")) {
@@ -213,6 +225,26 @@ private fun TracklistDetailScreen(
                         contentDescription = "Back",
                         tint = MaterialTheme.colorScheme.onBackground
                     )
+                }
+                if (onSaveToLibrary != null) {
+                    val currentTracks = (state as? UiState.Success)?.data
+                    IconButton(
+                        onClick = {
+                            if (!savedToLibrary && currentTracks != null && currentTracks.isNotEmpty()) {
+                                onSaveToLibrary(currentTracks)
+                                savedToLibrary = true
+                                android.widget.Toast.makeText(context, "Added to your library", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        enabled = !savedToLibrary && !currentTracks.isNullOrEmpty(),
+                        modifier = Modifier.testTag("detail_add_to_library_button")
+                    ) {
+                        Icon(
+                            imageVector = if (savedToLibrary) Icons.Default.LibraryAddCheck else Icons.Default.LibraryAdd,
+                            contentDescription = if (savedToLibrary) "Added to your library" else "Add to my library",
+                            tint = if (savedToLibrary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
+                        )
+                    }
                 }
             }
 
@@ -327,11 +359,8 @@ private fun TracklistDetailScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            // YouTube-sourced tracks stream via a fresh per-play resolve, not a
-                            // fixed URL - same reason SongsResults hides this for them too.
-                            if (track.sourceType != MusicSource.YOUTUBE_MUSIC) {
-                                DownloadButton(track = track)
-                            }
+                            // No per-row download button here, for any source - downloading now
+                            // happens from Now Playing only (see SongResultRows in SearchScreen.kt).
                         }
                     }
                 }

@@ -16,12 +16,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -194,6 +194,10 @@ fun HomeHeader() {
     val userProfileViewModel: UserProfileViewModel = viewModel()
     val profile by userProfileViewModel.state.collectAsState()
 
+    // Rolled once per header composition (not on every recomposition), so it stays put for as
+    // long as Home is up rather than changing mid-scroll.
+    val greeting = remember { randomHomeGreeting() }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -201,7 +205,7 @@ fun HomeHeader() {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = "MuseFlow",
                 style = MaterialTheme.typography.headlineMedium.copy(
@@ -211,34 +215,22 @@ fun HomeHeader() {
                 color = MaterialTheme.colorScheme.primary
             )
             Text(
-                text = "Discover your rhythm",
+                text = greeting,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp, end = 12.dp)
             )
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(
-                onClick = {},
-                modifier = Modifier.testTag("notification_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Notifications,
-                    contentDescription = "Notifications",
-                    tint = MaterialTheme.colorScheme.onSurface
-                )
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            // Profile circular avatar
-            UserAvatar(
-                photoUri = profile.photoUri,
-                initials = profile.initials,
-                size = 40.dp,
-                modifier = Modifier
-                    .clickable { }
-                    .testTag("profile_avatar")
-            )
-        }
+        // Profile circular avatar
+        UserAvatar(
+            photoUri = profile.photoUri,
+            initials = profile.initials,
+            size = 40.dp,
+            modifier = Modifier
+                .clickable { }
+                .testTag("profile_avatar")
+        )
     }
 }
 
