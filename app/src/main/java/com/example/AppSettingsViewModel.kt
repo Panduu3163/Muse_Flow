@@ -79,7 +79,7 @@ private class AppSettingsRepository(private val context: Context) {
             cropAlbumArt = prefs[AppSettingsKeys.CROP_ALBUM_ART] ?: true,
             playerButtonColor = prefs.enumOrDefault(AppSettingsKeys.PLAYER_BUTTON_COLOR, PlayerButtonColorOption.Primary),
             playerSliderStyle = prefs.enumOrDefault(AppSettingsKeys.PLAYER_SLIDER_STYLE, PlayerSliderStyle.Default),
-            swipeToChangeSong = prefs[AppSettingsKeys.SWIPE_TO_CHANGE_SONG] ?: true,
+            swipeToChangeSong = prefs[AppSettingsKeys.SWIPE_TO_CHANGE_SONG] ?: false,
             showAnimatedCanvas = prefs[AppSettingsKeys.SHOW_ANIMATED_CANVAS] ?: false,
             rotatingThumbnailAnimation = prefs[AppSettingsKeys.ROTATING_THUMBNAIL_ANIMATION] ?: false,
             showCommentButton = prefs[AppSettingsKeys.SHOW_COMMENT_BUTTON] ?: false,

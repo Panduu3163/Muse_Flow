@@ -110,7 +110,10 @@ fun AboutScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "Version ${BuildConfig.VERSION_NAME}",
+                            // BuildConfig.VERSION_NAME carries the beta build type's "-beta"
+                            // versionNameSuffix (see app/build.gradle.kts) - that distinction is
+                            // shown via the chip below instead, so it's stripped here.
+                            text = "Version ${BuildConfig.VERSION_NAME.removeSuffix("-beta")}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -118,15 +121,25 @@ fun AboutScreen(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(
-                                    if (BuildConfig.DEBUG) Color(0xFF3C2F1F) else Color(0xFF1B3B2B)
+                                    when (BuildConfig.BUILD_TYPE) {
+                                        "release" -> Color(0xFF1B3B2B)
+                                        else -> Color(0xFF3C2F1F)
+                                    }
                                 )
                                 .padding(horizontal = 8.dp, vertical = 3.dp)
                                 .testTag("about_build_type_chip")
                         ) {
                             Text(
-                                text = if (BuildConfig.DEBUG) "DEBUG" else "RELEASE",
+                                text = when (BuildConfig.BUILD_TYPE) {
+                                    "release" -> "RELEASE"
+                                    "beta" -> "BETA"
+                                    else -> "DEBUG"
+                                },
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = if (BuildConfig.DEBUG) Color(0xFFFFB74D) else Color(0xFF81C784)
+                                color = when (BuildConfig.BUILD_TYPE) {
+                                    "release" -> Color(0xFF81C784)
+                                    else -> Color(0xFFFFB74D)
+                                }
                             )
                         }
                     }

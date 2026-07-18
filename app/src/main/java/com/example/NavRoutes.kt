@@ -10,6 +10,7 @@ object Routes {
     const val ALBUM_DETAIL = "album_detail"
     const val ARTIST_DETAIL = "artist_detail"
     const val PLAYLIST_DETAIL = "playlist_detail"
+    const val LOCAL_PLAYLIST_DETAIL = "local_playlist_detail"
 
     const val SETTINGS_ACCOUNT = "settings/account"
     const val SETTINGS_ACCOUNT_EDIT = "settings/account/edit"

@@ -80,7 +80,7 @@ data class AppSettingsState(
     val cropAlbumArt: Boolean = true,
     val playerButtonColor: PlayerButtonColorOption = PlayerButtonColorOption.Primary,
     val playerSliderStyle: PlayerSliderStyle = PlayerSliderStyle.Default,
-    val swipeToChangeSong: Boolean = true,
+    val swipeToChangeSong: Boolean = false,
     val showAnimatedCanvas: Boolean = false,
     val rotatingThumbnailAnimation: Boolean = false,
     val showCommentButton: Boolean = false,

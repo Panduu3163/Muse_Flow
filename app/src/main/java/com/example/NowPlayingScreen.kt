@@ -5,6 +5,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -26,6 +27,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -36,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
@@ -52,17 +55,34 @@ fun NowPlayingScreen(
     onClose: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Real codec/bitrate of the audio actually decoding right now (see
+     * [PlayerViewModel.PlayerUiState.audioFormatLabel]), null until the first format is known. */
+    audioFormatLabel: String? = null,
+    isShuffleEnabled: Boolean = false,
+    @androidx.media3.common.Player.RepeatMode repeatMode: Int = androidx.media3.common.Player.REPEAT_MODE_ALL,
+    onToggleShuffle: () -> Unit = {},
+    onCycleRepeat: () -> Unit = {},
+    sleepTimerEndAtMs: Long? = null,
+    onStartSleepTimer: (Int) -> Unit = {},
+    onCancelSleepTimer: () -> Unit = {},
+    queue: List<Track> = emptyList(),
+    onJumpToQueueIndex: (Int) -> Unit = {}
 ) {
     // Interactive states
-    var isShuffleEnabled by remember { mutableStateOf(false) }
-    var isRepeatEnabled by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
+    var showSleepTimerDialog by remember { mutableStateOf(false) }
+    var showQueueDialog by remember { mutableStateOf(false) }
 
     // Real, Room-backed liked state - shared with Library's Liked Songs tab
     val likedSongsViewModel: LikedSongsViewModel = viewModel()
     val likedKeys by likedSongsViewModel.likedKeys.collectAsState()
     val isLiked = likedKeys.contains(track.downloadKey())
+
+    // Persisted, defaults OFF - see AppSettingsModels/AppSettingsViewModel and the "Swipe to
+    // change song" toggle on the Appearance settings screen.
+    val appSettingsViewModel: AppSettingsViewModel = viewModel()
+    val appSettings by appSettingsViewModel.state.collectAsState()
 
     val themeViewModel: ThemeViewModel = viewModel()
     val themeState by themeViewModel.themeState.collectAsState()
@@ -215,12 +235,37 @@ fun NowPlayingScreen(
             Spacer(modifier = Modifier.weight(0.1f))
 
             // 2. Large Album Art Container (with interactive lyrics flip overlay)
+            var swipeDragAccumulator by remember { mutableFloatStateOf(0f) }
+            val swipeThresholdPx = with(androidx.compose.ui.platform.LocalDensity.current) { 80.dp.toPx() }
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
                     .clip(RoundedCornerShape(24.dp))
                     .background(Brush.linearGradient(gradientColors))
+                    .then(
+                        if (appSettings.swipeToChangeSong) {
+                            Modifier.pointerInput(Unit) {
+                                detectHorizontalDragGestures(
+                                    onDragStart = { swipeDragAccumulator = 0f },
+                                    onDragEnd = {
+                                        when {
+                                            swipeDragAccumulator <= -swipeThresholdPx -> onNext()
+                                            swipeDragAccumulator >= swipeThresholdPx -> onPrevious()
+                                        }
+                                        swipeDragAccumulator = 0f
+                                    },
+                                    onHorizontalDrag = { change, dragAmount ->
+                                        change.consume()
+                                        swipeDragAccumulator += dragAmount
+                                    }
+                                )
+                            }
+                        } else {
+                            Modifier
+                        }
+                    )
                     .testTag("album_art_container"),
                 contentAlignment = Alignment.Center
             ) {
@@ -301,17 +346,26 @@ fun NowPlayingScreen(
                     )
                 }
 
-                // Heart Icon
-                IconButton(
-                    onClick = { likedSongsViewModel.toggle(track) },
-                    modifier = Modifier.testTag("now_playing_heart_button")
-                ) {
-                    Icon(
-                        imageVector = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        contentDescription = if (isLiked) "Remove from Liked" else "Add to Liked",
-                        tint = if (isLiked) Color.Red else Color(0xFFE6E1E5),
-                        modifier = Modifier.size(28.dp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Download the currently playing track for offline playback
+                    DownloadButton(
+                        track = track,
+                        tint = Color(0xFFE6E1E5),
+                        modifier = Modifier.testTag("now_playing_download_button")
                     )
+
+                    // Heart Icon
+                    IconButton(
+                        onClick = { likedSongsViewModel.toggle(track) },
+                        modifier = Modifier.testTag("now_playing_heart_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = if (isLiked) "Remove from Liked" else "Add to Liked",
+                            tint = if (isLiked) Color.Red else Color(0xFFE6E1E5),
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
             }
 
@@ -347,29 +401,31 @@ fun NowPlayingScreen(
                         color = Color(0xFFCAC4D0)
                     )
                 }
+
+                // Real codec/bitrate of the audio actually decoding right now - absent (not a
+                // placeholder value) until ExoPlayer reports the first selected format.
+                if (audioFormatLabel != null) {
+                    Text(
+                        text = audioFormatLabel,
+                        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.5.sp),
+                        color = Color(0xFFCAC4D0).copy(alpha = 0.6f),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp)
+                            .testTag("now_playing_codec_label")
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.weight(0.1f))
 
-            // 5. Main Controls Row (Shuffle, Prev, Play/Pause, Next, Repeat)
+            // 5. Main Controls Row (Prev, Play/Pause, Next)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Shuffle Button
-                IconButton(
-                    onClick = { isShuffleEnabled = !isShuffleEnabled },
-                    modifier = Modifier.testTag("now_playing_shuffle")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Shuffle,
-                        contentDescription = "Shuffle",
-                        tint = if (isShuffleEnabled) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.6f),
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
                 // Previous Button
                 IconButton(
                     onClick = onPrevious,
@@ -414,91 +470,231 @@ fun NowPlayingScreen(
                     )
                 }
 
-                // Repeat Button
-                IconButton(
-                    onClick = { isRepeatEnabled = !isRepeatEnabled },
-                    modifier = Modifier.testTag("now_playing_repeat")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Repeat,
-                        contentDescription = "Repeat",
-                        tint = if (isRepeatEnabled) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.6f),
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
             }
 
             Spacer(modifier = Modifier.weight(0.1f))
 
-            // 6. Secondary Action Row (Lyrics button, Share, Queue, Extra Menu)
+            // 6. Secondary Action Row (Queue, Sleep Timer, Lyrics, Shuffle, Repeat)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 24.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Interactive Lyrics Pill
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(
-                            if (showLyrics) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.1f)
-                        )
-                        .clickable { showLyrics = !showLyrics }
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                        .testTag("now_playing_lyrics_chip"),
-                    contentAlignment = Alignment.Center
+                // Queue
+                IconButton(
+                    onClick = { showQueueDialog = true },
+                    modifier = Modifier.testTag("now_playing_queue")
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = null,
-                            tint = if (showLyrics) Color(0xFF0C0C0E) else Color(0xFFD0BCFF),
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
+                    Icon(
+                        imageVector = Icons.Default.QueueMusic,
+                        contentDescription = "Queue",
+                        tint = Color(0xFFE6E1E5).copy(alpha = 0.8f),
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                // Sleep Timer - shows the real remaining time beside the icon while active,
+                // ticking once a second so it stays accurate rather than a static snapshot.
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { showSleepTimerDialog = true }
+                        .testTag("now_playing_sleep_timer")
+                        .padding(vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = if (sleepTimerEndAtMs != null) Icons.Default.Bedtime else Icons.Default.BedtimeOff,
+                        contentDescription = "Sleep Timer",
+                        tint = if (sleepTimerEndAtMs != null) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.8f),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    if (sleepTimerEndAtMs != null) {
+                        var remainingMs by remember(sleepTimerEndAtMs) { mutableStateOf(sleepTimerEndAtMs - System.currentTimeMillis()) }
+                        LaunchedEffect(sleepTimerEndAtMs) {
+                            while (true) {
+                                remainingMs = sleepTimerEndAtMs - System.currentTimeMillis()
+                                if (remainingMs <= 0) break
+                                delay(1000)
+                            }
+                        }
+                        val totalSeconds = (remainingMs / 1000).coerceAtLeast(0)
                         Text(
-                            text = "Lyrics",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = if (showLyrics) Color(0xFF0C0C0E) else Color(0xFFE6E1E5)
+                            text = "%d:%02d".format(totalSeconds / 60, totalSeconds % 60),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFD0BCFF),
+                            modifier = Modifier.testTag("now_playing_sleep_timer_remaining")
                         )
                     }
                 }
 
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                // Lyrics
+                IconButton(
+                    onClick = { showLyrics = !showLyrics },
+                    modifier = Modifier.testTag("now_playing_lyrics_chip")
                 ) {
-                    // Download the currently playing track for offline playback
-                    DownloadButton(
-                        track = track,
-                        modifier = Modifier.testTag("now_playing_download_button")
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = "Lyrics",
+                        tint = if (showLyrics) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.8f),
+                        modifier = Modifier.size(22.dp)
                     )
+                }
 
-                    // Share Icon
-                    IconButton(onClick = { /* Share placeholder trigger */ }) {
-                        Icon(
-                            imageVector = Icons.Default.Share,
-                            contentDescription = "Share",
-                            tint = Color(0xFFE6E1E5).copy(alpha = 0.8f),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                // Shuffle - wired to real ExoPlayer shuffle mode, not a cosmetic toggle
+                IconButton(
+                    onClick = onToggleShuffle,
+                    modifier = Modifier.testTag("now_playing_shuffle")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Shuffle,
+                        contentDescription = "Shuffle",
+                        tint = if (isShuffleEnabled) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.6f),
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
 
-                    // Queue Icon
-                    IconButton(onClick = { /* Queue placeholder trigger */ }) {
-                        Icon(
-                            imageVector = Icons.Default.QueueMusic,
-                            contentDescription = "Queue",
-                            tint = Color(0xFFE6E1E5).copy(alpha = 0.8f),
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
+                // Repeat - cycles OFF/ALL/ONE against the real Player.repeatMode
+                IconButton(
+                    onClick = onCycleRepeat,
+                    modifier = Modifier.testTag("now_playing_repeat")
+                ) {
+                    Icon(
+                        imageVector = if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                        contentDescription = "Repeat",
+                        tint = if (repeatMode != androidx.media3.common.Player.REPEAT_MODE_OFF) Color(0xFFD0BCFF) else Color(0xFFE6E1E5).copy(alpha = 0.6f),
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
             }
         }
+
+        if (showSleepTimerDialog) {
+            SleepTimerDialog(
+                activeEndAtMs = sleepTimerEndAtMs,
+                onDismiss = { showSleepTimerDialog = false },
+                onSelectMinutes = { minutes ->
+                    onStartSleepTimer(minutes)
+                    showSleepTimerDialog = false
+                },
+                onCancelTimer = {
+                    onCancelSleepTimer()
+                    showSleepTimerDialog = false
+                }
+            )
+        }
+
+        if (showQueueDialog) {
+            QueueDialog(
+                queue = queue,
+                currentTrack = track,
+                onDismiss = { showQueueDialog = false },
+                onSelect = { index ->
+                    onJumpToQueueIndex(index)
+                    showQueueDialog = false
+                }
+            )
+        }
     }
+}
+
+@Composable
+private fun SleepTimerDialog(
+    activeEndAtMs: Long?,
+    onDismiss: () -> Unit,
+    onSelectMinutes: (Int) -> Unit,
+    onCancelTimer: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF1A1A1E),
+        title = { Text("Sleep Timer", color = Color(0xFFE6E1E5), fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                listOf(15, 30, 45, 60).forEach { minutes ->
+                    Text(
+                        text = "$minutes minutes",
+                        color = Color(0xFFE6E1E5),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelectMinutes(minutes) }
+                            .padding(vertical = 12.dp)
+                            .testTag("sleep_timer_option_$minutes")
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (activeEndAtMs != null) {
+                TextButton(onClick = onCancelTimer) {
+                    Text("Turn Off", color = Color(0xFFD0BCFF), fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = Color(0xFFCAC4D0))
+            }
+        }
+    )
+}
+
+@Composable
+private fun QueueDialog(
+    queue: List<Track>,
+    currentTrack: Track,
+    onDismiss: () -> Unit,
+    onSelect: (Int) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF1A1A1E),
+        title = { Text("Queue", color = Color(0xFFE6E1E5), fontWeight = FontWeight.Bold) },
+        text = {
+            if (queue.isEmpty()) {
+                Text("Nothing queued.", color = Color(0xFFCAC4D0))
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                    itemsIndexed(queue) { index, queuedTrack ->
+                        val isCurrent = queuedTrack.downloadKey() == currentTrack.downloadKey()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(index) }
+                                .padding(vertical = 10.dp)
+                                .testTag("queue_item_$index"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = queuedTrack.title,
+                                    color = if (isCurrent) Color(0xFFD0BCFF) else Color(0xFFE6E1E5),
+                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = queuedTrack.artist,
+                                    color = Color(0xFFCAC4D0),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", color = Color(0xFFD0BCFF), fontWeight = FontWeight.Bold)
+            }
+        }
+    )
 }
 
 /**

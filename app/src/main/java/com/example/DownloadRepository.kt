@@ -59,6 +59,9 @@ class DownloadRepository private constructor(context: Context) {
         val key = track.downloadKey()
         if (activeJobs.containsKey(key)) return
         _failures.update { it - key }
+        // Real foreground-service priority for as long as anything's downloading, so the OS
+        // doesn't kill this coroutine mid-transfer once the screen turns off - see DownloadService.
+        DownloadService.start(appContext)
         activeJobs[key] = repositoryScope.launch {
             // -1: no percent known yet (server hasn't reported a size, or the request hasn't
             // opened yet) - both the in-app button and the system notification show an

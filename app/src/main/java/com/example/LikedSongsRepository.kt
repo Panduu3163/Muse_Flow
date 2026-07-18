@@ -27,7 +27,9 @@ class LikedSongsRepository private constructor(context: Context) {
                 gradientIndex = track.gradientIndex,
                 imageUrl = track.imageUrl,
                 streamUrl = track.streamUrl,
-                likedAt = System.currentTimeMillis()
+                likedAt = System.currentTimeMillis(),
+                sourceId = track.sourceId,
+                sourceType = track.sourceType?.name
             )
         )
     }
@@ -54,5 +56,7 @@ fun LikedSongEntity.toTrack(): Track = Track(
     plays = "",
     gradientIndex = gradientIndex,
     imageUrl = imageUrl,
-    streamUrl = streamUrl
+    streamUrl = streamUrl,
+    sourceType = sourceType?.let { runCatching { MusicSource.valueOf(it) }.getOrNull() },
+    sourceId = sourceId
 )

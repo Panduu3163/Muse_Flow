@@ -210,6 +210,14 @@ fun AppearanceSettingsScreen(
                     onCheckedChange = onHideVideoContentChange,
                     tag = "toggle_hide_video"
                 )
+                SettingsToggleRow(
+                    icon = Icons.Default.SwipeLeft,
+                    title = "Enable swipe to change song",
+                    subtitle = "Swipe the album art left or right on Now Playing to skip tracks",
+                    checked = appSettings.swipeToChangeSong,
+                    onCheckedChange = appSettingsViewModel::setSwipeToChangeSong,
+                    tag = "toggle_swipe_to_change_song"
+                )
 
                 Spacer(modifier = Modifier.height(16.dp))
                 AppearanceMiniPlayerSection(state = appSettings, viewModel = appSettingsViewModel)

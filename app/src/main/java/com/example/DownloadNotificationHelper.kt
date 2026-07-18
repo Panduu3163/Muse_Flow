@@ -18,13 +18,15 @@ import androidx.core.content.ContextCompat
  * file is fully written. Used only by [DownloadRepository], which owns the actual download.
  */
 object DownloadNotificationHelper {
-    private const val CHANNEL_ID = "downloads"
+    // Shared with DownloadService, which posts the single foreground-service notification that
+    // keeps downloads alive on this same channel rather than a separate one.
+    const val CHANNEL_ID = "downloads"
 
     // Stable per-track notification id derived from downloadKey(), so re-downloading the same
     // track updates (rather than stacks alongside) its own notification.
     private fun notificationId(key: String) = 20_000_000 + (key.hashCode() and 0x0FFFFFFF)
 
-    private fun ensureChannel(context: Context) {
+    fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         if (manager.getNotificationChannel(CHANNEL_ID) != null) return

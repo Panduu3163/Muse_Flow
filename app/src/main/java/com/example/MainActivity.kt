@@ -189,6 +189,8 @@ private fun MainApp() {
     var selectedAlbum by remember { mutableStateOf<AlbumResult?>(null) }
     var selectedArtist by remember { mutableStateOf<ArtistResult?>(null) }
     var selectedPlaylist by remember { mutableStateOf<PlaylistResult?>(null) }
+    // Same pattern, for a tap on one of the user's own (Room-backed) Library playlists.
+    var selectedLocalPlaylist by remember { mutableStateOf<PlaylistEntity?>(null) }
 
     // Surfaces playback failures (overwhelmingly "no network") as a Snackbar - see
     // PlayerViewModel.errorMessage - instead of leaving the user staring at a mini-player that
@@ -219,6 +221,8 @@ private fun MainApp() {
                             isPlaying = isPlaying,
                             progress = playbackProgress,
                             onPlayPauseToggle = { playerViewModel.togglePlayPause() },
+                            onPrevious = { playerViewModel.skipPrevious() },
+                            onNext = { playerViewModel.skipNext() },
                             onClose = { playerViewModel.stopPlayback() },
                             onClick = { navController.navigate(Routes.NOW_PLAYING) }
                         )
@@ -327,7 +331,13 @@ private fun MainApp() {
                 }
                 composable(Routes.LIBRARY, enterTransition = tabEnter, exitTransition = tabExit) {
                     Box(Modifier.padding(innerPadding)) {
-                        LibraryScreen(onPlayTrack = onPlayQueuedTrack)
+                        LibraryScreen(
+                            onPlayTrack = onPlayQueuedTrack,
+                            onPlaylistClick = {
+                                selectedLocalPlaylist = it
+                                navController.navigate(Routes.LOCAL_PLAYLIST_DETAIL)
+                            }
+                        )
                     }
                 }
                 composable(Routes.SETTINGS, enterTransition = tabEnter, exitTransition = tabExit) {
@@ -576,6 +586,23 @@ private fun MainApp() {
                     }
                 }
                 composable(
+                    Routes.LOCAL_PLAYLIST_DETAIL,
+                    enterTransition = settingsEnter,
+                    exitTransition = settingsExit,
+                    popEnterTransition = settingsPopEnter,
+                    popExitTransition = settingsPopExit
+                ) {
+                    Box(Modifier.padding(innerPadding)) {
+                        selectedLocalPlaylist?.let { playlist ->
+                            LocalPlaylistDetailScreen(
+                                playlist = playlist,
+                                onPlayTrack = onPlayQueuedTrack,
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+                    }
+                }
+                composable(
                     Routes.NOW_PLAYING,
                     enterTransition = nowPlayingEnter,
                     exitTransition = nowPlayingExit,
@@ -586,6 +613,7 @@ private fun MainApp() {
                     // status/navigation bar insets and should be truly edge-to-edge, same as
                     // when it was rendered as a sibling overlay before this NavHost existed.
                     activeTrack?.let { track ->
+                        val queueTracks by playerViewModel.queue.collectAsState()
                         NowPlayingScreen(
                             track = track,
                             isPlaying = isPlaying,
@@ -595,7 +623,17 @@ private fun MainApp() {
                             onPlayPauseToggle = { playerViewModel.togglePlayPause() },
                             onClose = { navController.popBackStack() },
                             onNext = { playerViewModel.skipNext() },
-                            onPrevious = { playerViewModel.skipPrevious() }
+                            onPrevious = { playerViewModel.skipPrevious() },
+                            audioFormatLabel = playerState.audioFormatLabel,
+                            isShuffleEnabled = playerState.isShuffleEnabled,
+                            repeatMode = playerState.repeatMode,
+                            onToggleShuffle = { playerViewModel.toggleShuffle() },
+                            onCycleRepeat = { playerViewModel.cycleRepeatMode() },
+                            sleepTimerEndAtMs = playerState.sleepTimerEndAtMs,
+                            onStartSleepTimer = { minutes -> playerViewModel.startSleepTimer(minutes) },
+                            onCancelSleepTimer = { playerViewModel.cancelSleepTimer() },
+                            queue = queueTracks,
+                            onJumpToQueueIndex = { index -> playerViewModel.jumpToQueueIndex(index) }
                         )
                     }
                 }
@@ -610,6 +648,8 @@ fun CompactPlayer(
     isPlaying: Boolean,
     progress: Float,
     onPlayPauseToggle: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
     onClose: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -664,7 +704,16 @@ fun CompactPlayer(
                 }
 
                 // Playback Control Buttons
-                IconButton(onClick = onPlayPauseToggle) {
+                IconButton(onClick = onPrevious, modifier = Modifier.testTag("compact_player_prev")) {
+                    Icon(
+                        imageVector = Icons.Default.SkipPrevious,
+                        contentDescription = "Previous Track",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                IconButton(onClick = onPlayPauseToggle, modifier = Modifier.testTag("compact_player_play_pause")) {
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isPlaying) "Pause" else "Play",
@@ -673,7 +722,16 @@ fun CompactPlayer(
                     )
                 }
 
-                IconButton(onClick = onClose) {
+                IconButton(onClick = onNext, modifier = Modifier.testTag("compact_player_next")) {
+                    Icon(
+                        imageVector = Icons.Default.SkipNext,
+                        contentDescription = "Next Track",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                IconButton(onClick = onClose, modifier = Modifier.testTag("compact_player_close")) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Dismiss Player",

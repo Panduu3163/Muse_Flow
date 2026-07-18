@@ -5,6 +5,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -14,7 +16,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.PermMedia
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,23 +30,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeoutOrNull
-
-/** Search's two data sources: [ONLINE] is the existing merged JioSaavn+YouTube Music search;
- * [ON_DEVICE] scans local audio files via [LocalAudioProvider]/MediaStore instead - no network
- * involved. Only [ONLINE] has Album/Artist/Playlist tabs; MediaStore has no equivalent grouping,
- * so [ON_DEVICE] shows a single flat song list (via the same [SongResultRows] Online uses). */
-private enum class SearchMode { ONLINE, ON_DEVICE }
 
 private fun audioPermission(): String =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -57,11 +56,17 @@ fun SearchScreen(
     onPlaylistClick: (PlaylistResult) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedTab by remember { mutableStateOf(0) }
+    // Scoped via viewModel() to this screen's own NavBackStackEntry, which survives Now Playing
+    // being pushed on top and popped back off - so the query, results, and selected tab are still
+    // here when the user comes back, instead of resetting like plain remember{} state would.
+    val searchViewModel: SearchViewModel = viewModel()
+    var searchQuery by searchViewModel.searchQueryState
+    var selectedTab by searchViewModel.selectedTabState
+    var searchMode by searchViewModel.searchModeState
+    var hasSubmitted by searchViewModel.hasSubmittedState
     var isSearchFieldFocused by remember { mutableStateOf(false) }
-    var searchMode by remember { mutableStateOf(SearchMode.ONLINE) }
     val tabTitles = listOf("Songs", "Albums", "Artists", "Playlists")
+    val focusManager = LocalFocusManager.current
 
     val context = LocalContext.current
     var hasAudioPermission by remember {
@@ -82,6 +87,13 @@ fun SearchScreen(
         searchHistoryViewModel.record(searchQuery)
     }
 
+    fun submitSearch(query: String) {
+        if (query.isBlank()) return
+        searchQuery = query
+        hasSubmitted = true
+        focusManager.clearFocus()
+    }
+
     ThemedBackground(
         modifier = modifier.fillMaxSize()
     ) {
@@ -96,82 +108,97 @@ fun SearchScreen(
                 modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 12.dp)
             )
 
-            // Search Box
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = { Text("What do you want to listen to?", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = "Search Icon",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(
-                                imageVector = Icons.Default.Clear,
-                                contentDescription = "Clear search",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(24.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = Color.Transparent
-                ),
+            // Search Box, with a mode-toggle icon beside it (globe = Online, folder = On device)
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
-                    .onFocusChanged { isSearchFieldFocused = it.isFocused }
-                    .testTag("search_input_field")
-            )
+                    .padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { newValue ->
+                        searchQuery = newValue
+                        // Clearing the bar back to empty returns to the bare, pre-search state.
+                        if (newValue.isBlank()) hasSubmitted = false
+                    },
+                    placeholder = {
+                        Text(
+                            text = if (searchMode == SearchMode.ONLINE) "Search online..." else "Search local files...",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search Icon",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = {
+                                searchQuery = ""
+                                hasSubmitted = false
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.Clear,
+                                    contentDescription = "Clear search",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(24.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { submitSearch(searchQuery) }),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = Color.Transparent
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .onFocusChanged { isSearchFieldFocused = it.isFocused }
+                        .testTag("search_input_field")
+                )
 
-            if ((searchQuery.isEmpty() || isSearchFieldFocused) && recentQueries.isNotEmpty()) {
+                Spacer(modifier = Modifier.width(8.dp))
+
+                IconButton(
+                    onClick = {
+                        searchMode = if (searchMode == SearchMode.ONLINE) SearchMode.ON_DEVICE else SearchMode.ONLINE
+                        if (searchMode == SearchMode.ON_DEVICE && !hasAudioPermission) {
+                            audioPermissionLauncher.launch(audioPermission())
+                        }
+                    },
+                    modifier = Modifier.testTag("search_mode_toggle")
+                ) {
+                    Icon(
+                        imageVector = if (searchMode == SearchMode.ONLINE) Icons.Default.Public else Icons.Default.PermMedia,
+                        contentDescription = if (searchMode == SearchMode.ONLINE) "Online search - tap to switch to on-device" else "On-device search - tap to switch to online",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            // Recent-search chips - only while the field is actually focused (keyboard visible),
+            // never persistently sitting below the bar. Capped at the 6 most recent.
+            if (isSearchFieldFocused && recentQueries.isNotEmpty()) {
                 SearchHistoryChips(
-                    queries = recentQueries,
-                    onQueryClick = { searchQuery = it },
+                    queries = recentQueries.take(6),
+                    onQueryClick = { submitSearch(it) },
                     onQueryRemove = { searchHistoryViewModel.delete(it) },
                     onClearAll = { searchHistoryViewModel.clearAll() }
                 )
             }
 
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                SegmentedButton(
-                    selected = searchMode == SearchMode.ONLINE,
-                    onClick = { searchMode = SearchMode.ONLINE },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                    modifier = Modifier.testTag("search_mode_online")
-                ) {
-                    Text("Online")
-                }
-                SegmentedButton(
-                    selected = searchMode == SearchMode.ON_DEVICE,
-                    onClick = {
-                        searchMode = SearchMode.ON_DEVICE
-                        if (!hasAudioPermission) audioPermissionLauncher.launch(audioPermission())
-                    },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                    modifier = Modifier.testTag("search_mode_on_device")
-                ) {
-                    Text("On device")
-                }
-            }
-
-            // Category Tab Row - Online only; On-device search has no Album/Artist/Playlist
-            // equivalent, just one flat song list (see SongResultRows).
-            if (searchMode == SearchMode.ONLINE) {
+            // Category Tab Row - Online only, and only once a search has actually been
+            // submitted; On-device search has no Album/Artist/Playlist equivalent, just one flat
+            // song list (see SongResultRows).
+            if (searchMode == SearchMode.ONLINE && hasSubmitted) {
                 TabRow(
                     selectedTabIndex = selectedTab,
                     containerColor = Color.Transparent,
@@ -185,7 +212,7 @@ fun SearchScreen(
                     divider = {
                         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                     },
-                    modifier = Modifier.padding(bottom = 12.dp)
+                    modifier = Modifier.padding(top = 12.dp, bottom = 12.dp)
                 ) {
                     tabTitles.forEachIndexed { index, title ->
                         Tab(
@@ -205,25 +232,29 @@ fun SearchScreen(
                 }
             }
 
-            // Results Container
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            ) {
-                if (searchMode == SearchMode.ON_DEVICE) {
-                    OnDeviceResults(
-                        searchQuery = searchQuery,
-                        hasPermission = hasAudioPermission,
-                        onRequestPermission = { audioPermissionLauncher.launch(audioPermission()) },
-                        onPlayTrack = onPlayTrack
-                    )
-                } else {
-                    when (selectedTab) {
-                        0 -> SongsResults(searchQuery = searchQuery, onPlayTrack = onPlayTrack)
-                        1 -> AlbumsResults(searchQuery = searchQuery, onAlbumClick = onAlbumClick)
-                        2 -> ArtistsResults(searchQuery = searchQuery, onArtistClick = onArtistClick)
-                        3 -> PlaylistsResults(searchQuery = searchQuery, onPlaylistClick = onPlaylistClick)
+            // Results Container - nothing shows here at all until a search is actually submitted.
+            if (hasSubmitted) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(top = if (searchMode == SearchMode.ON_DEVICE) 12.dp else 0.dp)
+                ) {
+                    if (searchMode == SearchMode.ON_DEVICE) {
+                        OnDeviceResults(
+                            searchViewModel = searchViewModel,
+                            searchQuery = searchQuery,
+                            hasPermission = hasAudioPermission,
+                            onRequestPermission = { audioPermissionLauncher.launch(audioPermission()) },
+                            onPlayTrack = onPlayTrack
+                        )
+                    } else {
+                        when (selectedTab) {
+                            0 -> SongsResults(searchViewModel = searchViewModel, searchQuery = searchQuery, onPlayTrack = onPlayTrack)
+                            1 -> AlbumsResults(searchViewModel = searchViewModel, searchQuery = searchQuery, onAlbumClick = onAlbumClick)
+                            2 -> ArtistsResults(searchViewModel = searchViewModel, searchQuery = searchQuery, onArtistClick = onArtistClick)
+                            3 -> PlaylistsResults(searchViewModel = searchViewModel, searchQuery = searchQuery, onPlaylistClick = onPlaylistClick)
+                        }
                     }
                 }
             }
@@ -234,26 +265,20 @@ fun SearchScreen(
 /** Search's "On device" mode: searches local audio files via [LocalAudioProvider] (MediaStore) -
  * no network, no debounce-worthy latency to hide, just a quick local query - and renders through
  * the exact same [SongResultRows] Online's Songs tab uses, so a result looks identical regardless
- * of where it came from. */
+ * of where it came from. Results are cached on [searchViewModel] so they survive navigating away
+ * and back. */
 @Composable
 private fun OnDeviceResults(
+    searchViewModel: SearchViewModel,
     searchQuery: String,
     hasPermission: Boolean,
     onRequestPermission: () -> Unit,
     onPlayTrack: (Track, List<Track>) -> Unit
 ) {
-    val context = LocalContext.current
-    val localAudioProvider = remember { LocalAudioProvider(context) }
-    var state by remember { mutableStateOf<UiState<List<Track>>>(UiState.Loading) }
+    val state by searchViewModel.onDeviceResultState
 
     LaunchedEffect(searchQuery, hasPermission) {
-        if (!hasPermission) return@LaunchedEffect
-        state = UiState.Loading
-        delay(150) // still worth a light debounce so fast typing doesn't fire a query per key
-        state = loadAsUiState(errorMessage = "Couldn't scan audio files on this device.") {
-            localAudioProvider.search(searchQuery)
-                .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
-        }
+        searchViewModel.ensureOnDeviceLoaded(hasPermission)
     }
 
     if (!hasPermission) {
@@ -367,68 +392,19 @@ private fun SearchHistoryChips(
 }
 
 @Composable
-fun SongsResults(
+private fun SongsResults(
+    searchViewModel: SearchViewModel,
     searchQuery: String,
     onPlayTrack: (Track, List<Track>) -> Unit
 ) {
-    val context = LocalContext.current
-    val jioSaavnProvider = remember { JioSaavnProvider() }
-    val youTubeProvider = remember { YouTubeMusicProvider(context) }
-    var state by remember { mutableStateOf<UiState<List<Track>>>(UiState.Loading) }
+    val state by searchViewModel.songsResultState
 
     LaunchedEffect(searchQuery) {
-        if (searchQuery.isBlank()) {
-            state = UiState.Loading
-            return@LaunchedEffect
-        }
-        state = UiState.Loading
-        delay(350) // debounce so we don't fire a search per keystroke
-        var jioFailed = false
-        var ytFailed = false
-        // JioSaavn and YouTube Music are queried in parallel - neither should have to wait on
-        // the other - and each is individually bounded so a slow one can't hold the whole search
-        // "loading" forever; timing out counts the same as that source throwing.
-        val (jioResults, ytResults) = coroutineScope {
-            val jioDeferred = async {
-                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                    try {
-                        // Unlike YouTube results (never directly playable, resolved on tap
-                        // instead), a JioSaavn row is only worth showing if it's actually
-                        // playable - a small fraction fail DES decryption and come back null.
-                        jioSaavnProvider.search(searchQuery).filter { it.directStreamUrl != null }
-                    } catch (e: Exception) {
-                        null
-                    }
-                } ?: run { jioFailed = true; emptyList() }
-            }
-            val ytDeferred = async {
-                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                    try {
-                        youTubeProvider.search(searchQuery)
-                    } catch (e: Exception) {
-                        null
-                    }
-                } ?: run { ytFailed = true; emptyList() }
-            }
-            jioDeferred.await() to ytDeferred.await()
-        }
-        val merged = mergeSearchResults(jioResults, ytResults)
-            .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
-        // Only a genuine failure (both sources unreachable or timed out) counts as an error
-        // state - one source failing while the other succeeds should just show partial results.
-        state = if (jioFailed && ytFailed) {
-            UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")
-        } else {
-            UiState.Success(merged)
-        }
+        searchViewModel.ensureSongsLoaded()
     }
 
     val currentState = state
     when {
-        searchQuery.isBlank() -> EmptySearchState(
-            title = "Search for a song",
-            message = "Find any track, artist, or album to start listening."
-        )
         currentState is UiState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
         }
@@ -446,6 +422,11 @@ fun SongsResults(
  * only where the data comes from, never how a result looks. */
 @Composable
 private fun SongResultRows(results: List<Track>, onPlayTrack: (Track, List<Track>) -> Unit) {
+    // Shared with the Library/Now Playing heart - same Room-backed liked state, so liking a
+    // result here shows up everywhere else that track appears.
+    val likedSongsViewModel: LikedSongsViewModel = viewModel()
+    val likedKeys by likedSongsViewModel.likedKeys.collectAsState()
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 90.dp),
@@ -455,6 +436,7 @@ private fun SongResultRows(results: List<Track>, onPlayTrack: (Track, List<Track
             val gradientColors = MusicData.Gradients[track.gradientIndex % MusicData.Gradients.size]
             val isFromYouTube = track.sourceType == MusicSource.YOUTUBE_MUSIC
             val isLocalDevice = track.sourceType == MusicSource.LOCAL_DEVICE
+            val isLiked = likedKeys.contains(track.downloadKey())
 
             Row(
                 modifier = Modifier
@@ -515,67 +497,37 @@ private fun SongResultRows(results: List<Track>, onPlayTrack: (Track, List<Track
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                // Neither a YouTube track (streams via a fresh per-play resolve, not a fixed URL)
-                // nor a local-device track (already sitting on-device - nothing to download) needs
-                // this.
-                if (!isFromYouTube && !isLocalDevice) {
-                    DownloadButton(track = track, modifier = Modifier.testTag("search_download_button_${track.title.lowercase().replace(" ", "_")}"))
+                IconButton(
+                    onClick = { likedSongsViewModel.toggle(track) },
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("search_like_button_${track.title.lowercase().replace(" ", "_")}")
+                ) {
+                    Icon(
+                        imageVector = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = if (isLiked) "Remove from Liked" else "Add to Liked",
+                        tint = if (isLiked) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
+                // No per-row download button for any source here - same as YouTube always was
+                // (streams via a fresh per-play resolve, not a fixed URL); downloading now happens
+                // from Now Playing only, for every source alike.
             }
         }
     }
 }
 
 @Composable
-fun AlbumsResults(searchQuery: String, onAlbumClick: (AlbumResult) -> Unit) {
-    val context = LocalContext.current
-    val jioSaavnProvider = remember { JioSaavnProvider() }
-    val youTubeProvider = remember { YouTubeMusicProvider(context) }
-    var state by remember { mutableStateOf<UiState<List<AlbumResult>>>(UiState.Loading) }
+private fun AlbumsResults(searchViewModel: SearchViewModel, searchQuery: String, onAlbumClick: (AlbumResult) -> Unit) {
+    val state by searchViewModel.albumsResultState
 
     LaunchedEffect(searchQuery) {
-        if (searchQuery.isBlank()) {
-            state = UiState.Loading
-            return@LaunchedEffect
-        }
-        state = UiState.Loading
-        delay(350)
-        var jioFailed = false
-        var ytFailed = false
-        val (jioResults, ytResults) = coroutineScope {
-            val jioDeferred = async {
-                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                    try {
-                        jioSaavnProvider.searchAlbums(searchQuery)
-                    } catch (e: Exception) {
-                        null
-                    }
-                } ?: run { jioFailed = true; emptyList() }
-            }
-            val ytDeferred = async {
-                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                    try {
-                        youTubeProvider.searchAlbums(searchQuery)
-                    } catch (e: Exception) {
-                        null
-                    }
-                } ?: run { ytFailed = true; emptyList() }
-            }
-            jioDeferred.await() to ytDeferred.await()
-        }
-        state = if (jioFailed && ytFailed) {
-            UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")
-        } else {
-            UiState.Success(mergeAlbumResults(jioResults, ytResults))
-        }
+        searchViewModel.ensureAlbumsLoaded()
     }
 
     val currentState = state
     when {
-        searchQuery.isBlank() -> EmptySearchState(
-            title = "Search for an album",
-            message = "Find any album to browse its tracklist."
-        )
         currentState is UiState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
         }
@@ -644,55 +596,15 @@ fun AlbumsResults(searchQuery: String, onAlbumClick: (AlbumResult) -> Unit) {
 }
 
 @Composable
-fun ArtistsResults(searchQuery: String, onArtistClick: (ArtistResult) -> Unit) {
-    val context = LocalContext.current
-    val jioSaavnProvider = remember { JioSaavnProvider() }
-    val youTubeProvider = remember { YouTubeMusicProvider(context) }
-    var state by remember { mutableStateOf<UiState<List<ArtistResult>>>(UiState.Loading) }
+private fun ArtistsResults(searchViewModel: SearchViewModel, searchQuery: String, onArtistClick: (ArtistResult) -> Unit) {
+    val state by searchViewModel.artistsResultState
 
     LaunchedEffect(searchQuery) {
-        if (searchQuery.isBlank()) {
-            state = UiState.Loading
-            return@LaunchedEffect
-        }
-        state = UiState.Loading
-        delay(350)
-        var jioFailed = false
-        var ytFailed = false
-        val (jioResults, ytResults) = coroutineScope {
-            val jioDeferred = async {
-                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                    try {
-                        jioSaavnProvider.searchArtists(searchQuery)
-                    } catch (e: Exception) {
-                        null
-                    }
-                } ?: run { jioFailed = true; emptyList() }
-            }
-            val ytDeferred = async {
-                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                    try {
-                        youTubeProvider.searchArtists(searchQuery)
-                    } catch (e: Exception) {
-                        null
-                    }
-                } ?: run { ytFailed = true; emptyList() }
-            }
-            jioDeferred.await() to ytDeferred.await()
-        }
-        state = if (jioFailed && ytFailed) {
-            UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")
-        } else {
-            UiState.Success(mergeArtistResults(jioResults, ytResults))
-        }
+        searchViewModel.ensureArtistsLoaded()
     }
 
     val currentState = state
     when {
-        searchQuery.isBlank() -> EmptySearchState(
-            title = "Search for an artist",
-            message = "Find any artist to browse their top songs."
-        )
         currentState is UiState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
         }
@@ -753,55 +665,15 @@ fun ArtistsResults(searchQuery: String, onArtistClick: (ArtistResult) -> Unit) {
 }
 
 @Composable
-fun PlaylistsResults(searchQuery: String, onPlaylistClick: (PlaylistResult) -> Unit) {
-    val context = LocalContext.current
-    val jioSaavnProvider = remember { JioSaavnProvider() }
-    val youTubeProvider = remember { YouTubeMusicProvider(context) }
-    var state by remember { mutableStateOf<UiState<List<PlaylistResult>>>(UiState.Loading) }
+private fun PlaylistsResults(searchViewModel: SearchViewModel, searchQuery: String, onPlaylistClick: (PlaylistResult) -> Unit) {
+    val state by searchViewModel.playlistsResultState
 
     LaunchedEffect(searchQuery) {
-        if (searchQuery.isBlank()) {
-            state = UiState.Loading
-            return@LaunchedEffect
-        }
-        state = UiState.Loading
-        delay(350)
-        var jioFailed = false
-        var ytFailed = false
-        val (jioResults, ytResults) = coroutineScope {
-            val jioDeferred = async {
-                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                    try {
-                        jioSaavnProvider.searchPlaylists(searchQuery)
-                    } catch (e: Exception) {
-                        null
-                    }
-                } ?: run { jioFailed = true; emptyList() }
-            }
-            val ytDeferred = async {
-                withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                    try {
-                        youTubeProvider.searchPlaylists(searchQuery)
-                    } catch (e: Exception) {
-                        null
-                    }
-                } ?: run { ytFailed = true; emptyList() }
-            }
-            jioDeferred.await() to ytDeferred.await()
-        }
-        state = if (jioFailed && ytFailed) {
-            UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")
-        } else {
-            UiState.Success(mergePlaylistResults(jioResults, ytResults))
-        }
+        searchViewModel.ensurePlaylistsLoaded()
     }
 
     val currentState = state
     when {
-        searchQuery.isBlank() -> EmptySearchState(
-            title = "Search for a playlist",
-            message = "Find any playlist to browse its tracklist."
-        )
         currentState is UiState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
         }

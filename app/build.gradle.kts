@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.museflow.kqfzyw"
     minSdk = 24
     targetSdk = 36
-    versionCode = 8
-    versionName = "1.0.8"
+    versionCode = 10
+    versionName = "1.1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -47,6 +47,15 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
+    create("beta") {
+      initWith(getByName("debug"))
+      // Separate applicationId so this installs alongside any existing debug/release MuseFlow
+      // build as its own app icon, rather than overwriting it.
+      applicationIdSuffix = ".beta"
+      versionNameSuffix = "-beta"
+      matchingFallbacks += listOf("debug")
+      signingConfig = signingConfigs.getByName("debugConfig")
+    }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
