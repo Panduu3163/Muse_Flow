@@ -18,3 +18,4 @@ local.properties
 debug.keystore
 .claude/settings.local.json
 .scratch/
+repo/
