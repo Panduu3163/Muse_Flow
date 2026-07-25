@@ -1,192 +1,148 @@
 package com.example
 
 import android.app.Application
-import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
-
-/** A Home shelf backed by a canned search query, standing in for a real recommendation system. */
-private data class MoodShelfQuery(val title: String, val query: String)
-
-private val moodShelfQueries = listOf(
-    MoodShelfQuery("Chill Vibes", "lofi chill beats"),
-    MoodShelfQuery("Workout Energy", "workout gym hype"),
-    MoodShelfQuery("Party Hits", "party dance hits"),
-    MoodShelfQuery("Focus Flow", "instrumental focus study")
-)
 
 /**
- * Real data for Home, in place of the static [MusicData] shelves: "Recently Played" comes from
- * actual playback history in Room ([PlaybackHistoryRepository]), and every other shelf is a
- * canned genre/mood search against JioSaavn and YouTube Music - a stand-in for a real
- * recommendation system, which doesn't exist yet. Each shelf loads independently (its entry in
- * [moodShelves] is missing until that one search resolves) so a slow or failed shelf doesn't
- * block the others from appearing.
+ * Home's state: entirely local data first (recently played, most played, playlists), plus a set of
+ * genre/mood shelves fetched through whichever extractor is selected.
  *
- * Every successful shelf fetch is also cached to Room ([HomeShelfCacheDao]), so when there's no
- * connectivity at all, Home falls back to showing that last-fetched snapshot (cover art keeps
- * working too - Coil already has those same image URLs in its own disk cache from the original
- * load) instead of an empty "couldn't load" state for content that was already fetched once.
- * [isOffline] tells the UI to label that fallback content as such - and, via a
- * [ConnectivityManager.NetworkCallback] registered in [init], flips back to false and triggers a
- * real re-fetch the moment connectivity actually returns, instead of leaving that stale cached
- * snapshot on screen indefinitely until the user manually reopens Home.
+ * Shelves are cached to Room ([HomeShelfCacheDao]) as they arrive and served from that cache on the
+ * next launch, so Home renders instantly and still shows something useful with no connectivity -
+ * a fetch failure falls back to the cached copy rather than an empty screen.
  */
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val playbackHistoryRepository = PlaybackHistoryRepository.getInstance(application)
+    private val historyRepository = PlaybackHistoryRepository.getInstance(application)
+    private val playlistRepository = PlaylistRepository.getInstance(application)
     private val shelfCacheDao = MuseFlowDatabase.getInstance(application).homeShelfCacheDao()
-    private val jioSaavnProvider = JioSaavnProvider()
-    private val youTubeProvider = YouTubeMusicProvider(application)
-    private val connectivityManager =
-        application.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val searchRouter = MusicSearchRouter(application)
 
-    /** Null while the first read from Room is still in flight; empty once loaded with no history. */
-    val recentlyPlayed: StateFlow<List<Track>?> = playbackHistoryRepository.observeRecent(10)
+    /** The canned genre/mood shelves Home shows below its local sections. */
+    val shelfTitles = listOf("Trending Now", "Chill Vibes", "Workout Energy", "Throwback Hits")
+
+    val recentlyPlayed: StateFlow<List<Track>> = historyRepository.observeRecent(20)
         .map { entities -> entities.map { it.toTrack() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val topPlayed: StateFlow<List<Track>> = historyRepository.observeTopPlayed(20)
+        .map { entities -> entities.map { it.toTrack() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val playlists: StateFlow<List<PlaylistEntity>> = playlistRepository.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** The single most recent track, for the "Continue Listening" resume card. */
+    val continueListening: StateFlow<Track?> = recentlyPlayed
+        .map { it.firstOrNull() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    val shelfTitles: List<String> = moodShelfQueries.map { it.title }
+    /**
+     * Habit-driven shelves, computed from real listening history rather than fetched.
+     *
+     * "Forgotten favourites" is the interesting one: tracks with a high play count that haven't
+     * been touched recently. That's genuinely useful *and* honest - it's derived from what the
+     * user actually did, not a recommendation model pretending to know their taste.
+     */
+    val forgottenFavourites: StateFlow<List<Track>> =
+        combine(topPlayed, recentlyPlayed) { top, recent ->
+            val recentKeys = recent.take(15).map { it.downloadKey() }.toSet()
+            top.filter { it.downloadKey() !in recentKeys }.take(12)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    /** Whether the mood/genre shelves below are currently showing a cached fallback rather than
-     * freshly-fetched content - reactive (not just a load-time snapshot), since a
-     * [ConnectivityManager.NetworkCallback] can flip it back to false mid-session once
-     * connectivity actually returns. */
-    private val _isOffline = MutableStateFlow(!isOnline(application))
-    val isOffline: StateFlow<Boolean> = _isOffline
+    /** The artist the user plays most, used to label and seed the "more like this" shelf. */
+    val favouriteArtist: StateFlow<String?> = topPlayed
+        .map { tracks ->
+            tracks.mapNotNull { it.artist.takeIf(String::isNotBlank) }
+                .groupingBy { it }
+                .eachCount()
+                .maxByOrNull { it.value }
+                ?.key
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    /** Shelf title -> [UiState]. A missing entry (or [UiState.Loading]) means that shelf's search
-     * hasn't resolved yet; [UiState.Error] means a genuine failure or timeout with no cached
-     * fallback available, distinct from [UiState.Success] with an empty list (resolved, just
-     * nothing playable found). A [UiState.Success] while [isOffline] is true is cached content. */
-    private val _moodShelves = MutableStateFlow<Map<String, UiState<List<Track>>>>(emptyMap())
-    val moodShelves: StateFlow<Map<String, UiState<List<Track>>>> = _moodShelves
+    private val _similarToFavourite = MutableStateFlow<List<Track>>(emptyList())
+    val similarToFavourite: StateFlow<List<Track>> = _similarToFavourite.asStateFlow()
+
+    init {
+        // Re-fetch whenever the user's most-played artist changes, so this shelf tracks taste
+        // drift instead of being pinned to whoever they listened to first.
+        viewModelScope.launch {
+            favouriteArtist.collect { artist ->
+                if (artist.isNullOrBlank()) {
+                    _similarToFavourite.value = emptyList()
+                    return@collect
+                }
+                _similarToFavourite.value = runCatching { searchRouter.searchTracks(artist) }
+                    .getOrNull()
+                    .orEmpty()
+                    .map { it.toPlayableTrack(artist.hashCode()) }
+                    .take(12)
+            }
+        }
+    }
+
+    private val _shelves = MutableStateFlow<Map<String, UiState<List<Track>>>>(
+        shelfTitles.associateWith { UiState.Loading }
+    )
+    val shelves: StateFlow<Map<String, UiState<List<Track>>>> = _shelves.asStateFlow()
 
     init {
         loadShelves()
-        registerNetworkCallback()
     }
 
-    /** Watches for connectivity actually coming back (not just being newly requested/checked),
-     * so a shelf that fell back to cached data while offline gets replaced with a real, fresh
-     * fetch as soon as it's possible again - rather than the user having to leave and reopen
-     * Home, or the stale snapshot just sitting there indefinitely. */
-    private fun registerNetworkCallback() {
-        val manager = connectivityManager ?: return
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                // Only actually worth re-fetching if we were showing stale/cached content -
-                // onAvailable also fires once just from registering while already online, and
-                // again for every additional network satisfying the request (e.g. Wi-Fi joining
-                // alongside cellular), neither of which should trigger a redundant re-fetch.
-                if (_isOffline.value) {
-                    _isOffline.value = false
-                    loadShelves()
-                }
-            }
-
-            override fun onLost(network: Network) {
-                if (!isOnline(getApplication())) {
-                    _isOffline.value = true
-                }
-            }
-        }
-        networkCallback = callback
-        manager.registerNetworkCallback(request, callback)
-    }
+    fun refresh() = loadShelves()
 
     private fun loadShelves() {
-        moodShelfQueries.forEach { shelf ->
+        shelfTitles.forEach { title ->
             viewModelScope.launch {
-                if (_isOffline.value) {
-                    // No point even trying the network - go straight to whatever was cached last.
-                    val cached = shelfCacheDao.get(shelf.title)
-                    _moodShelves.update {
-                        it + (shelf.title to if (cached != null) {
-                            UiState.Success(parseTracksJson(cached.tracksJson))
-                        } else {
-                            UiState.Error("You're offline, and \"${shelf.title}\" hasn't loaded before.")
-                        })
-                    }
-                    return@launch
+                // Cached copy first, so the shelf has content while the network call is in flight.
+                val cached = runCatching { shelfCacheDao.get(title) }.getOrNull()
+                    ?.let { parseTracksJson(it.tracksJson) }
+                    .orEmpty()
+                if (cached.isNotEmpty()) {
+                    _shelves.update(title, UiState.Success(cached))
                 }
 
-                // Same JioSaavn-first-with-YouTube-fallback pattern Search uses: both sources are
-                // queried in parallel (so a slow one can't hold up the whole shelf), merged
-                // (JioSaavn results first, then any YouTube ones that aren't already covered), and
-                // only treated as a genuine failure if both come back empty/erroring - this is
-                // what keeps a shelf resilient to a JioSaavn-side outage or regional throttling,
-                // rather than depending on JioSaavn alone the way this shelf used to.
-                var jioFailed = false
-                var ytFailed = false
-                val (jioResults, ytResults) = coroutineScope {
-                    val jioDeferred = async {
-                        withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                            try {
-                                jioSaavnProvider.search(shelf.query).filter { it.directStreamUrl != null }
-                            } catch (e: Exception) {
-                                null
-                            }
-                        } ?: run { jioFailed = true; emptyList() }
-                    }
-                    val ytDeferred = async {
-                        withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                            try {
-                                youTubeProvider.search(shelf.query)
-                            } catch (e: Exception) {
-                                null
-                            }
-                        } ?: run { ytFailed = true; emptyList() }
-                    }
-                    jioDeferred.await() to ytDeferred.await()
-                }
+                val fresh = runCatching { searchRouter.searchTracks(title) }.getOrNull()
+                    ?.map { it.toPlayableTrack(title.hashCode()) }
 
-                if (jioFailed && ytFailed) {
-                    // A genuine fetch failure despite (as far as we knew) having connectivity -
-                    // still worth falling back to a cached snapshot rather than an empty error,
-                    // same reasoning as the offline branch above.
-                    val cached = shelfCacheDao.get(shelf.title)
-                    _moodShelves.update {
-                        it + (shelf.title to if (cached != null) {
-                            UiState.Success(parseTracksJson(cached.tracksJson))
-                        } else {
-                            UiState.Error("Couldn't load \"${shelf.title}\" right now.")
-                        })
+                when {
+                    !fresh.isNullOrEmpty() -> {
+                        _shelves.update(title, UiState.Success(fresh))
+                        runCatching {
+                            shelfCacheDao.upsert(
+                                HomeShelfCacheEntity(
+                                    shelfTitle = title,
+                                    tracksJson = fresh.toJson(),
+                                    cachedAt = System.currentTimeMillis(),
+                                )
+                            )
+                        }
                     }
-                    return@launch
-                }
-
-                val merged = mergeSearchResults(shelf.query, jioResults, ytResults)
-                    .take(10)
-                    .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
-                _moodShelves.update { it + (shelf.title to UiState.Success(merged)) }
-                if (merged.isNotEmpty()) {
-                    shelfCacheDao.upsert(HomeShelfCacheEntity(shelf.title, merged.toJson(), System.currentTimeMillis()))
+                    // Network gave nothing but the cache already did - keep showing the cache.
+                    cached.isNotEmpty() -> Unit
+                    else -> _shelves.update(title, UiState.Error("Couldn't load \"$title\" right now."))
                 }
             }
         }
     }
 
-    override fun onCleared() {
-        networkCallback?.let { connectivityManager?.unregisterNetworkCallback(it) }
-        super.onCleared()
+    private fun MutableStateFlow<Map<String, UiState<List<Track>>>>.update(
+        title: String,
+        state: UiState<List<Track>>,
+    ) {
+        value = value.toMutableMap().apply { put(title, state) }
     }
+
+    fun recordPlayed(track: Track) = historyRepository.recordPlayed(track)
 }

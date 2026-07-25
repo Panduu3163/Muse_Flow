@@ -3,74 +3,102 @@ package com.example
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+/** The sections Library can show, each backed by a different surviving repository. */
+enum class LibrarySection(val label: String) {
+    Playlists("Playlists"),
+    Liked("Liked"),
+    Downloads("Downloads"),
+    TopPlayed("Top 50"),
+    Recent("Recent"),
+}
+
 /**
- * Facade for the parts of Library that aren't covered by [DownloadViewModel] (Downloads tile) or
- * [LikedSongsViewModel] (Liked tile): the user's created playlists, "My Top 50" (real play
- * counts, not just recency), and "Cached" (whatever Home has actually cached for offline
- * browsing) - all Room-backed so they start empty on a fresh install and update live.
+ * Library state. Every list here comes from a repository that survived the frontend wipe - nothing
+ * is fetched from the network, so Library works fully offline.
  */
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
 
     private val playlistRepository = PlaylistRepository.getInstance(application)
-    private val playbackHistoryRepository = PlaybackHistoryRepository.getInstance(application)
-    private val shelfCacheDao = MuseFlowDatabase.getInstance(application).homeShelfCacheDao()
+    private val likedRepository = LikedSongsRepository.getInstance(application)
+    private val historyRepository = PlaybackHistoryRepository.getInstance(application)
+    private val downloadedDao = MuseFlowDatabase.getInstance(application).downloadedTrackDao()
+
+    private val _section = MutableStateFlow(LibrarySection.Playlists)
+    val section: StateFlow<LibrarySection> = _section.asStateFlow()
+
+    private val _trackSort = MutableStateFlow(TrackSortOption.DEFAULT)
+    val trackSort: StateFlow<TrackSortOption> = _trackSort.asStateFlow()
+
+    private val _playlistSort = MutableStateFlow(PlaylistSortOption.DEFAULT)
+    val playlistSort: StateFlow<PlaylistSortOption> = _playlistSort.asStateFlow()
+
+    private val _ascending = MutableStateFlow(true)
+    val ascending: StateFlow<Boolean> = _ascending.asStateFlow()
+
+    private val _gridView = MutableStateFlow(false)
+    val gridView: StateFlow<Boolean> = _gridView.asStateFlow()
+
+    fun setTrackSort(option: TrackSortOption) { _trackSort.value = option }
+    fun setPlaylistSort(option: PlaylistSortOption) { _playlistSort.value = option }
+    fun toggleDirection() { _ascending.value = !_ascending.value }
+    fun toggleGridView() { _gridView.value = !_gridView.value }
+
+    /** Applies the current sort to any track list. Kept as a function rather than pre-sorting each
+     * StateFlow so one sort selection governs every section without duplicating the plumbing. */
+    fun sortTracks(tracks: List<Track>): List<Track> =
+        tracks.sortedByLibraryOption(_trackSort.value, _ascending.value)
 
     val playlists: StateFlow<List<PlaylistEntity>> = playlistRepository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val topPlayed: StateFlow<List<Track>> = playbackHistoryRepository.observeTopPlayed(50)
+    val likedSongs: StateFlow<List<Track>> = likedRepository.observeAll()
         .map { entities -> entities.map { it.toTrack() } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    /** Whatever Home's offline shelf cache actually has on disk right now, deduped across shelves
-     * - real cached content, the same one Home falls back to when offline, not a separate cache
-     * of its own. */
-    val cachedTracks: StateFlow<List<Track>> = shelfCacheDao.observeAll()
-        .map { shelves ->
-            shelves.flatMap { parseTracksJson(it.tracksJson) }.distinctBy { it.downloadKey() }
-        }
+    val downloads: StateFlow<List<Track>> = downloadedDao.observeCompleted()
+        .map { entities -> entities.map { it.toTrack() } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun createPlaylist(name: String) {
-        if (name.isBlank()) return
-        viewModelScope.launch { playlistRepository.create(name) }
-    }
+    val topPlayed: StateFlow<List<Track>> = historyRepository.observeTopPlayed(50)
+        .map { entities -> entities.map { it.toTrack() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    /** Creates a new playlist with [tracks] already in it - the "+ New Playlist" flow's
-     * add-songs step, after naming. */
-    fun createPlaylistWithTracks(name: String, tracks: List<Track>) {
-        if (name.isBlank()) return
-        viewModelScope.launch {
-            val id = playlistRepository.create(name)
-            if (tracks.isNotEmpty()) playlistRepository.addTracks(id, tracks)
-        }
-    }
+    val recentlyPlayed: StateFlow<List<Track>> = historyRepository.observeRecent(50)
+        .map { entities -> entities.map { it.toTrack() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    /** Saves a full online playlist (real cover + tracks) as a new local playlist - "Add to my
-     * library" on an online playlist's detail screen. */
-    fun importPlaylist(name: String, coverImageUrl: String?, tracks: List<Track>) {
-        if (name.isBlank() || tracks.isEmpty()) return
-        viewModelScope.launch { playlistRepository.importOnlinePlaylist(name, coverImageUrl, tracks) }
+    fun selectSection(section: LibrarySection) {
+        _section.value = section
     }
-
-    fun removeTrackFromPlaylist(playlistId: Long, track: Track) {
-        viewModelScope.launch { playlistRepository.removeTrack(playlistId, track.downloadKey()) }
-    }
-
-    // Cached per playlist id so every card/detail screen observing the same playlist shares one
-    // collector instead of each recomposition spinning up its own - same pattern would apply if
-    // this ever needed manual invalidation, but playlists are never deleted today so it doesn't.
-    private val playlistTracksCache = mutableMapOf<Long, StateFlow<List<Track>>>()
 
     fun tracksForPlaylist(playlistId: Long): StateFlow<List<Track>> =
-        playlistTracksCache.getOrPut(playlistId) {
-            playlistRepository.observeTracks(playlistId)
-                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-        }
+        playlistRepository.observeTracks(playlistId)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun createPlaylist(name: String) {
+        viewModelScope.launch { playlistRepository.create(name) }
+    }
 }
+
+/** Rebuilds a playable [Track] from a completed download - [Track.streamUrl] points at the local
+ * file, so playback never touches the network for a downloaded track. */
+fun DownloadedTrackEntity.toTrack(): Track = Track(
+    title = title,
+    artist = artist,
+    album = album,
+    duration = duration,
+    plays = "",
+    gradientIndex = gradientIndex,
+    imageUrl = imageUrl,
+    streamUrl = filePath,
+    sourceType = sourceType?.let { saved -> runCatching { MusicSource.valueOf(saved) }.getOrNull() },
+    sourceId = sourceId,
+)

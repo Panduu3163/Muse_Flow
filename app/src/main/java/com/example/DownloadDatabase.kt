@@ -193,6 +193,38 @@ interface PlaylistTrackDao {
     suspend fun delete(playlistId: Long, key: String)
 }
 
+/** A followed artist (see [FollowedArtistsRepository]) - [knownTrackIds] is the comma-joined
+ * baseline [ArtistReleaseCheckWorker] diffs a fresh tracklist fetch against (see
+ * [newReleaseTrackIds]) to detect a genuinely new release, empty until the first successful
+ * check. */
+@Entity(tableName = "followed_artists")
+data class FollowedArtistEntity(
+    @PrimaryKey val artistId: String,
+    val name: String,
+    val imageUrl: String?,
+    val sourceType: String,
+    val followedAt: Long,
+    val knownTrackIds: String = ""
+)
+
+@Dao
+interface FollowedArtistDao {
+    @Query("SELECT * FROM followed_artists ORDER BY followedAt DESC")
+    fun observeAll(): Flow<List<FollowedArtistEntity>>
+
+    @Query("SELECT * FROM followed_artists")
+    suspend fun getAll(): List<FollowedArtistEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: FollowedArtistEntity)
+
+    @Query("DELETE FROM followed_artists WHERE artistId = :artistId")
+    suspend fun unfollow(artistId: String)
+
+    @Query("UPDATE followed_artists SET knownTrackIds = :knownTrackIds WHERE artistId = :artistId")
+    suspend fun updateKnownTrackIds(artistId: String, knownTrackIds: String)
+}
+
 /** v3 -> v4: adds [DownloadedTrackEntity.sourceId]/[DownloadedTrackEntity.sourceType] and
  * [PlaybackHistoryEntity.sourceId]/[PlaybackHistoryEntity.sourceType] - both nullable with no
  * default needed beyond SQLite's implicit NULL, so a plain `ADD COLUMN` is enough; existing rows
@@ -272,6 +304,19 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
     }
 }
 
+/** v9 -> v10: adds [FollowedArtistEntity]'s table, for follow-artist new-release notifications - a
+ * brand new table, so a plain `CREATE TABLE` is enough. */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `followed_artists` (" +
+                "`artistId` TEXT NOT NULL, `name` TEXT NOT NULL, `imageUrl` TEXT, " +
+                "`sourceType` TEXT NOT NULL, `followedAt` INTEGER NOT NULL, " +
+                "`knownTrackIds` TEXT NOT NULL DEFAULT '', PRIMARY KEY(`artistId`))"
+        )
+    }
+}
+
 @Database(
     entities = [
         DownloadedTrackEntity::class,
@@ -280,9 +325,10 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
         PlaylistEntity::class,
         PlaylistTrackEntity::class,
         HomeShelfCacheEntity::class,
-        SearchHistoryEntity::class
+        SearchHistoryEntity::class,
+        FollowedArtistEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class MuseFlowDatabase : RoomDatabase() {
@@ -293,6 +339,7 @@ abstract class MuseFlowDatabase : RoomDatabase() {
     abstract fun playlistTrackDao(): PlaylistTrackDao
     abstract fun homeShelfCacheDao(): HomeShelfCacheDao
     abstract fun searchHistoryDao(): SearchHistoryDao
+    abstract fun followedArtistDao(): FollowedArtistDao
 
     companion object {
         @Volatile private var instance: MuseFlowDatabase? = null
@@ -304,7 +351,10 @@ abstract class MuseFlowDatabase : RoomDatabase() {
                     MuseFlowDatabase::class.java,
                     "museflow.db"
                 )
-                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                    .addMigrations(
+                        MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
+                        MIGRATION_8_9, MIGRATION_9_10
+                    )
                     .build().also { instance = it }
             }
     }

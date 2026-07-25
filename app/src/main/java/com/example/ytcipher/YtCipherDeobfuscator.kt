@@ -36,6 +36,8 @@ object YtCipherDeobfuscator {
     private var webView: YtCipherWebView? = null
     private var webViewPlayerHash: String? = null
 
+    private val recoveryPolicy = WebViewRecoveryPolicy()
+
     /**
      * Deciphers a `signatureCipher` query string (the `sp=`/`s=`/`url=` triple YouTube's WEB/
      * WEB_REMIX clients embed in place of a direct `url` for any format that needs a signature)
@@ -80,6 +82,11 @@ object YtCipherDeobfuscator {
 
         if (webView != null && webViewPlayerHash == playerJs.hash) return webView
 
+        if (!recoveryPolicy.shouldAttempt()) {
+            Log.w(TAG, "skipping WebView (re)creation - in cooldown after repeated failures")
+            return null
+        }
+
         // WebView.destroy() (called by close()) must run on the main thread like every other
         // WebView method. This function itself now always runs on Dispatchers.IO (see the public
         // entry points above), so without this explicit switch back, close() would run on IO and
@@ -97,8 +104,13 @@ object YtCipherDeobfuscator {
 
         val created = runCatching {
             YtCipherWebView.create(appContext, playerJs.source, sigInfo, nInfo)
-        }.onFailure { Log.e(TAG, "YtCipherWebView.create threw", it) }.getOrNull() ?: return null
+        }.onFailure { Log.e(TAG, "YtCipherWebView.create threw", it) }.getOrNull()
 
+        if (created == null) {
+            recoveryPolicy.onFailure()
+            return null
+        }
+        recoveryPolicy.onSuccess()
         webView = created
         webViewPlayerHash = playerJs.hash
         return created
