@@ -14,12 +14,10 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 
 private const val TAG = "YtStreamResolver"
 
@@ -35,18 +33,23 @@ private const val TAG = "YtStreamResolver"
  * deciphering - see each call site below for exactly where every piece goes in the request,
  * following Metrolist's wiring (GPL-3.0, https://github.com/MetrolistGroup/Metrolist).
  *
- * **Never cache the result.** Confirmed by testing: a resolved URL 403s within minutes (the
- * PoToken-bound freshness window is much shorter than the `expire=` timestamp embedded in the URL
- * suggests). [resolve] must be called fresh immediately before every actual playback attempt -
- * see [PlaybackService]'s `museflow.invalid` resolving data source, which calls this on every
- * single HTTP (re)open, not just once per track.
+ * **Resolved URLs are cached against the real `expiresInSeconds` the player response itself
+ * reports** (see [ResolvedUrlCache]), not held forever - a resolve that would otherwise repeat
+ * the whole visitorData/PoToken/cipher/`/player` pipeline on every single ExoPlayer HTTP (re)open
+ * (skip-back, resume-after-pause, ...) can instead be served from cache until shortly before it
+ * actually expires. [invalidate] clears an entry early when playback of it fails, matching
+ * Metrolist's `songUrlCache` (`MusicService.kt`, GPL-3.0) shape. See [PlaybackService]'s
+ * `museflow.invalid` resolving data source, which still calls [resolve] on every HTTP (re)open -
+ * caching happens inside [resolve] itself, so callers don't need to know or care.
  */
 object YouTubeStreamResolver {
 
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .build()
+    private val httpClient get() = YtHttpClients.client
+
+    // Bounds memory for a long session with a large queue without needing a separate eviction
+    // pass. See [ResolvedUrlCache] for the expiry/eviction math itself (extracted so it's directly
+    // unit-testable without dragging in Context/OkHttp/WebView).
+    private val urlCache = ResolvedUrlCache()
 
     // visitorData itself isn't the short-lived part (only the minted stream URL/PoToken pairing
     // is) - fetched once and reused, refreshed only if a resolve attempt fails outright.
@@ -61,9 +64,11 @@ object YouTubeStreamResolver {
     private const val RESOLVE_TIMEOUT_MS = 20_000L
 
     /** Resolves [videoId] to a directly-playable URL, or null if any step fails or exceeds
-     * [RESOLVE_TIMEOUT_MS]. Safe to call from any thread - internally dispatches to
+     * [RESOLVE_TIMEOUT_MS]. Serves a cached URL (see class doc) when one is still live, skipping
+     * the whole pipeline. Safe to call from any thread - internally dispatches to
      * [Dispatchers.IO]. */
     suspend fun resolve(context: Context, videoId: String): String? = withContext(Dispatchers.IO) {
+        urlCache.get(videoId)?.let { return@withContext it }
         try {
             withTimeout(RESOLVE_TIMEOUT_MS) { resolveInternal(context, videoId) }
         } catch (e: TimeoutCancellationException) {
@@ -73,6 +78,14 @@ object YouTubeStreamResolver {
             Log.e(TAG, "[$videoId] resolve() failed", e)
             null
         }
+    }
+
+    /** Drops any cached resolution for [videoId], forcing the next [resolve] call to run the
+     * full pipeline. Callers should invoke this after a playback failure for a track resolved
+     * from cache, in case the cached URL is the reason it failed (expired early, rejected by the
+     * CDN for an unrelated reason, ...) - see [PlayerViewModel]'s YouTube retry path. */
+    fun invalidate(videoId: String) {
+        urlCache.invalidate(videoId)
     }
 
     private suspend fun resolveInternal(context: Context, videoId: String): String? {
@@ -127,6 +140,11 @@ object YouTubeStreamResolver {
             streamUrl = YtCipherDeobfuscator.transformNParamInUrl(streamUrl)
             val separator = if ("?" in streamUrl) "&" else "?"
             streamUrl = "$streamUrl${separator}pot=${Uri.encode(poToken.streamingDataPoToken)}"
+
+            val expiresInSeconds = playerResponse.optJSONObject("streamingData")
+                ?.optString("expiresInSeconds")
+                ?.toLongOrNull()
+            urlCache.put(videoId, streamUrl, expiresInSeconds)
 
             streamUrl
         } catch (e: Exception) {

@@ -19,9 +19,14 @@ dependencyResolutionManagement {
   repositories {
     google()
     mavenCentral()
+    // NewPipeExtractor, pulled in by :innertube, is published on JitPack rather than Maven Central.
+    maven { setUrl("https://jitpack.io") }
   }
 }
 
 rootProject.name = "MuseFlow"
 
 include(":app")
+
+// YouTube/InnerTube API client, ported from Echo-Music (GPL-3.0).
+include(":innertube")

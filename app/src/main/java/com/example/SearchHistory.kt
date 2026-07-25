@@ -79,15 +79,3 @@ class SearchHistoryRepository private constructor(context: Context) {
             }
     }
 }
-
-/** Thin ViewModel wrapper over [SearchHistoryRepository] for [SearchScreen]. */
-class SearchHistoryViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository = SearchHistoryRepository.getInstance(application)
-
-    val recentQueries: StateFlow<List<String>> = repository.observeRecent()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    fun record(query: String) = repository.record(query)
-    fun delete(query: String) = repository.delete(query)
-    fun clearAll() = repository.clearAll()
-}

@@ -3,8 +3,10 @@ package com.example
 /** Visual treatment for a player surface's background. */
 enum class BackgroundStyle(val label: String) {
     Solid("Solid"),
-    LiquidGlass("Liquid Glass"),
-    Blur("Blur")
+    /** Vertical gradient built from the artwork's dominant and muted colours. */
+    Gradient("Album gradient"),
+    /** The artwork itself, blurred and dimmed behind the content. */
+    Blur("Blurred artwork")
 }
 
 /** Which theme color drives the Now Playing control buttons. */
@@ -17,7 +19,9 @@ enum class PlayerButtonColorOption(val label: String) {
 /** Visual style of the Now Playing progress slider. */
 enum class PlayerSliderStyle(val label: String) {
     Default("Default"),
-    Wavy("Wavy")
+    Wavy("Wavy"),
+    /** A thinner track for a more restrained player. */
+    Slim("Slim")
 }
 
 /** Horizontal alignment of the lyrics text block. */
@@ -99,6 +103,14 @@ data class AppSettingsState(
     val swipeSongInFullscreenLyrics: Boolean = true,
     val showPlayPauseOverlayOnThumbnail: Boolean = true,
     val hideStatusBarInFullscreenLyrics: Boolean = false,
+
+    // Playback quality
+    /** Drops silent passages, so gapless-mastered albums and padded uploads run tighter. */
+    val skipSilence: Boolean = false,
+    /** Restores the queue and position after the app is killed. */
+    val persistentQueue: Boolean = true,
+    /** Resolves the next track's stream URL ahead of time, removing the gap between tracks. */
+    val preloadNextTrack: Boolean = true,
 
     // Misc
     val defaultOpenTab: DefaultTab = DefaultTab.Home,

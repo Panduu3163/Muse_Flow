@@ -4,12 +4,10 @@ import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 
 /**
  * Talks directly to YouTube Music's private "InnerTube" API - the same undocumented endpoints
@@ -34,11 +32,7 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
 
     override val name = "YouTube Music"
 
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
-        .build()
+    private val httpClient get() = YtHttpClients.client
 
     private object Client {
         const val ORIGIN = "https://music.youtube.com"
@@ -51,63 +45,67 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
         const val WEB_REMIX_CLIENT_ID = "67"
         const val WEB_REMIX_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
-
-        // "Song" search filter chip (opaque protobuf token YouTube Music uses internally).
-        const val SEARCH_FILTER_SONG = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D"
     }
 
     // Categories seen in an *unfiltered* search's flat result list - the plain-text label each
     // musicResponsiveListItemRenderer carries as the first run of its subtitle. Deliberately not
-    // using YouTube Music's per-category filter chips (as [search] does for songs, via
-    // [Client.SEARCH_FILTER_SONG]): those are opaque protobuf blobs with no public spec, and
-    // getting an album/artist/playlist one byte wrong would silently return nothing. Bucketing an
-    // unfiltered search's results by this visible label is slower (one request covers every
-    // category, so albums/artists/playlists each redo the same request) but verified against the
-    // real API and immune to guessing a chip wrong.
+    // using YouTube Music's per-category filter chips: those are opaque protobuf blobs with no
+    // public spec, and getting an album/artist/playlist one byte wrong would silently return
+    // nothing. Bucketing an unfiltered search's results by this visible label is verified against
+    // the real API and immune to guessing a chip wrong - [search]/[searchAlbums]/[searchArtists]/
+    // [searchPlaylists] each call [searchAllCategories] and bucket its shared response shape.
     private object Category {
         const val ALBUM = "Album"
         const val SINGLE = "Single"
         const val ARTIST = "Artist"
         const val PLAYLIST = "Playlist"
+        const val VIDEO = "Video"
+        const val PODCAST = "Podcast"
+        const val EPISODE = "Episode"
+        const val PROFILE = "Profile"
+        const val COMMUNITY_PLAYLIST = "Community playlist"
+
+        /** Every category label an unfiltered search result can carry that is NOT a plain song -
+         * see [categoryOf]. Song rows carry no category label of their own (their first subtitle
+         * run is the artist name, never one of these strings), so [search] treats "not one of
+         * these" as the song bucket rather than matching a literal "Song" label that doesn't
+         * actually appear in the response. */
+        val NON_SONG = setOf(ALBUM, SINGLE, ARTIST, PLAYLIST, VIDEO, PODCAST, EPISODE, PROFILE, COMMUNITY_PLAYLIST)
     }
 
     class YouTubeMusicException(message: String) : Exception(message)
 
-    /** Searches YouTube Music for songs matching [query]. Runs on [Dispatchers.IO]. */
+    /** Searches YouTube Music for songs matching [query]. Runs on [Dispatchers.IO].
+     *
+     * Reuses [searchAllCategories]'s single unfiltered request instead of issuing its own
+     * separately-filtered one (the old approach) - [searchAlbums]/[searchArtists]/
+     * [searchPlaylists] already bucket that same shared response by category; this does the same,
+     * treating any row whose category isn't in [Category.NON_SONG] as a song. [parseSongRenderer]
+     * additionally requires a real videoId to accept a row at all, as a second line of defense
+     * against a mis-bucketed non-song row slipping through.
+     */
     override suspend fun search(query: String): List<TrackResult> = withContext(Dispatchers.IO) {
-        val requestBody = JSONObject().apply {
-            put("context", buildContext(Client.WEB_REMIX_NAME, Client.WEB_REMIX_VERSION))
-            put("query", query)
-            put("params", Client.SEARCH_FILTER_SONG)
-        }
-
-        val responseJson = postJson(
-            path = "search",
-            body = requestBody,
-            clientId = Client.WEB_REMIX_CLIENT_ID,
-            clientVersion = Client.WEB_REMIX_VERSION,
-            userAgent = Client.WEB_REMIX_USER_AGENT
-        )
-
-        parseSearchResults(responseJson).map {
-            TrackResult(
-                id = it.videoId,
-                title = it.title,
-                artist = it.artist,
-                duration = it.duration,
-                source = name,
-                sourceType = MusicSource.YOUTUBE_MUSIC,
-                imageUrl = it.thumbnailUrl
-            )
-        }
+        searchAllCategories(query)
+            .filter { categoryOf(it) !in Category.NON_SONG }
+            .mapNotNull { parseSongRenderer(it) }
+            .map {
+                TrackResult(
+                    id = it.videoId,
+                    title = it.title,
+                    artist = it.artist,
+                    duration = it.duration,
+                    source = name,
+                    sourceType = MusicSource.YOUTUBE_MUSIC,
+                    imageUrl = it.thumbnailUrl
+                )
+            }
     }
 
     /**
      * Resolves [item] to a directly-playable stream URL via the real, authenticated WEB_REMIX
      * pipeline - see [YouTubeStreamResolver] for the full visitorData/PoToken/cipher/n-transform
-     * chain. **Never cache this result** - confirmed by testing, a resolved URL 403s within
-     * minutes (the PoToken-bound freshness window). Callers must call this fresh immediately
-     * before every actual playback attempt, never reuse an earlier resolution.
+     * chain and its own result-caching policy (a resolution may be served from a short-lived
+     * cache rather than freshly computed, but is always valid at the moment it's returned).
      */
     override suspend fun getStreamUrl(item: TrackResult): StreamResolution? =
         YouTubeStreamResolver.resolve(appContext, item.id)?.let { StreamResolution(url = it) }
@@ -216,6 +214,89 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
         parseTrackShelfItems(shelfItems)
     }
 
+    /**
+     * Live search-suggestion strings for [partialQuery] (e.g. typing "harry st" suggests "harry
+     * styles"), via InnerTube's `music/get_search_suggestions` endpoint - request/response shape
+     * confirmed against Metrolist's `InnerTube.getSearchSuggestions`/`GetSearchSuggestionsBody`/
+     * `GetSearchSuggestionsResponse` (GPL-3.0, reimplemented fresh here, not copied). Returns only
+     * the plain-text query suggestions (`searchSuggestionRenderer`), not the response's separate
+     * `musicResponsiveListItemRenderer` "jump straight to this song/artist" entries - MuseFlow's
+     * search box just needs suggested query text, not a second results list to maintain here.
+     */
+    suspend fun getSearchSuggestions(partialQuery: String): List<String> = withContext(Dispatchers.IO) {
+        if (partialQuery.isBlank()) return@withContext emptyList()
+        val requestBody = JSONObject().apply {
+            put("context", buildContext(Client.WEB_REMIX_NAME, Client.WEB_REMIX_VERSION))
+            put("input", partialQuery)
+        }
+        val response = postJson(
+            path = "music/get_search_suggestions",
+            body = requestBody,
+            clientId = Client.WEB_REMIX_CLIENT_ID,
+            clientVersion = Client.WEB_REMIX_VERSION,
+            userAgent = Client.WEB_REMIX_USER_AGENT
+        )
+        val sections = response.optJSONArray("contents") ?: return@withContext emptyList()
+        val suggestions = mutableListOf<String>()
+        for (i in 0 until sections.length()) {
+            val items = sections.optJSONObject(i)
+                ?.optJSONObject("searchSuggestionsSectionRenderer")
+                ?.optJSONArray("contents")
+                ?: continue
+            for (j in 0 until items.length()) {
+                val runs = items.optJSONObject(j)
+                    ?.optJSONObject("searchSuggestionRenderer")
+                    ?.optJSONObject("suggestion")
+                    ?.optJSONArray("runs")
+                    ?: continue
+                val text = buildString {
+                    for (k in 0 until runs.length()) append(runs.optJSONObject(k)?.optString("text").orEmpty())
+                }
+                if (text.isNotBlank()) suggestions.add(text)
+            }
+        }
+        suggestions
+    }
+
+    /**
+     * The real YouTube Music charts feed (`FEmusic_charts`'s global "Top songs" shelf) - not the
+     * `stats.echomusic.fun` API originally scoped for this feature, which turned out (confirmed by
+     * actually fetching it) to be an unrelated lossless-FLAC-submission site's HTML landing page,
+     * not a JSON charts API at all. This reuses the same authenticated WEB_REMIX [browse] call
+     * every other browse-backed fetch here uses, so it's real, working data rather than a guess
+     * against an unconfirmed endpoint.
+     *
+     * The charts page's exact shelf renderer (`musicShelfRenderer` vs `musicCarouselShelfRenderer`)
+     * isn't pinned to a single fixed path the way [getPlaylistTracks]' shape is, so this scans
+     * every section under both the single- and two-column browse layouts and returns the first
+     * shelf that actually parses into at least one track - defensive rather than a single rigid
+     * path, since a wrong guess here would silently return nothing instead of failing loudly.
+     */
+    suspend fun getChartsTracks(): List<TrackResult> = withContext(Dispatchers.IO) {
+        val root = browse("FEmusic_charts")
+        val sections = (
+            root.optJSONObject("contents")?.optJSONObject("singleColumnBrowseResultsRenderer")
+                ?.optJSONArray("tabs")?.optJSONObject(0)
+                ?.optJSONObject("tabRenderer")?.optJSONObject("content")
+                ?.optJSONObject("sectionListRenderer")?.optJSONArray("contents")
+            ) ?: (
+            root.optJSONObject("contents")?.optJSONObject("twoColumnBrowseResultsRenderer")
+                ?.optJSONObject("secondaryContents")?.optJSONObject("sectionListRenderer")
+                ?.optJSONArray("contents")
+            ) ?: JSONArray()
+
+        for (i in 0 until sections.length()) {
+            val section = sections.optJSONObject(i) ?: continue
+            val shelfItems =
+                section.optJSONObject("musicShelfRenderer")?.optJSONArray("contents")
+                    ?: section.optJSONObject("musicCarouselShelfRenderer")?.optJSONArray("contents")
+                    ?: continue
+            val parsed = parseTrackShelfItems(shelfItems)
+            if (parsed.isNotEmpty()) return@withContext parsed
+        }
+        emptyList()
+    }
+
     private fun buildContext(clientName: String, clientVersion: String): JSONObject {
         val clientJson = JSONObject().apply {
             put("clientName", clientName)
@@ -261,41 +342,6 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
             }
             return JSONObject(bodyString)
         }
-    }
-
-    /**
-     * Search responses are a deeply-nested, mostly-optional renderer tree that changes shape
-     * often. Traversing it defensively with org.json (rather than strict typed models) is more
-     * resilient to the odd missing/renamed field.
-     */
-    private fun parseSearchResults(root: JSONObject): List<YtSearchResult> {
-        val results = mutableListOf<YtSearchResult>()
-
-        val sections = root
-            .optJSONObject("contents")
-            ?.optJSONObject("tabbedSearchResultsRenderer")
-            ?.optJSONArray("tabs")
-            ?.optJSONObject(0)
-            ?.optJSONObject("tabRenderer")
-            ?.optJSONObject("content")
-            ?.optJSONObject("sectionListRenderer")
-            ?.optJSONArray("contents")
-            ?: return results
-
-        for (i in 0 until sections.length()) {
-            val shelfItems = sections.optJSONObject(i)
-                ?.optJSONObject("musicShelfRenderer")
-                ?.optJSONArray("contents")
-                ?: continue
-
-            for (j in 0 until shelfItems.length()) {
-                val renderer = shelfItems.optJSONObject(j)?.optJSONObject("musicResponsiveListItemRenderer")
-                    ?: continue
-                parseSongRenderer(renderer)?.let { results.add(it) }
-            }
-        }
-
-        return results
     }
 
     /** A [renderer]'s flex column [index] text runs (song title, subtitle credits/metadata, ...) -

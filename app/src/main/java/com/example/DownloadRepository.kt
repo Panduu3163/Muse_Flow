@@ -69,12 +69,18 @@ class DownloadRepository private constructor(context: Context) {
             _inProgress.update { it + (key to -1) }
             DownloadNotificationHelper.showProgress(appContext, track, percent = null)
             try {
-                val streamUrl = track.streamUrl ?: resolveStreamUrl(track)
-                ?: error("No playable stream found for \"${track.title}\"")
+                val stream = track.streamUrl?.let { StreamResolution(url = it) }
+                    ?: resolveStreamUrl(track)
+                    ?: error("No playable stream found for \"${track.title}\"")
                 val targetFile = File(downloadsDir(appContext), "$key.audio")
-                downloadToFile(streamUrl, targetFile) { percent ->
+                val contentType = downloadToFile(stream.url, targetFile, stream.userAgent) { percent ->
                     _inProgress.update { it + (key to percent) }
                     DownloadNotificationHelper.showProgress(appContext, track, percent)
+                }
+                // Best-effort, never blocks/fails the download itself - see AudioTagger's doc.
+                runCatching {
+                    val coverArtBytes = track.imageUrl?.let { fetchBytes(it) }
+                    AudioTagger.embedIfSupported(targetFile, contentType, track, coverArtBytes)
                 }
                 dao.upsert(
                     DownloadedTrackEntity(
@@ -140,26 +146,33 @@ class DownloadRepository private constructor(context: Context) {
      * minutes), but that's fine here: it's read once, immediately, straight into a local file by
      * [downloadToFile] below, never stored or reused.
      */
-    private suspend fun resolveStreamUrl(track: Track): String? {
+    private suspend fun resolveStreamUrl(track: Track): StreamResolution? {
         val sourceId = track.sourceId
         if (track.sourceType == MusicSource.YOUTUBE_MUSIC && sourceId != null) {
-            return runCatching { YouTubeStreamResolver.resolve(appContext, sourceId) }.getOrNull()
+            return runCatching { StreamResolverRouter.resolve(appContext, sourceId) }.getOrNull()
         }
 
         val query = "${track.title} ${track.artist}"
-        val jioStreamUrl = runCatching {
-            JioSaavnProvider().search(query).firstOrNull { it.directStreamUrl != null }?.directStreamUrl
-        }.getOrNull()
-        if (jioStreamUrl != null) return jioStreamUrl
-
         return runCatching {
             val match = YouTubeMusicProvider(appContext).search(query).firstOrNull()
-            match?.let { YouTubeStreamResolver.resolve(appContext, it.id) }
+            match?.let { StreamResolverRouter.resolve(appContext, it.id) }
         }.getOrNull()
     }
 
-    private fun downloadToFile(url: String, targetFile: File, onProgress: (Int) -> Unit) {
-        val request = Request.Builder().url(url).build()
+    /** Returns the response's `Content-Type` header (e.g. `"audio/mp4"`), so the caller can decide
+     * whether [AudioTagger] supports this download's actual container - see
+     * [audioTagFileExtensionFor]. */
+    private fun downloadToFile(
+        url: String,
+        targetFile: File,
+        userAgent: String? = null,
+        onProgress: (Int) -> Unit,
+    ): String? {
+        // Same 403 rule as playback: YouTube ties a resolved URL to the User-Agent that resolved
+        // it, so the download request has to carry the same one.
+        val request = Request.Builder().url(url)
+            .apply { userAgent?.let { header("User-Agent", it) } }
+            .build()
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("Download failed: HTTP ${response.code}")
             val body = response.body ?: error("Empty download response")
@@ -185,6 +198,16 @@ class DownloadRepository private constructor(context: Context) {
                     }
                 }
             }
+            return response.header("Content-Type")
+        }
+    }
+
+    /** Small best-effort fetch for cover art bytes to embed via [AudioTagger] - failures return
+     * null (caller already wraps this in [runCatching] regardless). */
+    private fun fetchBytes(url: String): ByteArray? {
+        val request = Request.Builder().url(url).build()
+        return httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) null else response.body?.bytes()
         }
     }
 
