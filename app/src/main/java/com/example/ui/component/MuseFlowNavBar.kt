@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
@@ -53,9 +52,10 @@ fun MuseFlowNavBar(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            // Scaffold applies its window insets to the *content* slot, not to bottomBar, so
-            // without this the bar draws underneath the system gesture/navigation bar.
-            .navigationBarsPadding()
+            // The system-nav-bar inset is applied once, by the Column wrapping this and
+            // MiniPlayer in MainActivity - not here. Applying it to this Surface alone left
+            // MiniPlayer unprotected on every screen where this bar is hidden (a playlist detail,
+            // History, ...), so it drew flush against the gesture/navigation bar there.
             .padding(horizontal = 16.dp, vertical = 12.dp)
             .clip(RoundedCornerShape(28.dp)),
         color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),

@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.museflow.kqfzyw"
     minSdk = 24
     targetSdk = 37
-    versionCode = 12
-    versionName = "0.0.9"
+    versionCode = 13
+    versionName = "1.1.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

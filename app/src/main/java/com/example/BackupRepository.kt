@@ -30,7 +30,13 @@ private object BackupKeys {
 }
 
 sealed class RestoreResult {
-    data class Success(val likedSongsRestored: Int, val playlistsRestored: Int) : RestoreResult()
+    data class Success(
+        val likedSongsRestored: Int,
+        val playlistsRestored: Int,
+        /** Playlists already present with identical contents, so not created again. */
+        val playlistsSkipped: Int = 0,
+    ) : RestoreResult()
+
     data class Failure(val message: String) : RestoreResult()
 }
 
@@ -113,11 +119,34 @@ class BackupRepository private constructor(context: Context) {
             }
         }
 
+        // Name + exact track set of every playlist already here. Restoring the same backup twice
+        // used to create a second copy of each playlist; matching on contents as well as name
+        // makes a re-restore a no-op without risking the merge of two unrelated playlists that
+        // merely share a name - which is why name alone was never enough.
+        val existingPlaylists = db.playlistDao().observeAll().first().map { playlist ->
+            playlist.name to db.playlistTrackDao().observeForPlaylist(playlist.id).first()
+                .map { it.key }
+                .toSet()
+        }
+
         var playlistCount = 0
+        var skippedCount = 0
         root.optJSONArray("playlists")?.let { array ->
             for (i in 0 until array.length()) {
                 val obj = array.optJSONObject(i) ?: continue
                 val name = obj.optString("name").takeIf { it.isNotBlank() } ?: continue
+
+                val backupKeys = obj.optJSONArray("tracks")?.let { tracksArray ->
+                    (0 until tracksArray.length())
+                        .mapNotNull { j -> tracksArray.optJSONObject(j)?.optString("key")?.takeIf { it.isNotBlank() } }
+                        .toSet()
+                }.orEmpty()
+
+                if (existingPlaylists.any { (existingName, keys) -> existingName == name && keys == backupKeys }) {
+                    skippedCount++
+                    continue
+                }
+
                 val newPlaylistId = db.playlistDao().insert(
                     PlaylistEntity(
                         name = name,
@@ -135,7 +164,7 @@ class BackupRepository private constructor(context: Context) {
             }
         }
 
-        return RestoreResult.Success(likedCount, playlistCount)
+        return RestoreResult.Success(likedCount, playlistCount, skippedCount)
     }
 
     companion object {

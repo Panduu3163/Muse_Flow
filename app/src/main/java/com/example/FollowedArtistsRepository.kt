@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.music.innertube.models.upgradeThumbnailSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,6 +26,15 @@ class FollowedArtistsRepository private constructor(context: Context) {
 
     fun observeFollowedIds(): Flow<Set<String>> =
         dao.observeAll().map { entities -> entities.map { it.artistId }.toSet() }
+
+    /** The full rows, newest-followed first - backs the followed-artists list in Library. Kept
+     * separate from [observeFollowedIds] rather than deriving one from the other, since most
+     * callers only need the id set and shouldn't pay for name/image/timestamp they don't use.
+     * [FollowedArtistEntity.imageUrl] is upgraded at read time - see
+     * `PlaybackHistoryEntity.toTrack`'s comment on why. */
+    fun observeAll(): Flow<List<FollowedArtistEntity>> = dao.observeAll().map { artists ->
+        artists.map { it.copy(imageUrl = it.imageUrl?.let(::upgradeThumbnailSize)) }
+    }
 
     suspend fun getAll(): List<FollowedArtistEntity> = dao.getAll()
 

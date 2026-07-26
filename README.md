@@ -67,7 +67,7 @@ It also relies on unofficial/reverse-engineered access to some music platforms' 
 | Language | Kotlin |
 | UI | Jetpack Compose + Material 3 |
 | Playback | Media3 / ExoPlayer |
-| Architecture | MVVM, Hilt (DI), Kotlin Coroutines & Flow |
+| Architecture | MVVM, Kotlin Coroutines & Flow |
 | Local Storage | Room, DataStore Preferences |
 | Networking | Retrofit, OkHttp |
 | Images | Coil |

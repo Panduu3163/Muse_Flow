@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Context
+import com.music.innertube.models.upgradeThumbnailSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,6 +25,21 @@ class PlaybackHistoryRepository private constructor(context: Context) {
     /** For Library's "My Top 50" tile - real play counts, not just recency. */
     fun observeTopPlayed(limit: Int): Flow<List<PlaybackHistoryEntity>> = dao.observeTopPlayed(limit)
 
+    /** Everything, for the History screen. */
+    fun observeAll(): Flow<List<PlaybackHistoryEntity>> = dao.observeAll()
+
+    /** Forgets one track. Its [Track.downloadKey] is the row's identity, the same key
+     * [recordPlayed] writes under. */
+    fun forget(track: Track) {
+        repositoryScope.launch { dao.deleteByKey(track.downloadKey()) }
+    }
+
+    /** Forgets everything. Home's shelves and Library's Top 50 empty out with it - they are views
+     * onto this one table, not separate records. */
+    fun clear() {
+        repositoryScope.launch { dao.clearAll() }
+    }
+
     fun recordPlayed(track: Track) {
         repositoryScope.launch {
             val key = track.downloadKey()
@@ -44,7 +60,9 @@ class PlaybackHistoryRepository private constructor(context: Context) {
                     playedAt = System.currentTimeMillis(),
                     sourceId = track.sourceId,
                     sourceType = track.sourceType?.name,
-                    playCount = existingCount + 1
+                    playCount = existingCount + 1,
+                    albumId = track.albumId,
+                    artistId = track.artistId,
                 )
             )
         }
@@ -67,8 +85,14 @@ fun PlaybackHistoryEntity.toTrack(): Track = Track(
     duration = duration,
     plays = "",
     gradientIndex = gradientIndex,
-    imageUrl = imageUrl,
+    // Upgraded at read time, not backfilled in the row itself: rows written before the thumbnail
+    // size fix landed still carry the small size YouTube gave then. Re-applying the upgrade here
+    // (idempotent - a URL that's already =w544-h544 matches the same regex and comes out
+    // unchanged) means every already-played track gets sharp art too, with no migration needed.
+    imageUrl = imageUrl?.let(::upgradeThumbnailSize),
     streamUrl = streamUrl,
     sourceType = sourceType?.let { runCatching { MusicSource.valueOf(it) }.getOrNull() },
-    sourceId = sourceId
+    sourceId = sourceId,
+    albumId = albumId,
+    artistId = artistId,
 )

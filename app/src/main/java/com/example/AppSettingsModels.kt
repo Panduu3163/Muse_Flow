@@ -7,6 +7,7 @@ enum class BackgroundStyle(val label: String) {
     Gradient("Album gradient"),
     /** The artwork itself, blurred and dimmed behind the content. */
     Blur("Blurred artwork")
+    // Glow removed - was a drifting-blob effect, to be reimplemented later.
 }
 
 /** Which theme color drives the Now Playing control buttons. */
@@ -34,7 +35,10 @@ enum class LyricsTextPosition(val label: String) {
 /** Named animation styles for the word-by-word lyrics highlight. */
 enum class WordAnimationStyle(val label: String) {
     Fade("Fade"),
-    Bounce("Bounce")
+    Bounce("Bounce"),
+    Scale("Scale"),
+    Wave("Wave"),
+    Karaoke("Karaoke sweep"),
 }
 
 /** Which bottom-nav tab is shown when the app is launched. */
@@ -111,6 +115,23 @@ data class AppSettingsState(
     val persistentQueue: Boolean = true,
     /** Resolves the next track's stream URL ahead of time, removing the gap between tracks. */
     val preloadNextTrack: Boolean = true,
+    /** Smooths loudness differences between tracks - a dynamic-range compressor in the audio
+     * pipeline, not a per-track precomputed gain (this app has no loudness database to draw one
+     * from). See [com.example.audio.NormalizerAudioProcessor]. */
+    val audioNormalizationEnabled: Boolean = false,
+    /** Fades the outgoing track out and the incoming one in over [crossfadeDurationMs], rather
+     * than true overlapping playback of two simultaneous decoders - the same fade-based approach
+     * most mobile players use under this name. See [PlayerViewModel.applyCrossfadeVolume]. */
+    val crossfadeEnabled: Boolean = false,
+    val crossfadeDurationMs: Int = 4000,
+    /** A low-shelf boost distinct from the equalizer's own 60Hz band - see
+     * [com.example.audio.BassBoostAudioProcessor]'s doc for why they're kept separate. */
+    val bassBoostEnabled: Boolean = false,
+    val bassBoostIntensity: Int = 50,
+    /** Headphone crossfeed (blends a dulled portion of each channel into the other) - see
+     * [com.example.audio.CrossfeedAudioProcessor]. Not a full spatial/HRTF virtualizer. */
+    val crossfeedEnabled: Boolean = false,
+    val crossfeedIntensity: Int = 30,
 
     // Misc
     val defaultOpenTab: DefaultTab = DefaultTab.Home,

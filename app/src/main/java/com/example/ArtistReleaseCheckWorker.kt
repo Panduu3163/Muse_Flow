@@ -20,11 +20,14 @@ private const val TAG = "ArtistReleaseCheck"
 class ArtistReleaseCheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val repository = FollowedArtistsRepository.getInstance(applicationContext)
-        val youTubeProvider = YouTubeMusicProvider(applicationContext)
+        // Routed, not hard-wired to the legacy provider: an artist's browseId comes from whichever
+        // backend produced it, and with InnerTube the sole extractor a legacy fetch here was
+        // checking a backend the rest of the app no longer uses.
+        val router = MusicSearchRouter(applicationContext)
 
         for (artist in repository.getAll()) {
             runCatching {
-                val tracklist = youTubeProvider.getArtistTracklist(artist.artistId)
+                val tracklist = router.getArtistTracklist(artist.artistId)
                 val currentIds = tracklist.tracks.map { it.id }
                 val knownIds = artist.knownTrackIds.split(",").filter { it.isNotBlank() }.toSet()
                 val newIds = newReleaseTrackIds(knownIds, currentIds)

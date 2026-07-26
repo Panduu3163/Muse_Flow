@@ -7,25 +7,31 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +45,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.AlbumResult
+import com.example.ArtistResult
+import com.example.CollectionKind
+import com.example.PlayerViewModel
+import com.example.PlaylistResult
+import com.example.SearchFilter
 import com.example.SearchViewModel
 import com.example.Track
 import com.example.TrackActionsViewModel
@@ -46,25 +58,46 @@ import com.example.TrackResult
 import com.example.UiState
 import com.example.downloadKey
 import com.example.toPlayableTrack
-import com.example.ui.component.AddToPlaylistDialog
-import com.example.ui.component.TrackActionsSheet
+import com.example.ui.component.CollectionRow
+import com.example.ui.component.TrackActionsHost
 import com.example.ui.component.TrackRow
+import com.example.ui.component.TrackSelection
+import com.example.ui.component.TrackSelectionHost
+import com.example.ui.component.rememberTrackSelection
 
 /**
  * Search over YouTube Music, with debounced type-ahead suggestions and recent-query history.
  *
- * Long-pressing a result opens its actions sheet (like / download / add to playlist); rows show
+ * Results are split by kind - songs, albums, artists, playlists - each backed by its own YouTube
+ * Music search filter. Albums, artists and playlists all navigate to a real destination screen
+ * ([AlbumScreen]/[ArtistScreen]/[RemotePlaylistScreen]) rather than a modal sheet.
+ *
+ * Long-pressing a song opens its actions sheet (like / download / add to playlist); rows show
  * heart and download glyphs so their state is readable without opening the sheet.
  */
 @Composable
 fun SearchScreen(
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit = { _, _ -> },
+    playerViewModel: PlayerViewModel,
+    onGoToArtist: (String) -> Unit = {},
+    onGoToAlbum: (String) -> Unit = {},
+    /** title/subtitle/imageUrl travel alongside the id - see [com.example.NavRoutes.remotePlaylist]
+     * for why (no endpoint returns a remote playlist's own header by id alone). */
+    onGoToPlaylist: (String, String, String, String?) -> Unit = { _, _, _, _ -> },
+    onOpenCharts: () -> Unit = {},
+    onOpenNewReleases: () -> Unit = {},
+    onOpenExplore: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val viewModel: SearchViewModel = viewModel()
     val query by viewModel.query.collectAsState()
+    val filter by viewModel.filter.collectAsState()
     val results by viewModel.results.collectAsState()
+    val albums by viewModel.albums.collectAsState()
+    val artists by viewModel.artists.collectAsState()
+    val searchedPlaylists by viewModel.playlists.collectAsState()
     val suggestions by viewModel.suggestions.collectAsState()
+    val hasSearched by viewModel.hasSearched.collectAsState()
     val recentQueries by viewModel.recentQueries.collectAsState(initial = emptyList())
     val keyboard = LocalSoftwareKeyboardController.current
 
@@ -72,12 +105,16 @@ fun SearchScreen(
     val likedKeys by actionsViewModel.likedKeys.collectAsState()
     val downloadedKeys by actionsViewModel.downloadedKeys.collectAsState()
     val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsState()
-    val playlists by actionsViewModel.playlists.collectAsState()
 
+    val selection = rememberTrackSelection()
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
-    var pendingPlaylistTrack by remember { mutableStateOf<Track?>(null) }
 
-    Column(modifier = modifier.fillMaxSize()) {
+    // Only the Songs tab holds selectable rows, and only for the query that produced them - a new
+    // search or a switch to Albums renumbers everything underneath a positional selection.
+    val songResults = (results as? UiState.Success)?.data.orEmpty()
+    LaunchedEffect(filter, songResults) { selection.clear() }
+
+    Column(modifier = modifier.fillMaxSize().statusBarsPadding()) {
         OutlinedTextField(
             value = query,
             onValueChange = viewModel::onQueryChange,
@@ -108,6 +145,39 @@ fun SearchScreen(
         // No backend chip: with the extractor picker removed from Settings there's only one
         // backend, so naming it was developer-facing noise rather than information.
 
+        // A browse entry point rather than a search result - shown above recents/suggestions
+        // (not inside that `when` below) so it's visible regardless of whether either has
+        // anything to show, the same way a real charts page is reachable independent of history.
+        //
+        // Charts/New releases rows are hidden (not deleted - onOpenCharts/onOpenNewReleases,
+        // ChartsScreen and NewReleasesScreen all still exist and are still routed) because both
+        // backends are broken: getChartsTracks() silently returns zero tracks and
+        // newReleaseAlbums() 404s. Both need real investigation (see full-gap-audit.md §2.9)
+        // rather than a UI-level fix, so the entry points are pulled until that's done instead of
+        // shipping a row that reliably shows an error.
+        if (query.isBlank()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenExplore)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .testTag("search_open_explore"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Explore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "Explore",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 16.dp),
+                )
+            }
+        }
+
         Box(modifier = Modifier.fillMaxSize()) {
             when {
                 suggestions.isNotEmpty() && query.isNotBlank() -> SuggestionList(
@@ -127,59 +197,201 @@ fun SearchScreen(
                     onDelete = viewModel::deleteRecent,
                 )
 
-                else -> ResultsList(
-                    results = results,
-                    onPlayTrack = onPlayTrack,
-                    likedKeys = likedKeys,
-                    downloadedKeys = downloadedKeys,
-                    downloadsInProgress = downloadsInProgress,
-                    onLongPress = { selectedTrack = it },
-                )
+                else -> Column(modifier = Modifier.fillMaxSize()) {
+                    // Hidden until a query has been run: with nothing to filter, the chips would
+                    // be a control that visibly does nothing.
+                    if (selection.active) {
+                        // Replaces the filter chips: switching tab mid-selection would leave ticks
+                        // pointing at rows that are no longer on screen.
+                        TrackSelectionHost(
+                            selection = selection,
+                            tracks = songResults,
+                            playerViewModel = playerViewModel,
+                            actionsViewModel = actionsViewModel,
+                        )
+                    } else if (hasSearched) {
+                        FilterChips(selected = filter, onSelect = viewModel::selectFilter)
+                    }
+
+                    val emptyMessage = if (hasSearched) {
+                        "No ${filter.label.lowercase()} found for \"$query\"."
+                    } else {
+                        "Search for something to get started."
+                    }
+
+                    // Weighted, so the results area is what's left below the chips - the empty and
+                    // loading states inside it centre on that space rather than on the whole
+                    // screen and overflow past the bottom.
+                    Box(modifier = Modifier.weight(1f)) {
+                        when (filter) {
+                            SearchFilter.Songs -> TrackResults(
+                                results = results,
+                                emptyMessage = emptyMessage,
+                                onPlayTrack = onPlayTrack,
+                                likedKeys = likedKeys,
+                                downloadedKeys = downloadedKeys,
+                                downloadsInProgress = downloadsInProgress,
+                                onOpenMenu = { track -> selectedTrack = track },
+                                selection = selection,
+                            )
+
+                            SearchFilter.Albums -> CollectionResults(
+                                results = albums,
+                                emptyMessage = emptyMessage,
+                                kind = CollectionKind.Album,
+                                title = AlbumResult::title,
+                                subtitle = { album ->
+                                    listOfNotNull(
+                                        album.artist.takeIf { it.isNotBlank() },
+                                        album.songCount?.let { "$it songs" },
+                                    ).joinToString(" · ")
+                                },
+                                imageUrl = AlbumResult::imageUrl,
+                                // Full navigation, not a modal sheet - same reasoning as Artist below.
+                                onOpen = { album -> onGoToAlbum(album.id) },
+                            )
+
+                            SearchFilter.Artists -> CollectionResults(
+                                results = artists,
+                                emptyMessage = emptyMessage,
+                                kind = CollectionKind.Artist,
+                                title = ArtistResult::name,
+                                subtitle = { it.listenerCount ?: "Artist" },
+                                imageUrl = ArtistResult::imageUrl,
+                                // Full navigation, not the CollectionSheet modal the other three
+                                // kinds use - an artist has a real destination screen (with its own
+                                // tabs) to go to, unlike a song/album/playlist result.
+                                onOpen = { artist -> onGoToArtist(artist.id) },
+                            )
+
+                            SearchFilter.Playlists -> CollectionResults(
+                                results = searchedPlaylists,
+                                emptyMessage = emptyMessage,
+                                kind = CollectionKind.Playlist,
+                                title = PlaylistResult::title,
+                                subtitle = { playlist ->
+                                    listOfNotNull(
+                                        playlist.subtitle.takeIf { it.isNotBlank() },
+                                        playlist.songCount?.let { "$it songs" },
+                                    ).joinToString(" · ")
+                                },
+                                imageUrl = PlaylistResult::imageUrl,
+                                onOpen = { playlist ->
+                                    onGoToPlaylist(playlist.id, playlist.title, playlist.subtitle, playlist.imageUrl)
+                                },
+                            )
+                        }
+                    }
+                }
             }
         }
     }
 
-    selectedTrack?.let { track ->
-        val asTrack = track.toPlayableTrack(track.id.hashCode())
-        val key = asTrack.downloadKey()
-        TrackActionsSheet(
-            title = track.title,
-            artist = track.artist,
-            isLiked = likedKeys.contains(key),
-            isDownloaded = downloadedKeys.contains(key),
-            downloadProgress = downloadsInProgress[key],
-            onToggleLike = { actionsViewModel.toggleLike(asTrack) },
-            onDownload = { actionsViewModel.download(asTrack) },
-            onCancelDownload = { actionsViewModel.cancelDownload(asTrack) },
-            onAddToPlaylist = { pendingPlaylistTrack = asTrack },
-            onDismiss = { selectedTrack = null },
-        )
-    }
+    TrackActionsHost(
+        track = selectedTrack,
+        onDismiss = { selectedTrack = null },
+        playerViewModel = playerViewModel,
+        actionsViewModel = actionsViewModel,
+        onGoToArtist = onGoToArtist,
+        onGoToAlbum = onGoToAlbum,
+    )
+}
 
-    pendingPlaylistTrack?.let { track ->
-        AddToPlaylistDialog(
-            playlists = playlists,
-            onPick = { playlistId ->
-                actionsViewModel.addToPlaylist(playlistId, track)
-                pendingPlaylistTrack = null
-            },
-            onCreate = { name ->
-                actionsViewModel.createPlaylistWith(name, track)
-                pendingPlaylistTrack = null
-            },
-            onDismiss = { pendingPlaylistTrack = null },
-        )
+@Composable
+private fun FilterChips(selected: SearchFilter, onSelect: (SearchFilter) -> Unit) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        modifier = Modifier.padding(bottom = 4.dp),
+    ) {
+        items(SearchFilter.entries.toList(), key = { it.name }) { entry ->
+            FilterChip(
+                selected = selected == entry,
+                onClick = { onSelect(entry) },
+                label = { Text(entry.label) },
+                modifier = Modifier.testTag("search_filter_${entry.name.lowercase()}"),
+            )
+        }
     }
 }
 
 @Composable
-private fun ResultsList(
+private fun TrackResults(
     results: UiState<List<TrackResult>>,
+    emptyMessage: String,
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit,
     likedKeys: Set<String>,
     downloadedKeys: Set<String>,
     downloadsInProgress: Map<String, Int>,
-    onLongPress: (TrackResult) -> Unit,
+    onOpenMenu: (TrackResult) -> Unit,
+    selection: TrackSelection,
+) {
+    ResultsFrame(results, emptyMessage) { tracks ->
+        LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
+            itemsIndexed(tracks, key = { index, track -> "$index-${track.id}" }) { index, track ->
+                val key = track.toPlayableTrack(0).downloadKey()
+                TrackRow(
+                    title = track.title,
+                    artist = track.artist,
+                    imageUrl = track.imageUrl,
+                    duration = track.duration,
+                    onClick = {
+                        if (selection.active) selection.toggle(index) else onPlayTrack(track, tracks)
+                    },
+                    onLongClick = {
+                        if (selection.active) selection.toggle(index) else selection.start(index)
+                    },
+                    selected = selection.isSelected(index),
+                    isLiked = likedKeys.contains(key),
+                    isDownloaded = downloadedKeys.contains(key),
+                    downloadProgress = downloadsInProgress[key],
+                    onOpenMenu = if (selection.active) null else { { onOpenMenu(track) } },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Album/artist/playlist results.
+ *
+ * Generic over the three result types rather than written out three times: they differ only in
+ * which fields carry the title, subtitle and image, so the accessors are parameters.
+ */
+@Composable
+private fun <T> CollectionResults(
+    results: UiState<List<T>>,
+    emptyMessage: String,
+    kind: CollectionKind,
+    title: (T) -> String,
+    subtitle: (T) -> String,
+    imageUrl: (T) -> String?,
+    onOpen: (T) -> Unit,
+) {
+    ResultsFrame(results, emptyMessage) { items ->
+        LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
+            // Position-based keys: YouTube can return the same browseId twice in one result set,
+            // and a repeated Compose key is a crash rather than a cosmetic glitch.
+            itemsIndexed(items, key = { index, _ -> index }) { _, item ->
+                CollectionRow(
+                    title = title(item),
+                    subtitle = subtitle(item),
+                    imageUrl = imageUrl(item),
+                    kind = kind,
+                    onClick = { onOpen(item) },
+                )
+            }
+        }
+    }
+}
+
+/** Loading spinner / error / empty handling, shared by every result tab so the four behave
+ * identically when there is nothing to show. */
+@Composable
+private fun <T> ResultsFrame(
+    results: UiState<List<T>>,
+    emptyMessage: String,
+    content: @Composable (List<T>) -> Unit,
 ) {
     when (results) {
         is UiState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -192,24 +404,9 @@ private fun ResultsList(
         )
 
         is UiState.Success -> if (results.data.isEmpty()) {
-            CenteredMessage("Search for something to get started.")
+            CenteredMessage(emptyMessage)
         } else {
-            LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
-                items(results.data, key = { it.id }) { track ->
-                    val key = track.toPlayableTrack(0).downloadKey()
-                    TrackRow(
-                        title = track.title,
-                        artist = track.artist,
-                        imageUrl = track.imageUrl,
-                        duration = track.duration,
-                        onClick = { onPlayTrack(track, results.data) },
-                        onLongClick = { onLongPress(track) },
-                        isLiked = likedKeys.contains(key),
-                        isDownloaded = downloadedKeys.contains(key),
-                        downloadProgress = downloadsInProgress[key],
-                    )
-                }
-            }
+            content(results.data)
         }
     }
 }
