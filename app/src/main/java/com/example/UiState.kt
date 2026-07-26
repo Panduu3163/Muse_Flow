@@ -1,7 +1,10 @@
 package com.example
 
+import android.util.Log
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+
+private const val TAG = "UiState"
 
 /** Default ceiling for how long a network-backed fetch is allowed to hang before it's treated as
  * a genuine failure rather than "still loading" - long enough to cover ordinary slow responses,
@@ -28,7 +31,9 @@ suspend fun <T> loadAsUiState(
 ): UiState<T> = try {
     UiState.Success(withTimeout(timeoutMs) { block() })
 } catch (e: TimeoutCancellationException) {
+    Log.w(TAG, "Timed out after ${timeoutMs}ms: $errorMessage", e)
     UiState.Error(errorMessage)
 } catch (e: Exception) {
+    Log.e(TAG, "Failed: $errorMessage", e)
     UiState.Error(errorMessage)
 }

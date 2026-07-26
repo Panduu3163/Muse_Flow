@@ -18,5 +18,11 @@ class PoTokenException(message: String) : Exception(message)
  * engine is known to work. */
 class BadWebViewException(message: String) : Exception(message)
 
+/** Thrown when [com.example.ytcipher.WebViewRecoveryPolicy] is in its post-failure cooldown
+ * window - deliberately skipping a WebView (re)creation attempt rather than paying its full cost
+ * only to likely fail again. */
+class PoTokenCooldownException :
+    Exception("PoToken WebView creation is in cooldown after repeated failures")
+
 fun poTokenExceptionFor(jsError: String): Exception =
     if ("SyntaxError" in jsError) BadWebViewException(jsError) else PoTokenException(jsError)

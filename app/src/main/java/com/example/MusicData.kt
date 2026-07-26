@@ -25,7 +25,12 @@ data class Track(
     /** The provider's native id for this track (currently only meaningful for
      * [MusicSource.YOUTUBE_MUSIC], where it's the YouTube video id) - null for sources whose
      * [streamUrl] is already resolved and don't need a later re-resolve. */
-    val sourceId: String? = null
+    val sourceId: String? = null,
+    /** [TrackResult.albumId]/[TrackResult.artistId], persisted so "View album"/"View artist"
+     * still works once a track has been liked/downloaded/added to a playlist/played - not just
+     * on the original search result. Null wherever the source had none. */
+    val albumId: String? = null,
+    val artistId: String? = null,
 )
 
 /** Stable identity for a track across sources (mock catalog, search results, or reconstructed

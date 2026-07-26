@@ -38,7 +38,11 @@ data class DownloadedTrackEntity(
      * ever missing, it re-resolves via [YouTubeStreamResolver] instead of falling through to
      * mock-catalog resolution. Null for sources that never needed either field. */
     val sourceId: String? = null,
-    val sourceType: String? = null
+    val sourceType: String? = null,
+    /** [Track.albumId]/[Track.artistId], persisted (added in [MIGRATION_11_12]) so "View
+     * album"/"View artist" still works on a downloaded track, not just a fresh search result. */
+    val albumId: String? = null,
+    val artistId: String? = null,
 )
 
 @Dao
@@ -80,7 +84,11 @@ data class PlaybackHistoryEntity(
     val sourceType: String? = null,
     /** How many times this track has actually started playing (added in [MIGRATION_6_7]), for
      * Library's real "My Top 50" tile - ranked by this, not just recency. */
-    val playCount: Int = 1
+    val playCount: Int = 1,
+    /** [Track.albumId]/[Track.artistId], persisted (added in [MIGRATION_11_12]) so "View
+     * album"/"View artist" still works from History, not just a fresh search result. */
+    val albumId: String? = null,
+    val artistId: String? = null,
 )
 
 @Dao
@@ -91,11 +99,22 @@ interface PlaybackHistoryDao {
     @Query("SELECT * FROM playback_history ORDER BY playCount DESC, playedAt DESC LIMIT :limit")
     fun observeTopPlayed(limit: Int): Flow<List<PlaybackHistoryEntity>>
 
+    /** Unbounded, for the History screen - the limited queries above back Home's shelf and
+     * Library's tiles, which deliberately show only a slice. */
+    @Query("SELECT * FROM playback_history ORDER BY playedAt DESC")
+    fun observeAll(): Flow<List<PlaybackHistoryEntity>>
+
     @Query("SELECT * FROM playback_history WHERE key = :key LIMIT 1")
     suspend fun getByKey(key: String): PlaybackHistoryEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: PlaybackHistoryEntity)
+
+    @Query("DELETE FROM playback_history WHERE key = :key")
+    suspend fun deleteByKey(key: String)
+
+    @Query("DELETE FROM playback_history")
+    suspend fun clearAll()
 }
 
 /**
@@ -120,7 +139,11 @@ data class LikedSongEntity(
      * fell through to a title/artist search on another provider instead, playing a different
      * recording than the one actually liked. Null for sources that never needed either field. */
     val sourceId: String? = null,
-    val sourceType: String? = null
+    val sourceType: String? = null,
+    /** [Track.albumId]/[Track.artistId], persisted (added in [MIGRATION_11_12]) so "View
+     * album"/"View artist" still works on a liked track, not just a fresh search result. */
+    val albumId: String? = null,
+    val artistId: String? = null,
 )
 
 @Dao
@@ -141,22 +164,43 @@ interface LikedSongDao {
 /** A playlist the user has created (or imported from an online source), for Library's real
  * "Playlists" tab. [coverImageUrl] is only set for playlists imported from an online source (see
  * [PlaylistRepository.importOnlinePlaylist]) - a user-created playlist has no cover of its own and
- * instead renders a collage from its tracks' art (see `PlaylistCoverArt`). */
+ * instead renders a collage from its tracks' art (see `PlaylistCoverArt`). [customCoverUri] is a
+ * separate field, not a repurposing of [coverImageUrl]: a user explicitly picking a cover (see
+ * [PlaylistRepository.setCustomCover]) should win over the auto mosaic, where an *imported*
+ * playlist's own incidental cover deliberately doesn't (see `PlaylistGridCover`'s fallback order). */
 @Entity(tableName = "playlists")
 data class PlaylistEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val createdAt: Long,
-    val coverImageUrl: String? = null
+    val coverImageUrl: String? = null,
+    /** Added in [MIGRATION_10_11]. Pinned playlists sort first in Library regardless of the
+     * chosen sort option - the one ordering a sort option can't express. */
+    val isPinned: Boolean = false,
+    /** Added in [MIGRATION_13_14]. A `content://` URI from the system picker, persisted with a
+     * read permission grant (see `PlaylistDetailScreen`'s cover picker) so it survives reboot. */
+    val customCoverUri: String? = null,
 )
 
 @Dao
 interface PlaylistDao {
-    @Query("SELECT * FROM playlists ORDER BY createdAt DESC")
+    // Pinned first, then whatever the table's own creation order already gave: pin is an override
+    // on top of sort, not a sort option of its own, so it applies before every other ordering this
+    // query feeds into.
+    @Query("SELECT * FROM playlists ORDER BY isPinned DESC, createdAt DESC")
     fun observeAll(): Flow<List<PlaylistEntity>>
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(entity: PlaylistEntity): Long
+
+    @Query("UPDATE playlists SET isPinned = :pinned WHERE id = :id")
+    suspend fun setPinned(id: Long, pinned: Boolean)
+
+    @Query("UPDATE playlists SET customCoverUri = :uri WHERE id = :id")
+    suspend fun setCustomCoverUri(id: Long, uri: String?)
+
+    @Query("DELETE FROM playlists WHERE id = :id")
+    suspend fun delete(id: Long)
 }
 
 /** One track that's been added to a user's playlist (see [PlaylistEntity]), added in
@@ -178,7 +222,11 @@ data class PlaylistTrackEntity(
     val streamUrl: String?,
     val sourceId: String? = null,
     val sourceType: String? = null,
-    val addedAt: Long
+    val addedAt: Long,
+    /** [Track.albumId]/[Track.artistId], persisted (added in [MIGRATION_11_12]) so "View
+     * album"/"View artist" still works on a playlist track, not just a fresh search result. */
+    val albumId: String? = null,
+    val artistId: String? = null,
 )
 
 @Dao
@@ -191,6 +239,44 @@ interface PlaylistTrackDao {
 
     @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId AND key = :key")
     suspend fun delete(playlistId: Long, key: String)
+
+    /** Companion to [PlaylistDao.delete] - a playlist row disappearing does not cascade to its
+     * tracks (no foreign key is declared), so deleting a playlist without this leaves its tracks
+     * orphaned in the table forever. */
+    @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId")
+    suspend fun deleteAllForPlaylist(playlistId: Long)
+}
+
+/** A followed artist (see [FollowedArtistsRepository]) - [knownTrackIds] is the comma-joined
+ * baseline [ArtistReleaseCheckWorker] diffs a fresh tracklist fetch against (see
+ * [newReleaseTrackIds]) to detect a genuinely new release, empty until the first successful
+ * check. */
+@Entity(tableName = "followed_artists")
+data class FollowedArtistEntity(
+    @PrimaryKey val artistId: String,
+    val name: String,
+    val imageUrl: String?,
+    val sourceType: String,
+    val followedAt: Long,
+    val knownTrackIds: String = ""
+)
+
+@Dao
+interface FollowedArtistDao {
+    @Query("SELECT * FROM followed_artists ORDER BY followedAt DESC")
+    fun observeAll(): Flow<List<FollowedArtistEntity>>
+
+    @Query("SELECT * FROM followed_artists")
+    suspend fun getAll(): List<FollowedArtistEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: FollowedArtistEntity)
+
+    @Query("DELETE FROM followed_artists WHERE artistId = :artistId")
+    suspend fun unfollow(artistId: String)
+
+    @Query("UPDATE followed_artists SET knownTrackIds = :knownTrackIds WHERE artistId = :artistId")
+    suspend fun updateKnownTrackIds(artistId: String, knownTrackIds: String)
 }
 
 /** v3 -> v4: adds [DownloadedTrackEntity.sourceId]/[DownloadedTrackEntity.sourceType] and
@@ -272,6 +358,73 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
     }
 }
 
+/** v9 -> v10: adds [FollowedArtistEntity]'s table, for follow-artist new-release notifications - a
+ * brand new table, so a plain `CREATE TABLE` is enough. */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `followed_artists` (" +
+                "`artistId` TEXT NOT NULL, `name` TEXT NOT NULL, `imageUrl` TEXT, " +
+                "`sourceType` TEXT NOT NULL, `followedAt` INTEGER NOT NULL, " +
+                "`knownTrackIds` TEXT NOT NULL DEFAULT '', PRIMARY KEY(`artistId`))"
+        )
+    }
+}
+
+/** v10 -> v11: adds [PlaylistEntity.isPinned] (plain `ADD COLUMN`, defaulted so every existing
+ * playlist starts unpinned) - backs the playlist actions sheet's "Pin playlist". */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE playlists ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/** v11 -> v12: adds `albumId`/`artistId` (plain nullable `ADD COLUMN`s, same shape as every prior
+ * source-id migration) to every table that stores a track outside a fresh search result -
+ * [PlaylistTrackEntity], [LikedSongEntity], [DownloadedTrackEntity], [PlaybackHistoryEntity].
+ * Backs "View artist"/"View album" on the track actions sheet: without this, only a track fetched
+ * moments ago from search/an album/artist/playlist browse carried a browseId to navigate with - a
+ * liked, downloaded, playlisted, or history track lost it the moment it was saved, since none of
+ * these tables had anywhere to put it. */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE playlist_tracks ADD COLUMN albumId TEXT")
+        db.execSQL("ALTER TABLE playlist_tracks ADD COLUMN artistId TEXT")
+        db.execSQL("ALTER TABLE liked_songs ADD COLUMN albumId TEXT")
+        db.execSQL("ALTER TABLE liked_songs ADD COLUMN artistId TEXT")
+        db.execSQL("ALTER TABLE downloaded_tracks ADD COLUMN albumId TEXT")
+        db.execSQL("ALTER TABLE downloaded_tracks ADD COLUMN artistId TEXT")
+        db.execSQL("ALTER TABLE playback_history ADD COLUMN albumId TEXT")
+        db.execSQL("ALTER TABLE playback_history ADD COLUMN artistId TEXT")
+    }
+}
+
+/** v12 -> v13: adds [ArtistPageCacheEntity]'s and [AlbumPageCacheEntity]'s tables, for the
+ * Artist/Album screens' stale-while-revalidate cache - both brand new tables, so plain
+ * `CREATE TABLE`s are enough (nothing to backfill; they start empty and fill in as pages load). */
+val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `artist_page_cache` (" +
+                "`artistId` TEXT NOT NULL, `tracklistJson` TEXT NOT NULL, `cachedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`artistId`))"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `album_page_cache` (" +
+                "`albumId` TEXT NOT NULL, `detailsJson` TEXT NOT NULL, `cachedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`albumId`))"
+        )
+    }
+}
+
+/** v13 -> v14: adds [PlaylistEntity.customCoverUri] for Library's custom playlist thumbnail
+ * picker - a fresh nullable column, so a plain `ADD COLUMN` needs no backfill. */
+val MIGRATION_13_14 = object : Migration(13, 14) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE playlists ADD COLUMN customCoverUri TEXT")
+    }
+}
+
 @Database(
     entities = [
         DownloadedTrackEntity::class,
@@ -280,9 +433,12 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
         PlaylistEntity::class,
         PlaylistTrackEntity::class,
         HomeShelfCacheEntity::class,
-        SearchHistoryEntity::class
+        SearchHistoryEntity::class,
+        FollowedArtistEntity::class,
+        ArtistPageCacheEntity::class,
+        AlbumPageCacheEntity::class
     ],
-    version = 9,
+    version = 14,
     exportSchema = false
 )
 abstract class MuseFlowDatabase : RoomDatabase() {
@@ -293,6 +449,9 @@ abstract class MuseFlowDatabase : RoomDatabase() {
     abstract fun playlistTrackDao(): PlaylistTrackDao
     abstract fun homeShelfCacheDao(): HomeShelfCacheDao
     abstract fun searchHistoryDao(): SearchHistoryDao
+    abstract fun followedArtistDao(): FollowedArtistDao
+    abstract fun artistPageCacheDao(): ArtistPageCacheDao
+    abstract fun albumPageCacheDao(): AlbumPageCacheDao
 
     companion object {
         @Volatile private var instance: MuseFlowDatabase? = null
@@ -304,7 +463,11 @@ abstract class MuseFlowDatabase : RoomDatabase() {
                     MuseFlowDatabase::class.java,
                     "museflow.db"
                 )
-                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                    .addMigrations(
+                        MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
+                        MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
+                        MIGRATION_12_13, MIGRATION_13_14
+                    )
                     .build().also { instance = it }
             }
     }

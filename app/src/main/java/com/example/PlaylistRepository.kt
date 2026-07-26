@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Context
+import com.music.innertube.models.upgradeThumbnailSize
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -14,7 +15,12 @@ class PlaylistRepository private constructor(context: Context) {
     private val dao = MuseFlowDatabase.getInstance(context.applicationContext).playlistDao()
     private val trackDao = MuseFlowDatabase.getInstance(context.applicationContext).playlistTrackDao()
 
-    fun observeAll(): Flow<List<PlaylistEntity>> = dao.observeAll()
+    // coverImageUrl is only set for an imported online playlist and only ever read (Library's row,
+    // the mosaic cover's fallback) - upgraded here at read time for the same reason every other
+    // stored thumbnail is, rather than in the entity itself.
+    fun observeAll(): Flow<List<PlaylistEntity>> = dao.observeAll().map { playlists ->
+        playlists.map { it.copy(coverImageUrl = it.coverImageUrl?.let(::upgradeThumbnailSize)) }
+    }
 
     /** Creates an empty playlist and returns its new id, so callers (e.g. the "add songs" flow
      * right after naming a playlist) can immediately add tracks to it. */
@@ -44,7 +50,9 @@ class PlaylistRepository private constructor(context: Context) {
                     streamUrl = track.streamUrl,
                     sourceId = track.sourceId,
                     sourceType = track.sourceType?.name,
-                    addedAt = baseTime + index
+                    addedAt = baseTime + index,
+                    albumId = track.albumId,
+                    artistId = track.artistId,
                 )
             }
         )
@@ -52,6 +60,24 @@ class PlaylistRepository private constructor(context: Context) {
 
     suspend fun removeTrack(playlistId: Long, key: String) {
         trackDao.delete(playlistId, key)
+    }
+
+    suspend fun setPinned(playlistId: Long, pinned: Boolean) {
+        dao.setPinned(playlistId, pinned)
+    }
+
+    /** Sets (or, with `uri = null`, clears) a user-picked cover. The caller is responsible for
+     * having already taken a persistable read-permission grant on [uri] via
+     * `ContentResolver.takePersistableUriPermission` - this just stores the string. */
+    suspend fun setCustomCover(playlistId: Long, uri: String?) {
+        dao.setCustomCoverUri(playlistId, uri)
+    }
+
+    /** Deletes the playlist and its tracks - two statements rather than a foreign-key cascade,
+     * since none is declared on [PlaylistTrackEntity] (see [PlaylistTrackDao.deleteAllForPlaylist]). */
+    suspend fun delete(playlistId: Long) {
+        trackDao.deleteAllForPlaylist(playlistId)
+        dao.delete(playlistId)
     }
 
     /** Creates a new playlist pre-populated with [tracks] and a real [coverImageUrl] in one shot -
@@ -79,8 +105,11 @@ fun PlaylistTrackEntity.toTrack(): Track = Track(
     duration = duration,
     plays = "",
     gradientIndex = gradientIndex,
-    imageUrl = imageUrl,
+    // Upgraded at read time - see PlaybackHistoryEntity.toTrack's comment on why.
+    imageUrl = imageUrl?.let(::upgradeThumbnailSize),
     streamUrl = streamUrl,
     sourceType = sourceType?.let { runCatching { MusicSource.valueOf(it) }.getOrNull() },
-    sourceId = sourceId
+    sourceId = sourceId,
+    albumId = albumId,
+    artistId = artistId,
 )

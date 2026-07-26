@@ -1,10 +1,9 @@
 package com.example.ytcipher
 
+import com.example.YtHttpClients
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.util.concurrent.TimeUnit
 
 /** Fetches YouTube's current `player_ias` JS - the file that actually contains the sig/n-transform
  * logic [YtCipherWebView] executes. Two steps: read the current player hash off the public
@@ -15,10 +14,7 @@ object YtPlayerJsFetcher {
     private const val PLAYER_JS_URL_TEMPLATE = "https://www.youtube.com/s/player/%s/player_ias.vflset/en_GB/base.js"
     private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .build()
+    private val httpClient get() = YtHttpClients.client
 
     data class PlayerJs(val hash: String, val source: String)
 

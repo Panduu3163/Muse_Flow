@@ -31,6 +31,16 @@ private object AppSettingsKeys {
     val PLAYER_SLIDER_STYLE = stringPreferencesKey("player_slider_style")
     val SWIPE_TO_CHANGE_SONG = booleanPreferencesKey("swipe_to_change_song")
     val SHOW_ANIMATED_CANVAS = booleanPreferencesKey("show_animated_canvas")
+    val SKIP_SILENCE = booleanPreferencesKey("skip_silence")
+    val PERSISTENT_QUEUE = booleanPreferencesKey("persistent_queue")
+    val PRELOAD_NEXT_TRACK = booleanPreferencesKey("preload_next_track")
+    val AUDIO_NORMALIZATION_ENABLED = booleanPreferencesKey("audio_normalization_enabled")
+    val CROSSFADE_ENABLED = booleanPreferencesKey("crossfade_enabled")
+    val CROSSFADE_DURATION_MS = intPreferencesKey("crossfade_duration_ms")
+    val BASS_BOOST_ENABLED = booleanPreferencesKey("bass_boost_enabled")
+    val BASS_BOOST_INTENSITY = intPreferencesKey("bass_boost_intensity")
+    val CROSSFEED_ENABLED = booleanPreferencesKey("crossfeed_enabled")
+    val CROSSFEED_INTENSITY = intPreferencesKey("crossfeed_intensity")
     val ROTATING_THUMBNAIL_ANIMATION = booleanPreferencesKey("rotating_thumbnail_animation")
     val SHOW_COMMENT_BUTTON = booleanPreferencesKey("show_comment_button")
     val SHOW_CODEC_INFO = booleanPreferencesKey("show_codec_info")
@@ -68,7 +78,9 @@ private inline fun <reified T : Enum<T>> Preferences.enumOrDefault(
     default: T
 ): T = this[key]?.let { saved -> runCatching { enumValueOf<T>(saved) }.getOrNull() } ?: default
 
-private class AppSettingsRepository(private val context: Context) {
+/** Internal, not private: [PlaybackService] reads playback-quality settings directly - a
+ * Service can't own a ViewModel, and these preferences drive the player itself. */
+internal class AppSettingsRepository(private val context: Context) {
     val state: Flow<AppSettingsState> = context.appSettingsDataStore.data.map { prefs ->
         AppSettingsState(
             miniPlayerBackgroundStyle = prefs.enumOrDefault(AppSettingsKeys.MINI_PLAYER_BACKGROUND_STYLE, BackgroundStyle.Solid),
@@ -99,6 +111,17 @@ private class AppSettingsRepository(private val context: Context) {
             hideStatusBarInFullscreenLyrics = prefs[AppSettingsKeys.HIDE_STATUS_BAR_IN_FULLSCREEN_LYRICS] ?: false,
 
             defaultOpenTab = prefs.enumOrDefault(AppSettingsKeys.DEFAULT_OPEN_TAB, DefaultTab.Home),
+            skipSilence = prefs[AppSettingsKeys.SKIP_SILENCE] ?: false,
+            persistentQueue = prefs[AppSettingsKeys.PERSISTENT_QUEUE] ?: true,
+            preloadNextTrack = prefs[AppSettingsKeys.PRELOAD_NEXT_TRACK] ?: true,
+            audioNormalizationEnabled = prefs[AppSettingsKeys.AUDIO_NORMALIZATION_ENABLED] ?: false,
+            crossfadeEnabled = prefs[AppSettingsKeys.CROSSFADE_ENABLED] ?: false,
+            crossfadeDurationMs = prefs[AppSettingsKeys.CROSSFADE_DURATION_MS] ?: 4000,
+            bassBoostEnabled = prefs[AppSettingsKeys.BASS_BOOST_ENABLED] ?: false,
+            bassBoostIntensity = prefs[AppSettingsKeys.BASS_BOOST_INTENSITY] ?: 50,
+            crossfeedEnabled = prefs[AppSettingsKeys.CROSSFEED_ENABLED] ?: false,
+            crossfeedIntensity = prefs[AppSettingsKeys.CROSSFEED_INTENSITY] ?: 30,
+
             defaultLibraryChip = prefs.enumOrDefault(AppSettingsKeys.DEFAULT_LIBRARY_CHIP, DefaultLibraryChip.Playlists),
             swipeSongToQueue = prefs[AppSettingsKeys.SWIPE_SONG_TO_QUEUE] ?: false,
             enableHaptics = prefs[AppSettingsKeys.ENABLE_HAPTICS] ?: true,
@@ -151,6 +174,16 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
     fun setPlayerSliderStyle(value: PlayerSliderStyle) = setEnum(AppSettingsKeys.PLAYER_SLIDER_STYLE, value)
     fun setSwipeToChangeSong(value: Boolean) = set(AppSettingsKeys.SWIPE_TO_CHANGE_SONG, value)
     fun setShowAnimatedCanvas(value: Boolean) = set(AppSettingsKeys.SHOW_ANIMATED_CANVAS, value)
+    fun setSkipSilence(value: Boolean) = set(AppSettingsKeys.SKIP_SILENCE, value)
+    fun setPersistentQueue(value: Boolean) = set(AppSettingsKeys.PERSISTENT_QUEUE, value)
+    fun setPreloadNextTrack(value: Boolean) = set(AppSettingsKeys.PRELOAD_NEXT_TRACK, value)
+    fun setAudioNormalizationEnabled(value: Boolean) = set(AppSettingsKeys.AUDIO_NORMALIZATION_ENABLED, value)
+    fun setCrossfadeEnabled(value: Boolean) = set(AppSettingsKeys.CROSSFADE_ENABLED, value)
+    fun setCrossfadeDurationMs(value: Int) = set(AppSettingsKeys.CROSSFADE_DURATION_MS, value)
+    fun setBassBoostEnabled(value: Boolean) = set(AppSettingsKeys.BASS_BOOST_ENABLED, value)
+    fun setBassBoostIntensity(value: Int) = set(AppSettingsKeys.BASS_BOOST_INTENSITY, value)
+    fun setCrossfeedEnabled(value: Boolean) = set(AppSettingsKeys.CROSSFEED_ENABLED, value)
+    fun setCrossfeedIntensity(value: Int) = set(AppSettingsKeys.CROSSFEED_INTENSITY, value)
     fun setRotatingThumbnailAnimation(value: Boolean) = set(AppSettingsKeys.ROTATING_THUMBNAIL_ANIMATION, value)
     fun setShowCommentButton(value: Boolean) = set(AppSettingsKeys.SHOW_COMMENT_BUTTON, value)
     fun setShowCodecInfo(value: Boolean) = set(AppSettingsKeys.SHOW_CODEC_INFO, value)
