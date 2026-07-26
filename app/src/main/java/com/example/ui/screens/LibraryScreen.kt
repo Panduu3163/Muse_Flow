@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -7,8 +10,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -16,42 +21,69 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import com.example.AppSettingsViewModel
 import coil.compose.AsyncImage
+import com.example.CollectionKind
+import com.example.FollowedArtistEntity
 import com.example.LibrarySection
 import com.example.LibraryViewModel
+import com.example.LocalMediaPermission
+import com.example.PlayerViewModel
 import com.example.PlaylistEntity
 import com.example.PlaylistSortOption
 import com.example.TrackSortOption
+import com.example.TrackActionsViewModel
+import com.example.UiState
 import com.example.sortedByLibraryOption
 import com.example.Track
 import com.example.TrackResult
+import com.example.ui.component.CollectionRow
 import com.example.ui.component.LibrarySortHeader
+import com.example.ui.component.TrackActionsHost
+import com.example.ui.component.LocalMediaGate
+import com.example.ui.component.PlaylistActionsSheet
 import com.example.ui.component.TrackRow
+import com.example.ui.component.TrackSelection
+import com.example.ui.component.TrackSelectionHost
+import com.example.ui.component.rememberTrackSelection
 
 /**
  * Library: playlists, liked songs, downloads, most played and recently played - every section
@@ -60,7 +92,12 @@ import com.example.ui.component.TrackRow
 @Composable
 fun LibraryScreen(
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit = { _, _ -> },
+    playerViewModel: PlayerViewModel,
     onOpenPlaylist: (Long) -> Unit = {},
+    onOpenHistory: () -> Unit = {},
+    onOpenStats: () -> Unit = {},
+    onGoToArtist: (String) -> Unit = {},
+    onGoToAlbum: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val viewModel: LibraryViewModel = viewModel()
@@ -78,6 +115,13 @@ fun LibraryScreen(
                 LibrarySection.Downloads -> settings.showDownloadedPlaylist
                 LibrarySection.TopPlayed -> settings.showTopPlaylist
                 LibrarySection.Recent -> settings.showCachedPlaylist
+                // Always offered: it needs no prior activity to be worth opening, unlike the
+                // history-driven sections, and it's the only route to files already on the phone.
+                LibrarySection.OnDevice -> true
+                // Always offered too - the whole point is that this was previously nowhere to
+                // find at all (follow/unfollow only ever existed on the artist sheet), so it
+                // needs to be discoverable before the first follow, not hidden until after.
+                LibrarySection.Following -> true
             }
         }
     }
@@ -86,11 +130,27 @@ fun LibraryScreen(
     LaunchedEffect(visibleSections, section) {
         if (section !in visibleSections) viewModel.selectSection(LibrarySection.Playlists)
     }
+
+    // Re-checked on every resume, not just at composition: the gate can send the user to system
+    // settings to grant access, and coming back from there has to flip this without a restart.
+    val context = LocalContext.current
+    var hasLocalPermission by remember { mutableStateOf(LocalMediaPermission.isGranted(context)) }
+    LifecycleResumeEffect(Unit) {
+        hasLocalPermission = LocalMediaPermission.isGranted(context)
+        onPauseOrDispose { }
+    }
+
+    // Rescanned each time the section is opened, so files added since the last visit appear.
+    LaunchedEffect(section, hasLocalPermission) {
+        if (section == LibrarySection.OnDevice && hasLocalPermission) viewModel.scanLocalTracks()
+    }
     val playlists by viewModel.playlists.collectAsState()
     val liked by viewModel.likedSongs.collectAsState()
     val downloads by viewModel.downloads.collectAsState()
     val topPlayed by viewModel.topPlayed.collectAsState()
     val recent by viewModel.recentlyPlayed.collectAsState()
+    val localTracks by viewModel.localTracks.collectAsState()
+    val followedArtists by viewModel.followedArtists.collectAsState()
     val trackSort by viewModel.trackSort.collectAsState()
     val playlistSort by viewModel.playlistSort.collectAsState()
     val ascending by viewModel.ascending.collectAsState()
@@ -100,13 +160,67 @@ fun LibraryScreen(
         onPlayTrack(track.asTrackResult(), queue.map { it.asTrackResult() })
     }
 
-    Column(modifier = modifier.fillMaxSize().testTag("library_screen")) {
-        Text(
-            text = "Library",
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 12.dp),
-        )
+    val actionsViewModel: TrackActionsViewModel = viewModel()
+    val selection = rememberTrackSelection()
+    // Held as an id, not the entity itself: capturing the entity would freeze the sheet on
+    // whatever isPinned was at long-press time, so toggling pin from inside it never visibly
+    // flipped until the sheet was closed and reopened. Re-deriving from `playlists` every
+    // recomposition keeps it live.
+    var selectedPlaylistId by remember { mutableStateOf<Long?>(null) }
+    val selectedPlaylist = selectedPlaylistId?.let { id -> playlists.find { it.id == id } }
+    var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
+    // Long-press enters multi-select directly; the row's ⋮ button is what opens the sheet now, so
+    // this only needs the track, not a position to hand a "Select" action.
+    val openMenu: (Track) -> Unit = { track -> selectedTrack = track.asTrackResult() }
+    val coverPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val id = selectedPlaylistId
+        if (uri == null || id == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        viewModel.setCustomCover(id, uri.toString())
+    }
+
+    // The list every visible row and every selected position refers to. Hoisted out of the body's
+    // `when` so the selection bar and the rows cannot disagree about what index 3 means.
+    val sectionTracks: List<Track> = when (section) {
+        LibrarySection.Playlists -> emptyList()
+        LibrarySection.Liked -> viewModel.sortTracks(liked)
+        LibrarySection.Downloads -> viewModel.sortTracks(downloads)
+        LibrarySection.TopPlayed -> viewModel.sortTracks(topPlayed)
+        LibrarySection.Recent -> viewModel.sortTracks(recent)
+        LibrarySection.OnDevice ->
+            (localTracks as? UiState.Success)?.data?.let(viewModel::sortTracks).orEmpty()
+        LibrarySection.Following -> emptyList()
+    }
+    val sectionResults = remember(sectionTracks) { sectionTracks.map { it.asTrackResult() } }
+
+    // Anything that renumbers the list invalidates positional selection, so switching section or
+    // re-sorting drops it rather than silently retargeting the ticks onto other songs.
+    LaunchedEffect(section, trackSort, ascending) { selection.clear() }
+
+    Column(modifier = modifier.fillMaxSize().statusBarsPadding().testTag("library_screen")) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 24.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Library",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            // Stats' one entry point - Library has no dedicated tab for it, and it isn't tied to
+            // any one section (it summarizes across all of them), so it lives in the header rather
+            // than as an eighth chip.
+            IconButton(onClick = onOpenStats, modifier = Modifier.testTag("library_open_stats")) {
+                Icon(
+                    imageVector = Icons.Default.BarChart,
+                    contentDescription = "Listening stats",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
 
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -122,10 +236,29 @@ fun LibraryScreen(
             }
         }
 
+        val awaitingPermission = section == LibrarySection.OnDevice && !hasLocalPermission
+
         // One sort header drives whichever section is showing; playlists sort by their own enum
         // since "sort by artist" is meaningless for a playlist.
-        if (section == LibrarySection.Playlists) {
-            LibrarySortHeader(
+        when {
+            // The selection bar takes the sort header's place rather than sitting beside it: the
+            // controls it covers are exactly the ones that would renumber the list under a live
+            // selection.
+            selection.active -> TrackSelectionHost(
+                selection = selection,
+                tracks = sectionResults,
+                playerViewModel = playerViewModel,
+                actionsViewModel = actionsViewModel,
+            )
+
+            // Nothing to sort behind a permission prompt, and "0 songs" over one reads like a
+            // result the user should act on rather than a question they haven't answered yet.
+            awaitingPermission -> Unit
+
+            // A follow list is short and chronological by nature - nothing worth sorting.
+            section == LibrarySection.Following -> Unit
+
+            section == LibrarySection.Playlists -> LibrarySortHeader(
                 options = PlaylistSortOption.entries.toList(),
                 selected = playlistSort,
                 onSelect = viewModel::setPlaylistSort,
@@ -134,36 +267,123 @@ fun LibraryScreen(
                 optionLabel = { it.label },
                 countLabel = "${playlists.size} playlist${if (playlists.size == 1) "" else "s"}",
             )
-        } else {
-            val count = when (section) {
-                LibrarySection.Liked -> liked.size
-                LibrarySection.Downloads -> downloads.size
-                LibrarySection.TopPlayed -> topPlayed.size
-                else -> recent.size
+
+            else -> {
+                val count = sectionTracks.size
+                LibrarySortHeader(
+                    options = TrackSortOption.entries.toList(),
+                    selected = trackSort,
+                    onSelect = viewModel::setTrackSort,
+                    ascending = ascending,
+                    onToggleDirection = viewModel::toggleDirection,
+                    optionLabel = { it.label },
+                    countLabel = "$count song${if (count == 1) "" else "s"}",
+                    isGrid = gridView,
+                    onToggleGrid = viewModel::toggleGridView,
+                )
             }
-            LibrarySortHeader(
-                options = TrackSortOption.entries.toList(),
-                selected = trackSort,
-                onSelect = viewModel::setTrackSort,
-                ascending = ascending,
-                onToggleDirection = viewModel::toggleDirection,
-                optionLabel = { it.label },
-                countLabel = "$count song${if (count == 1) "" else "s"}",
-                isGrid = gridView,
-                onToggleGrid = viewModel::toggleGridView,
-            )
         }
 
         when (section) {
             LibrarySection.Playlists -> PlaylistList(
                 playlists.sortedByLibraryOption(playlistSort, ascending),
+                viewModel,
                 onOpenPlaylist,
+                onLongPress = { selectedPlaylistId = it.id },
             )
-            LibrarySection.Liked -> TrackList(viewModel.sortTracks(liked), "Nothing liked yet.", gridView, play)
-            LibrarySection.Downloads -> TrackList(viewModel.sortTracks(downloads), "No downloads yet.", gridView, play)
-            LibrarySection.TopPlayed -> TrackList(viewModel.sortTracks(topPlayed), "Play something and it'll show up here.", gridView, play)
-            LibrarySection.Recent -> TrackList(viewModel.sortTracks(recent), "Nothing played yet.", gridView, play)
+            LibrarySection.Liked -> TrackList(sectionTracks, "Nothing liked yet.", gridView, play, openMenu, selection)
+            LibrarySection.Downloads -> TrackList(sectionTracks, "No downloads yet.", gridView, play, openMenu, selection)
+            LibrarySection.TopPlayed -> TrackList(sectionTracks, "Play something and it'll show up here.", gridView, play, openMenu, selection)
+            // The capped, sortable slice for getting back to something quickly - the full record,
+            // with its own editing, lives on the History screen this links to.
+            LibrarySection.Recent -> Column {
+                TextButton(
+                    onClick = onOpenHistory,
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .testTag("library_open_history"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.History,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(text = "View full history", modifier = Modifier.padding(start = 8.dp))
+                }
+                TrackList(sectionTracks, "Nothing played yet.", gridView, play, openMenu, selection)
+            }
+            LibrarySection.OnDevice -> when {
+                !hasLocalPermission -> LocalMediaGate(
+                    onGranted = { hasLocalPermission = true },
+                )
+
+                localTracks is UiState.Loading -> Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+
+                localTracks is UiState.Error -> EmptyState((localTracks as UiState.Error).message)
+
+                else -> TrackList(
+                    sectionTracks,
+                    "No music files found on this device.",
+                    gridView,
+                    play,
+                    openMenu,
+                    selection,
+                )
+            }
+            LibrarySection.Following -> FollowedArtistsList(followedArtists, onGoToArtist)
         }
+    }
+
+    TrackActionsHost(
+        track = selectedTrack,
+        onDismiss = { selectedTrack = null },
+        playerViewModel = playerViewModel,
+        actionsViewModel = actionsViewModel,
+        onGoToArtist = onGoToArtist,
+        onGoToAlbum = onGoToAlbum,
+    )
+
+    selectedPlaylist?.let { playlist ->
+        // Subscribes this playlist's track flow so it's populated even if its detail screen has
+        // never been opened this session - `tracksForPlaylist` only starts emitting once collected.
+        val playlistTracks by viewModel.tracksForPlaylist(playlist.id).collectAsState()
+        val playlistResults = remember(playlistTracks) { playlistTracks.map { it.asTrackResult() } }
+
+        PlaylistActionsSheet(
+            name = playlist.name,
+            songCount = playlistTracks.size,
+            coverImageUrl = playlist.coverImageUrl,
+            isPinned = playlist.isPinned,
+            onTogglePin = { viewModel.togglePin(playlist) },
+            onShuffle = {
+                val shuffled = playlistResults.shuffled()
+                shuffled.firstOrNull()?.let { onPlayTrack(it, shuffled) }
+            },
+            onStartRadio = {
+                playlistResults.firstOrNull()?.let { seed ->
+                    playerViewModel.startRadio(seed) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Couldn't start radio",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }
+            },
+            onPlayNext = { playerViewModel.playNext(playlistResults) },
+            onAddToQueue = { playerViewModel.addToQueue(playlistResults) },
+            onDownload = { actionsViewModel.downloadAll(playlistTracks) },
+            onDelete = { viewModel.deletePlaylist(playlist) },
+            onDismiss = { selectedPlaylistId = null },
+            onChangeCover = { coverPickerLauncher.launch(arrayOf("image/*")) },
+            hasCustomCover = playlist.customCoverUri != null,
+            onRemoveCustomCover = { viewModel.setCustomCover(playlist.id, null) },
+        )
     }
 }
 
@@ -173,6 +393,9 @@ private fun TrackList(
     emptyMessage: String,
     gridView: Boolean,
     onPlay: (Track, List<Track>) -> Unit,
+    /** Opens the row's actions sheet - reached via the row's own `⋮` now, not long-press. */
+    onOpenMenu: (Track) -> Unit,
+    selection: TrackSelection,
 ) {
     if (tracks.isEmpty()) {
         EmptyState(emptyMessage)
@@ -188,32 +411,62 @@ private fun TrackList(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(tracks, key = { "${it.title}|${it.artist}" }) { track ->
-                TrackGridCell(track = track, onClick = { onPlay(track, tracks) })
+            // Position-keyed: a phone's own music folder routinely holds the same song twice, and
+            // "title|artist" collides there - a repeated Compose key throws rather than just
+            // looking odd.
+            itemsIndexed(tracks, key = { index, _ -> index }) { index, track ->
+                TrackGridCell(
+                    track = track,
+                    // Once anything is ticked a plain tap toggles instead of playing: with a
+                    // selection on screen, tapping a row to start a song would look like a misfire.
+                    onClick = {
+                        if (selection.active) selection.toggle(index) else onPlay(track, tracks)
+                    },
+                    // Enters selection directly - a grid cell has no room for its own menu button,
+                    // so unlike the list this is the only way into multi-select from the grid.
+                    onLongClick = {
+                        if (selection.active) selection.toggle(index) else selection.start(index)
+                    },
+                    selected = selection.isSelected(index),
+                )
             }
         }
         return
     }
 
     LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 140.dp)) {
-        items(tracks, key = { "${it.title}|${it.artist}" }) { track ->
+        itemsIndexed(tracks, key = { index, _ -> index }) { index, track ->
             TrackRow(
                 title = track.title,
                 artist = track.artist,
                 imageUrl = track.imageUrl,
                 duration = track.duration,
-                onClick = { onPlay(track, tracks) },
+                onClick = {
+                    if (selection.active) selection.toggle(index) else onPlay(track, tracks)
+                },
+                onLongClick = {
+                    if (selection.active) selection.toggle(index) else selection.start(index)
+                },
+                selected = selection.isSelected(index),
+                // No menu button while selecting - the selection bar is the row's controls then.
+                onOpenMenu = if (selection.active) null else { { onOpenMenu(track) } },
             )
         }
     }
 }
 
 /** Square-artwork cell used by the grid view. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TrackGridCell(track: Track, onClick: () -> Unit) {
+private fun TrackGridCell(
+    track: Track,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    selected: Boolean = false,
+) {
     Column(
         modifier = Modifier
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .testTag("track_cell_${track.title.lowercase().replace(" ", "_")}"),
     ) {
         Box(
@@ -224,7 +477,21 @@ private fun TrackGridCell(track: Track, onClick: () -> Unit) {
                 .background(MaterialTheme.colorScheme.surfaceContainerHighest),
             contentAlignment = Alignment.Center,
         ) {
-            if (track.imageUrl != null) {
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Selected",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(36.dp),
+                    )
+                }
+            } else if (track.imageUrl != null) {
                 AsyncImage(
                     model = track.imageUrl,
                     contentDescription = null,
@@ -257,45 +524,198 @@ private fun TrackGridCell(track: Track, onClick: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+/**
+ * A 2-column grid of big playlist tiles, each showing a mosaic of its own tracks' artwork - the
+ * same "cover generated from the tracks themselves" idea [PlaylistDetailScreen] uses for a single
+ * playlist's own cover, now applied per-tile here so browsing Library's playlist list looks like a
+ * wall of covers instead of a list of icons.
+ */
 @Composable
-private fun PlaylistList(playlists: List<PlaylistEntity>, onOpenPlaylist: (Long) -> Unit) {
+private fun PlaylistList(
+    playlists: List<PlaylistEntity>,
+    viewModel: LibraryViewModel,
+    onOpenPlaylist: (Long) -> Unit,
+    onLongPress: (PlaylistEntity) -> Unit,
+) {
     if (playlists.isEmpty()) {
         EmptyState("No playlists yet. Long-press any song and choose \"Add to playlist\".")
         return
     }
-    LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 140.dp)) {
-        items(playlists, key = { it.id }) { playlist ->
+    // A LazyColumn of manually chunked rows, not LazyVerticalGrid - LazyVerticalGrid clips a row
+    // that's newly appearing with fewer items than columns (e.g. a third playlist landing alone
+    // right after being added) to a too-short height, cutting the cover and the title/count text
+    // below it off entirely.
+    LazyColumn(
+        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 140.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        items(playlists.chunked(2), key = { row -> row.joinToString("_") { it.id.toString() } }) { row ->
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenPlaylist(playlist.id) }
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                row.forEach { playlist ->
+                    PlaylistGridTile(
+                        playlist = playlist,
+                        viewModel = viewModel,
+                        onOpenPlaylist = onOpenPlaylist,
+                        onLongPress = onLongPress,
+                        modifier = Modifier.weight(1f),
                     )
                 }
-                Text(
-                    text = playlist.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(start = 12.dp),
+                // An odd final row: a spacer holds the empty slot's width so the lone tile stays
+                // sized like its siblings instead of stretching to fill the row.
+                if (row.size == 1) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PlaylistGridTile(
+    playlist: PlaylistEntity,
+    viewModel: LibraryViewModel,
+    onOpenPlaylist: (Long) -> Unit,
+    onLongPress: (PlaylistEntity) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tracks by viewModel.tracksForPlaylist(playlist.id).collectAsState()
+    Column(
+        modifier = modifier
+            .combinedClickable(
+                onClick = { onOpenPlaylist(playlist.id) },
+                onLongClick = { onLongPress(playlist) },
+            )
+            .testTag("playlist_row_${playlist.name.lowercase().replace(" ", "_")}"),
+    ) {
+        PlaylistGridCover(tracks = tracks, fallbackCoverUrl = playlist.coverImageUrl, customCoverUri = playlist.customCoverUri)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = playlist.name,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            // Explains why a pinned playlist sits above ones created after it - otherwise the
+            // reordering next to "Date created" would look like a bug.
+            if (playlist.isPinned) {
+                Icon(
+                    imageVector = Icons.Default.PushPin,
+                    contentDescription = "Pinned",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(14.dp).padding(start = 4.dp),
                 )
             }
+        }
+        Text(
+            text = "${tracks.size} song${if (tracks.size == 1) "" else "s"}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** A single grid tile's artwork: a 2x2 mosaic of the playlist's first four track thumbnails, same
+ * fallback chain as [PlaylistDetailScreen]'s full-screen cover (mosaic -> a real assigned cover ->
+ * one track's art -> a plain icon), just square and grid-sized instead of full-bleed. [customCoverUri]
+ * (a user-picked photo) wins over everything else - see [PlaylistDetailScreen]'s `PlaylistCover` for
+ * why that ranks above the mosaic, unlike an imported playlist's incidental [fallbackCoverUrl]. */
+@Composable
+private fun PlaylistGridCover(tracks: List<Track>, fallbackCoverUrl: String?, customCoverUri: String? = null) {
+    val thumbnails = remember(tracks) { tracks.mapNotNull { it.imageUrl }.distinct().take(4) }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+    ) {
+        when {
+            customCoverUri != null -> AsyncImage(
+                model = customCoverUri,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            thumbnails.size == 4 -> Column(modifier = Modifier.fillMaxSize()) {
+                Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    GridMosaicCell(thumbnails[0], Modifier.weight(1f).fillMaxSize())
+                    GridMosaicCell(thumbnails[1], Modifier.weight(1f).fillMaxSize())
+                }
+                Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    GridMosaicCell(thumbnails[2], Modifier.weight(1f).fillMaxSize())
+                    GridMosaicCell(thumbnails[3], Modifier.weight(1f).fillMaxSize())
+                }
+            }
+
+            fallbackCoverUrl != null -> AsyncImage(
+                model = fallbackCoverUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            thumbnails.isNotEmpty() -> AsyncImage(
+                model = thumbnails.first(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            else -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(40.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GridMosaicCell(imageUrl: String, modifier: Modifier) {
+    AsyncImage(
+        model = imageUrl,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = modifier,
+    )
+}
+
+/** The list this whole session's "no way to see who you follow" gap was blocking on - reuses
+ * [CollectionRow], the same row Search's album/artist/playlist results already render with, so a
+ * followed artist looks exactly like it would if you'd just found them again in Search. */
+@Composable
+private fun FollowedArtistsList(
+    artists: List<FollowedArtistEntity>,
+    onOpenArtist: (String) -> Unit,
+) {
+    if (artists.isEmpty()) {
+        EmptyState("Not following anyone yet. Follow an artist from their page or a search result.")
+        return
+    }
+    LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 140.dp)) {
+        items(artists, key = { it.artistId }) { artist ->
+            CollectionRow(
+                title = artist.name,
+                subtitle = "Artist",
+                imageUrl = artist.imageUrl,
+                kind = CollectionKind.Artist,
+                onClick = { onOpenArtist(artist.artistId) },
+            )
         }
     }
 }

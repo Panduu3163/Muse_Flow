@@ -168,6 +168,51 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
         parseTrackShelfItems(shelfItems, fallbackArtist = albumArtist)
     }
 
+    /** The Album screen's counterpart to [getAlbumTracks] - same browse call, additionally reading
+     * the album's own title/cover off the header this already fetches, so the screen (which
+     * navigates here by id alone) has something to render before the tracklist arrives. */
+    suspend fun getAlbumDetails(albumId: String): AlbumDetails = withContext(Dispatchers.IO) {
+        val root = browse(albumId)
+        val header = root.optJSONObject("contents")
+            ?.optJSONObject("twoColumnBrowseResultsRenderer")
+            ?.optJSONArray("tabs")
+            ?.optJSONObject(0)
+            ?.optJSONObject("tabRenderer")
+            ?.optJSONObject("content")
+            ?.optJSONObject("sectionListRenderer")
+            ?.optJSONArray("contents")
+            ?.optJSONObject(0)
+            ?.optJSONObject("musicResponsiveHeaderRenderer")
+        val title = header
+            ?.optJSONObject("title")
+            ?.optJSONArray("runs")
+            ?.optJSONObject(0)
+            ?.optString("text")
+            ?.takeIf { it.isNotBlank() }
+        val albumArtist = header
+            ?.optJSONObject("straplineTextOne")
+            ?.optJSONArray("runs")
+            ?.optJSONObject(0)
+            ?.optString("text")
+            ?.takeIf { it.isNotBlank() }
+        val shelfItems = root.optJSONObject("contents")
+            ?.optJSONObject("twoColumnBrowseResultsRenderer")
+            ?.optJSONObject("secondaryContents")
+            ?.optJSONObject("sectionListRenderer")
+            ?.optJSONArray("contents")
+            ?.optJSONObject(0)
+            ?.optJSONObject("musicShelfRenderer")
+            ?.optJSONArray("contents")
+            ?: JSONArray()
+
+        AlbumDetails(
+            title = title,
+            artist = albumArtist,
+            imageUrl = header?.let { extractThumbnailUrl(it) },
+            tracks = parseTrackShelfItems(shelfItems, fallbackArtist = albumArtist),
+        )
+    }
+
     /** Fetches an artist's "Top songs" shelf plus their listener count, via a `browse` call on
      * [artistId] (the `UC...`-style channel-id browseId from [searchArtists]'s
      * [ArtistResult.id]) - the closest this API offers to a flat discography, same limitation
@@ -176,13 +221,21 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
      * "54.6M monthly audience"), the same stat shown on the artist's actual YouTube Music page. */
     suspend fun getArtistTracklist(artistId: String): ArtistTracklist = withContext(Dispatchers.IO) {
         val root = browse(artistId)
-        val listenerCount = root.optJSONObject("header")
+        val immersiveHeader = root.optJSONObject("header")
             ?.optJSONObject("musicImmersiveHeaderRenderer")
+        val listenerCount = immersiveHeader
             ?.optJSONObject("monthlyListenerCount")
             ?.optJSONArray("runs")
             ?.optJSONObject(0)
             ?.optString("text")
             ?.takeIf { it.isNotBlank() }
+        val name = immersiveHeader
+            ?.optJSONObject("title")
+            ?.optJSONArray("runs")
+            ?.optJSONObject(0)
+            ?.optString("text")
+            ?.takeIf { it.isNotBlank() }
+        val imageUrl = immersiveHeader?.let { extractThumbnailUrl(it) }
         val shelfItems = root.optJSONObject("contents")
             ?.optJSONObject("singleColumnBrowseResultsRenderer")
             ?.optJSONArray("tabs")
@@ -195,7 +248,12 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
             ?.optJSONObject("musicShelfRenderer")
             ?.optJSONArray("contents")
             ?: JSONArray()
-        ArtistTracklist(tracks = parseTrackShelfItems(shelfItems), listenerCount = listenerCount)
+        ArtistTracklist(
+            tracks = parseTrackShelfItems(shelfItems),
+            monthlyListenerCountText = listenerCount,
+            name = name,
+            imageUrl = imageUrl,
+        )
     }
 
     /** Fetches a playlist's full tracklist via a `browse` call on [playlistId] (the

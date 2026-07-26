@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,6 +30,8 @@ import androidx.compose.material.icons.filled.Gradient
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HideImage
+import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Waves
@@ -59,6 +62,7 @@ import com.example.GridCellSize
 import com.example.LyricsTextPosition
 import com.example.PlayerButtonColorOption
 import com.example.PlayerSliderStyle
+import com.example.WordAnimationStyle
 import com.example.ThemeViewModel
 import com.example.ui.component.ColorPickerDialog
 import com.example.ui.component.ListPreference
@@ -92,6 +96,8 @@ private val AccentSeeds: List<Pair<String, Color>> = listOf(
 @Composable
 fun SettingsScreen(
     onOpenEqualizer: () -> Unit = {},
+    onOpenBackup: () -> Unit = {},
+    onOpenCrashLogs: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val themeViewModel: ThemeViewModel = viewModel()
@@ -116,6 +122,7 @@ fun SettingsScreen(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
+            .statusBarsPadding()
             .testTag("settings_screen"),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 140.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -214,6 +221,20 @@ fun SettingsScreen(
         }
 
         item {
+            PreferenceGroup(title = "Mini player") {
+                ListPreference(
+                    title = "Background style",
+                    subtitle = "Gradient, blur and glow are built from the current artwork.",
+                    icon = Icons.Default.Gradient,
+                    selected = settings.miniPlayerBackgroundStyle,
+                    options = BackgroundStyle.entries.toList(),
+                    label = { it.label },
+                    onSelect = settingsViewModel::setMiniPlayerBackgroundStyle,
+                )
+            }
+        }
+
+        item {
             PreferenceGroup(title = "Player") {
                 SwitchPreference(
                     title = "Hide artwork",
@@ -302,6 +323,21 @@ fun SettingsScreen(
                     checked = settings.blurInactiveLines,
                     onCheckedChange = settingsViewModel::setBlurInactiveLines,
                 )
+                ListPreference(
+                    title = "Word animation",
+                    subtitle = "How the word being sung right now is highlighted - only visible " +
+                        "on lyrics with word-level timing (not every source has it).",
+                    selected = settings.wordAnimationStyle,
+                    options = WordAnimationStyle.entries.toList(),
+                    label = { it.label },
+                    onSelect = settingsViewModel::setWordAnimationStyle,
+                )
+                SwitchPreference(
+                    title = "Glowing effect",
+                    subtitle = "Adds a soft light glow around the word being sung.",
+                    checked = settings.glowingLyricsEffect,
+                    onCheckedChange = settingsViewModel::setGlowingLyricsEffect,
+                )
             }
         }
 
@@ -319,6 +355,58 @@ fun SettingsScreen(
                     icon = Icons.Default.FastForward,
                     checked = settings.skipSilence,
                     onCheckedChange = settingsViewModel::setSkipSilence,
+                )
+                SwitchPreference(
+                    title = "Normalize volume",
+                    subtitle = "Smooths loudness differences between tracks.",
+                    icon = Icons.Default.GraphicEq,
+                    checked = settings.audioNormalizationEnabled,
+                    onCheckedChange = settingsViewModel::setAudioNormalizationEnabled,
+                )
+                SwitchPreference(
+                    title = "Crossfade",
+                    subtitle = "Fades between tracks instead of a hard cut.",
+                    icon = Icons.Default.GraphicEq,
+                    checked = settings.crossfadeEnabled,
+                    onCheckedChange = settingsViewModel::setCrossfadeEnabled,
+                )
+                SliderPreference(
+                    title = "Crossfade length",
+                    value = settings.crossfadeDurationMs / 1000,
+                    range = 1..12,
+                    enabled = settings.crossfadeEnabled,
+                    valueLabel = { "${it}s" },
+                    onValueChange = { settingsViewModel.setCrossfadeDurationMs(it * 1000) },
+                )
+                SwitchPreference(
+                    title = "Bass boost",
+                    subtitle = "A low-end lift, separate from the equalizer's own bands.",
+                    icon = Icons.Default.GraphicEq,
+                    checked = settings.bassBoostEnabled,
+                    onCheckedChange = settingsViewModel::setBassBoostEnabled,
+                )
+                SliderPreference(
+                    title = "Bass boost intensity",
+                    value = settings.bassBoostIntensity,
+                    range = 0..100,
+                    enabled = settings.bassBoostEnabled,
+                    valueLabel = { "$it%" },
+                    onValueChange = settingsViewModel::setBassBoostIntensity,
+                )
+                SwitchPreference(
+                    title = "Headphone crossfeed",
+                    subtitle = "Softens hard stereo panning on headphones.",
+                    icon = Icons.Default.GraphicEq,
+                    checked = settings.crossfeedEnabled,
+                    onCheckedChange = settingsViewModel::setCrossfeedEnabled,
+                )
+                SliderPreference(
+                    title = "Crossfeed intensity",
+                    value = settings.crossfeedIntensity,
+                    range = 0..100,
+                    enabled = settings.crossfeedEnabled,
+                    valueLabel = { "$it%" },
+                    onValueChange = settingsViewModel::setCrossfeedIntensity,
                 )
             }
         }
@@ -352,6 +440,18 @@ fun SettingsScreen(
                     options = DefaultTab.entries.toList(),
                     label = { it.label },
                     onSelect = settingsViewModel::setDefaultOpenTab,
+                )
+                NavigationPreference(
+                    title = "Backup & restore",
+                    subtitle = "Export liked songs and playlists, or restore them.",
+                    icon = Icons.Default.Backup,
+                    onClick = onOpenBackup,
+                )
+                NavigationPreference(
+                    title = "Crash logs",
+                    subtitle = "View or share a report from a previous crash.",
+                    icon = Icons.Default.BugReport,
+                    onClick = onOpenCrashLogs,
                 )
             }
         }

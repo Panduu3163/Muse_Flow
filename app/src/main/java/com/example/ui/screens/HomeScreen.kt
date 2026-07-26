@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -42,21 +43,22 @@ import coil.compose.AsyncImage
 import com.example.AppSettingsViewModel
 import com.example.GridCellSize
 import com.example.HomeViewModel
+import com.example.PlaylistEntity
+import com.example.PlaylistResult
 import com.example.Track
 import com.example.TrackResult
 import com.example.UiState
 import com.example.MusicSource
 
 /**
- * Home: local sections first (resume, most played, playlists), then genre/mood shelves fetched
+ * Home: local sections first (recently played, most played, playlists), then shelves fetched
  * through the selected extractor and cached to Room for offline use.
  */
 @Composable
 fun HomeScreen(
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit = { _, _ -> },
-    /** True while the player already has something loaded - the mini-player is showing it, so the
-     * resume card would be duplicate (and misleading) chrome. */
-    isPlayerActive: Boolean = false,
+    onOpenPlaylist: (Long) -> Unit = {},
+    onOpenRemotePlaylist: (String, String, String, String?) -> Unit = { _, _, _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val viewModel: HomeViewModel = viewModel()
@@ -70,13 +72,14 @@ fun HomeScreen(
         GridCellSize.Medium -> 140.dp
         GridCellSize.Large -> 172.dp
     }
-    val continueListening by viewModel.continueListening.collectAsState()
     val recentlyPlayed by viewModel.recentlyPlayed.collectAsState()
     val topPlayed by viewModel.topPlayed.collectAsState()
     val shelves by viewModel.shelves.collectAsState()
     val forgottenFavourites by viewModel.forgottenFavourites.collectAsState()
-    val similarToFavourite by viewModel.similarToFavourite.collectAsState()
-    val favouriteArtist by viewModel.favouriteArtist.collectAsState()
+    val shelfSpecs by viewModel.shelfSpecs.collectAsState()
+    val playlists by viewModel.playlists.collectAsState()
+    val dailyDiscover by viewModel.dailyDiscover.collectAsState()
+    val communityPlaylists by viewModel.communityPlaylists.collectAsState()
 
     // Home's local sections hold Track (from Room); playback takes TrackResult, so they're mapped
     // at the point of the tap rather than storing two parallel shapes everywhere.
@@ -87,6 +90,7 @@ fun HomeScreen(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
+            .statusBarsPadding()
             .testTag("home_screen"),
         contentPadding = PaddingValues(top = 24.dp, bottom = 140.dp),
     ) {
@@ -97,23 +101,6 @@ fun HomeScreen(
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(start = 16.dp, bottom = 16.dp),
             )
-        }
-
-        // Only shown when nothing is loaded in the player. Previously this appeared even mid-song,
-        // where it either advertised a *different* track than the one playing, or showed the same
-        // track with a play icon that restarted it from zero - both confusing when the mini-player
-        // is right there showing the truth.
-        if (!isPlayerActive) {
-            continueListening?.let { track ->
-                item {
-                    ContinueListeningCard(
-                        track = track,
-                        // Queue the whole recent list, not just this track: a one-item queue ends
-                        // immediately and has nothing to advance to.
-                        onClick = { playTracks(track, recentlyPlayed.ifEmpty { listOf(track) }) },
-                    )
-                }
-            }
         }
 
         if (recentlyPlayed.isNotEmpty()) {
@@ -142,19 +129,49 @@ fun HomeScreen(
             }
         }
 
-        if (similarToFavourite.isNotEmpty()) {
+        if (playlists.isNotEmpty()) {
             item {
-                Shelf(title = favouriteArtist?.let { "More from $it" } ?: "More like this") {
-                    TrackCarousel(similarToFavourite, cardSize) {
-                        playTracks(it, similarToFavourite)
-                    }
+                Shelf(title = "Your playlists") {
+                    PlaylistCarousel(playlists, cardSize) { onOpenPlaylist(it.id) }
                 }
             }
         }
 
-        items(viewModel.shelfTitles, key = { it }) { title ->
-            Shelf(title = title) {
-                Crossfade(targetState = shelves[title] ?: UiState.Loading, label = "shelf_$title") { state ->
+        when (dailyDiscover) {
+            is UiState.Success -> {
+                val discovered = (dailyDiscover as UiState.Success<List<Track>>).data
+                if (discovered.isNotEmpty()) {
+                    item {
+                        Shelf(title = "Daily Discover") {
+                            TrackCarousel(discovered, cardSize) { playTracks(it, discovered) }
+                        }
+                    }
+                }
+            }
+            is UiState.Loading -> item { Shelf(title = "Daily Discover") { ShelfSkeleton() } }
+            is UiState.Error -> Unit
+        }
+
+        when (communityPlaylists) {
+            is UiState.Success -> {
+                val results = (communityPlaylists as UiState.Success<List<PlaylistResult>>).data
+                if (results.isNotEmpty()) {
+                    item {
+                        Shelf(title = "From the community") {
+                            RemotePlaylistCarousel(results, cardSize) { playlist ->
+                                onOpenRemotePlaylist(playlist.id, playlist.title, playlist.subtitle, playlist.imageUrl)
+                            }
+                        }
+                    }
+                }
+            }
+            is UiState.Loading -> item { Shelf(title = "From the community") { ShelfSkeleton() } }
+            is UiState.Error -> Unit
+        }
+
+        items(shelfSpecs, key = { it.title }) { spec ->
+            Shelf(title = spec.title) {
+                Crossfade(targetState = shelves[spec.title] ?: UiState.Loading, label = "shelf_${spec.title}") { state ->
                     when (state) {
                         is UiState.Loading -> ShelfSkeleton()
                         is UiState.Error -> ShelfMessage(state.message)
@@ -165,65 +182,6 @@ fun HomeScreen(
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ContinueListeningCard(track: Track, onClick: () -> Unit) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .clickable(onClick = onClick)
-            .testTag("continue_listening_card"),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    ) {
-        Row(
-            modifier = Modifier.padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Artwork(imageUrl = track.imageUrl, size = 60.dp, corner = 12.dp)
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 14.dp),
-            ) {
-                Text(
-                    text = "Continue listening",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    text = track.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = track.artist,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = "Resume",
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(22.dp),
-                )
             }
         }
     }
@@ -269,6 +227,73 @@ private fun TrackCarousel(
                 )
                 Text(
                     text = track.artist,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistCarousel(
+    playlists: List<PlaylistEntity>,
+    cardSize: androidx.compose.ui.unit.Dp,
+    onOpen: (PlaylistEntity) -> Unit,
+) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+    ) {
+        items(playlists, key = { it.id }) { playlist ->
+            Column(
+                modifier = Modifier
+                    .width(cardSize)
+                    .clickable { onOpen(playlist) },
+            ) {
+                Artwork(imageUrl = playlist.coverImageUrl, size = cardSize, corner = 14.dp)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = playlist.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RemotePlaylistCarousel(
+    playlists: List<PlaylistResult>,
+    cardSize: androidx.compose.ui.unit.Dp,
+    onOpen: (PlaylistResult) -> Unit,
+) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+    ) {
+        items(playlists, key = { it.id }) { playlist ->
+            Column(
+                modifier = Modifier
+                    .width(cardSize)
+                    .clickable { onOpen(playlist) },
+            ) {
+                Artwork(imageUrl = playlist.imageUrl, size = cardSize, corner = 14.dp)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = playlist.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = playlist.subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -357,4 +382,6 @@ internal fun Track.asTrackResult(): TrackResult = TrackResult(
     sourceType = sourceType ?: MusicSource.YOUTUBE_MUSIC,
     directStreamUrl = streamUrl,
     imageUrl = imageUrl,
+    albumId = albumId,
+    artistId = artistId,
 )

@@ -53,6 +53,12 @@ class DownloadRepository private constructor(context: Context) {
 
     val completedDownloads: Flow<List<DownloadedTrackEntity>> = dao.observeCompleted()
 
+    /** One-shot lookup by [Track.downloadKey]/[TrackResult.downloadKey] - null when not
+     * downloaded (or download row exists but hasn't completed). Used to prefer a local file over
+     * streaming when the same track is played again from search/a shelf/a playlist. */
+    suspend fun getByKey(key: String): DownloadedTrackEntity? =
+        dao.getByKey(key)?.takeIf { it.status == DownloadStatus.COMPLETED.name }
+
     fun isDownloading(track: Track): Boolean = activeJobs.containsKey(track.downloadKey())
 
     fun startDownload(track: Track) {
@@ -95,7 +101,9 @@ class DownloadRepository private constructor(context: Context) {
                         status = DownloadStatus.COMPLETED.name,
                         updatedAt = System.currentTimeMillis(),
                         sourceId = track.sourceId,
-                        sourceType = track.sourceType?.name
+                        sourceType = track.sourceType?.name,
+                        albumId = track.albumId,
+                        artistId = track.artistId,
                     )
                 )
                 DownloadNotificationHelper.showCompleted(appContext, track)

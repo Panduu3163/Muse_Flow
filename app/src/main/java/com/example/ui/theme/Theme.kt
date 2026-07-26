@@ -61,7 +61,14 @@ fun MuseFlowTheme(
             seedColor = themeColor,
             isDark = darkTheme,
             specVersion = ColorSpec.SpecVersion.SPEC_2025,
-            style = PaletteStyle.TonalSpot
+            // Fidelity, not TonalSpot: TonalSpot normalizes every seed to a fixed, moderate chroma
+            // regardless of how saturated the input colour actually was, so the custom colour
+            // picker's saturation/value square could move its own selection ring correctly and
+            // still produce a visually identical theme - hue was the only thing that ever came
+            // through. Fidelity keeps the generated palette's chroma tied to the seed's own, so a
+            // more saturated pick actually reads as more vivid and a desaturated one actually reads
+            // as more muted/grey, matching what the square is for.
+            style = PaletteStyle.Fidelity
         )
     }
 

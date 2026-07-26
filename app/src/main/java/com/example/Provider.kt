@@ -21,7 +21,14 @@ data class TrackResult(
      */
     val directStreamUrl: String? = null,
     /** Cover art URL, used as the media notification's large icon when present. */
-    val imageUrl: String? = null
+    val imageUrl: String? = null,
+    /** The track's album browseId, when the source exposes one - lets "View album" navigate
+     * straight there. Null for local files and any result where the source genuinely has no
+     * album (a single, or a video not attached to one). */
+    val albumId: String? = null,
+    /** The track's (primary) artist browseId, when the source exposes one - lets "View artist"
+     * navigate straight there. Null for local files. */
+    val artistId: String? = null,
 )
 
 /** An album search result, enough to render a row and fetch its tracklist - [id] is a YouTube
@@ -49,10 +56,75 @@ data class ArtistResult(
 /** An artist's real top-tracks list plus, when the source exposes it, a listener-count string in
  * whatever format that source presents it (already formatted/abbreviated - e.g. "54.6M monthly
  * audience") - null if unavailable for this particular artist. Bundled together (rather than
- * fetched separately) because both pieces come from the exact same underlying API response. */
+ * fetched separately) because both pieces come from the exact same underlying API response.
+ *
+ * [name]/[imageUrl] are the artist's own header details, added so the Artist screen (which
+ * navigates here by id alone - e.g. from a Liked track's stored [TrackResult.artistId], with no
+ * cached [ArtistResult] in hand) doesn't need a second fetch just to render its own title. Null
+ * on a backend/page that doesn't expose them; the screen falls back to a generic label. */
 data class ArtistTracklist(
     val tracks: List<TrackResult>,
-    val listenerCount: String? = null
+    /** YouTube's subscriber count (e.g. "1.2M subscribers") and its separate monthly-listener
+     * figure (e.g. "54.6M monthly listeners") - kept apart rather than coalesced into one string
+     * because the Artist screen shows both as their own capsule, same as Echo Music does. Either
+     * can be null independently of the other. */
+    val subscriberCountText: String? = null,
+    val monthlyListenerCountText: String? = null,
+    val name: String? = null,
+    val imageUrl: String? = null,
+    /** The artist page's own bio/description text, for the Artist screen's "About" section. Null
+     * on a backend/page that doesn't expose one. */
+    val description: String? = null,
+    /** Discography and "fans might also like"-style shelves, from the same page response as
+     * [tracks] - the artist page's own sections carry these already; they just weren't being
+     * read before. Empty on the legacy backend, which doesn't parse them (deliberately not
+     * attempted there - see the plan doc's note on why legacy JSON parsing stays conservative). */
+    val albums: List<AlbumResult> = emptyList(),
+    val relatedArtists: List<ArtistResult> = emptyList(),
+)
+
+/** An album's own header details plus its tracklist - the album-page equivalent of
+ * [ArtistTracklist], for the same reason: the Album screen navigates here by id alone. */
+data class AlbumDetails(
+    val title: String?,
+    val artist: String?,
+    val imageUrl: String?,
+    val tracks: List<TrackResult>,
+)
+
+/** One shelf of a generic browse page (a mood/genre page, or anything else reached by browseId +
+ * params) - mixed content, same as an artist page's extra shelves, so it's the same four buckets
+ * rather than a sealed type per item kind. */
+data class BrowseSection(
+    val title: String?,
+    val tracks: List<TrackResult> = emptyList(),
+    val albums: List<AlbumResult> = emptyList(),
+    val artists: List<ArtistResult> = emptyList(),
+    val playlists: List<PlaylistResult> = emptyList(),
+)
+
+/** A generic browse page, reached by a `browseId` (+ optional `params`) rather than a fixed
+ * endpoint - what a mood/genre tile from [MoodGenreCategory] actually opens. */
+data class BrowsePage(
+    val title: String?,
+    val sections: List<BrowseSection>,
+)
+
+/** One tappable mood/genre tile - [colorArgb] is the tile's own background colour from the
+ * source (YouTube Music picks a different one per tile), [browseId]/[params] together are what
+ * [BrowsePage] is fetched with. */
+data class MoodGenreTile(
+    val title: String,
+    val browseId: String,
+    val params: String?,
+    val colorArgb: Long,
+)
+
+/** A titled group of [MoodGenreTile]s (e.g. "Moods", "Genres") - the Explore screen's own
+ * top-level content. */
+data class MoodGenreCategory(
+    val title: String,
+    val tiles: List<MoodGenreTile>,
 )
 
 /** A playlist search result, enough to render a row and fetch its tracklist - [id] is a YouTube
@@ -86,6 +158,12 @@ interface Provider<T> {
     suspend fun getStreamUrl(item: T): StreamResolution?
 }
 
+/** Same identity key as [Track.downloadKey] - title/artist based, not [TrackResult.id], since a
+ * download made from search and the same track reached again from a shelf/playlist won't share an
+ * id when their sources differ, but will always share a title/artist. Lets playback recognize "I
+ * already have this on disk" regardless of which screen the track came from. */
+fun TrackResult.downloadKey(): String = "${title.trim().lowercase()}::${artist.trim().lowercase()}"
+
 /** A provider result mapped to a real, playable [Track]: [Track.streamUrl] and [Track.imageUrl]
  * carry the actual CDN/cover-art URLs straight from search, so playing one needs no further
  * resolution step and its artwork is already known everywhere the track flows (search results,
@@ -101,5 +179,7 @@ fun TrackResult.toPlayableTrack(gradientIndex: Int): Track = Track(
     imageUrl = imageUrl,
     streamUrl = directStreamUrl,
     sourceType = sourceType,
-    sourceId = id
+    sourceId = id,
+    albumId = albumId,
+    artistId = artistId,
 )

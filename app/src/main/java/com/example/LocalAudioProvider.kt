@@ -1,10 +1,35 @@
 package com.example
 
+import android.Manifest
 import android.content.ContentUris
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.provider.MediaStore
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/**
+ * The runtime permission [LocalAudioProvider] needs, and whether it's been granted.
+ *
+ * Both permissions were already declared in the manifest but never *requested*, so on Android 13+
+ * every MediaStore query returned an empty cursor - indistinguishable from "this phone has no
+ * music on it". Which permission applies depends on the OS version: Android 13 split the old
+ * blanket storage permission into per-media-type ones, and `READ_EXTERNAL_STORAGE` is capped at
+ * API 32 in the manifest, so asking for it on 13+ would be rejected outright.
+ */
+object LocalMediaPermission {
+
+    val name: String = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.READ_MEDIA_AUDIO
+    } else {
+        Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+
+    fun isGranted(context: Context): Boolean =
+        ContextCompat.checkSelfPermission(context, name) == PackageManager.PERMISSION_GRANTED
+}
 
 /**
  * Searches the device's own local audio files via [MediaStore] - no network involved. Backs

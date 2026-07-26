@@ -148,12 +148,12 @@ private fun SaturationValueField(
             )
         }
 
-        // Selection ring, drawn as a layout offset so it tracks the chosen point.
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .pointerInput(Unit) {}
-        ) {
+        // Selection ring, drawn as a layout offset so it tracks the chosen point. No pointerInput
+        // of its own - it used to carry an empty one, which was enough to register this Box as a
+        // pointer-input node sitting on top of the gesture-handling Canvas below and swallow every
+        // tap/drag before that Canvas ever saw it. That's why only the hue bar (no such overlay)
+        // responded to touch while this field looked entirely dead.
+        Box(modifier = Modifier.matchParentSize()) {
             Canvas(modifier = Modifier.matchParentSize()) {
                 val x = saturation * size.width
                 val y = (1f - value) * size.height

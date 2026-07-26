@@ -10,14 +10,20 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import com.example.audio.BassBoostAudioProcessor
+import com.example.audio.CrossfeedAudioProcessor
 import com.example.audio.EqualizerAudioProcessor
+import com.example.audio.NormalizerAudioProcessor
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
@@ -56,6 +62,8 @@ class PlaybackService : MediaSessionService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val resolver by lazy { TrackStreamResolver(serviceScope, applicationContext) }
     private val equalizerController = EqualizerController()
+    private val cachedDataSourceFactory by lazy { buildCachedDataSourceFactory() }
+    private var prefetchJob: Job? = null
 
     // Repeat mode is ALL, so auto-skipping past a failed track (see onPlayerError below) would
     // spin through the whole queue forever if NOTHING can play - overwhelmingly the "no network"
@@ -254,7 +262,10 @@ class PlaybackService : MediaSessionService() {
                     ): AudioSink = DefaultAudioSink.Builder(context)
                         .setAudioProcessorChain(
                             DefaultAudioSink.DefaultAudioProcessorChain(
-                                EqualizerAudioProcessor.INSTANCE
+                                EqualizerAudioProcessor.INSTANCE,
+                                BassBoostAudioProcessor.INSTANCE,
+                                NormalizerAudioProcessor.INSTANCE,
+                                CrossfeedAudioProcessor.INSTANCE
                             )
                         )
                         .setEnableFloatOutput(enableFloatOutput)
@@ -262,7 +273,7 @@ class PlaybackService : MediaSessionService() {
                         .build()
                 }
             )
-            .setMediaSourceFactory(DefaultMediaSourceFactory(buildResolvingDataSourceFactory()))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(cachedDataSourceFactory))
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -309,6 +320,7 @@ class PlaybackService : MediaSessionService() {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 preloadNextTrack(player)
                 saveQueue(player)
+                mediaItem?.let(::prefetchFullTrack)
             }
 
             override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
@@ -321,6 +333,9 @@ class PlaybackService : MediaSessionService() {
                 player.skipSilenceEnabled = settings.skipSilence
                 preloadEnabled = settings.preloadNextTrack
                 persistentQueueEnabled = settings.persistentQueue
+                NormalizerAudioProcessor.INSTANCE.setEnabled(settings.audioNormalizationEnabled)
+                BassBoostAudioProcessor.INSTANCE.setIntensity(settings.bassBoostEnabled, settings.bassBoostIntensity)
+                CrossfeedAudioProcessor.INSTANCE.setIntensity(settings.crossfeedEnabled, settings.crossfeedIntensity)
             }
         }
 
@@ -412,6 +427,47 @@ class PlaybackService : MediaSessionService() {
                 ?: withUri
         }
         return DefaultDataSource.Factory(this, resolvingHttpFactory)
+    }
+
+    /**
+     * Wraps [buildResolvingDataSourceFactory] in [StreamCache]'s disk cache - a seek within
+     * already-downloaded bytes (behind *or* ahead of playback, once [prefetchFullTrack] has run)
+     * reads from disk instead of re-requesting over the network. `CacheDataSource` sees the
+     * pre-resolve placeholder URI (it wraps the resolving factory as its upstream, so the upstream
+     * only runs on a genuine cache miss), which is what makes this cache-friendly at all - the
+     * resolved CDN URL itself carries a short-lived signed token that would make every resolve a
+     * different, never-reused cache key.
+     */
+    private fun buildCachedDataSourceFactory(): DataSource.Factory =
+        CacheDataSource.Factory()
+            .setCache(StreamCache.get(this))
+            .setUpstreamDataSourceFactory(buildResolvingDataSourceFactory())
+            // A failed cache write (disk full, etc.) shouldn't take playback down with it -
+            // fall through to the uncached upstream read instead.
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+
+    /**
+     * Downloads the rest of the current track into [StreamCache] in the background while it
+     * plays, so a seek far ahead of the natural playback position - not just behind it - is
+     * already on disk by the time the user gets there. Cancelled and restarted on every track
+     * change; an abandoned prefetch for a track nobody's listening to anymore isn't worth the
+     * bandwidth or disk space.
+     *
+     * Reuses [cachedDataSourceFactory] rather than re-resolving or re-deriving a cache key by
+     * hand: opening it with the placeholder URI runs the exact same cache-check -> resolve-on-miss
+     * -> write-under-the-stable-key path normal playback already takes, just triggered eagerly
+     * from a background thread instead of by ExoPlayer's own read-ahead.
+     */
+    private fun prefetchFullTrack(mediaItem: MediaItem) {
+        prefetchJob?.cancel()
+        val uri = mediaItem.localConfiguration?.uri ?: return
+        if (youTubeVideoIdFromResolvePlaceholder(uri) == null) return
+        prefetchJob = serviceScope.launch(Dispatchers.IO) {
+            runCatching {
+                val dataSource = cachedDataSourceFactory.createDataSource() as CacheDataSource
+                CacheWriter(dataSource, DataSpec(uri), null, null).cache()
+            }
+        }
     }
 
     private inner class PlaybackServiceCallback : MediaSession.Callback {

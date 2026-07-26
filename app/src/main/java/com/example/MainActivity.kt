@@ -1,9 +1,12 @@
 package com.example
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
+import androidx.core.net.toUri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -15,18 +18,31 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
@@ -39,11 +55,25 @@ import androidx.navigation.compose.rememberNavController
 import com.example.ui.component.LyricsView
 import com.example.ui.component.MiniPlayer
 import com.example.ui.component.MuseFlowNavBar
+import com.example.ui.component.TrackActionsHost
+import com.example.ui.screens.AlbumScreen
+import com.example.ui.screens.ArtistScreen
+import com.example.ui.screens.BackupSettingsScreen
+import com.example.ui.screens.ChartsScreen
+import com.example.ui.screens.CrashLogsScreen
+import com.example.ui.screens.BrowseScreen
 import com.example.ui.screens.EqualizerScreen
+import com.example.ui.screens.ExploreScreen
+import com.example.ui.screens.NewReleasesScreen
+import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.asTrackResult
 import com.example.ui.screens.LibraryScreen
+import com.example.ui.screens.StatsScreen
 import com.example.ui.screens.NowPlayingScreen
+import com.example.ui.screens.OnboardingDialog
 import com.example.ui.screens.PlaylistDetailScreen
+import com.example.ui.screens.RemotePlaylistScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.MuseFlowTheme
@@ -67,6 +97,17 @@ class MainActivity : ComponentActivity() {
 fun MuseFlowApp() {
     val themeViewModel: ThemeViewModel = viewModel()
     val theme by themeViewModel.themeState.collectAsState()
+
+    // DataStore's first emission is asynchronous - for one frame `theme` is the StateFlow's
+    // `initialValue`, not the user's real saved seed colour. Without this gate, that one frame
+    // rendered the *un-seeded* default (a generic blue) with real content (including the mini
+    // player / Home's "Continue playing" card) already visible on top of it, then repainted into
+    // the correct colours a moment later - the "wrong theme flash" this guards against. A plain
+    // background for one frame is imperceptible; painting real content in the wrong colour isn't.
+    if (!theme.isLoaded) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+        return
+    }
 
     val appSettingsViewModel: AppSettingsViewModel = viewModel()
     val appSettings by appSettingsViewModel.state.collectAsState()
@@ -119,46 +160,70 @@ fun MuseFlowApp() {
 
         LaunchedEffect(nowPlaying.artworkUrl) { paletteViewModel.load(nowPlaying.artworkUrl) }
 
-        Scaffold(
-            containerColor = MaterialTheme.colorScheme.background,
-            bottomBar = {
+        // A full-bleed content Box with MiniPlayer/MuseFlowNavBar overlaid on top as a floating
+        // layer, not Scaffold's docked `bottomBar` - a docked bottomBar reserves its own measured
+        // height as permanent content inset, so content stops exactly above it with nothing ever
+        // visible underneath. Both bars are already rounded pills with their own margins and
+        // shadow (see MuseFlowNavBar's own doc comment), so overlaying them lets a screen's content
+        // genuinely scroll behind their floating edges instead of being walled off by a flush dock.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .navigationBarsPadding(),
+        ) {
+            MuseFlowNavHost(
+                navController = navController,
+                onPlayTrack = playerViewModel::play,
+                playerViewModel = playerViewModel,
+                appSettings = appSettings,
+                albumPalette = albumPalette,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            // The system-nav-bar inset is applied once on the outer Box above (so content itself
+            // never draws into the gesture-nav zone), plus a small extra gap here so the floating
+            // bar sits just above it rather than flush against it.
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 4.dp),
+            ) {
+                // Shown wherever something is loaded, independent of whether this route is a
+                // tab - a playlist detail, History or Backup screen previously hid the
+                // mini-player entirely because it was wired to the same condition as the nav
+                // bar below. Excluded only on Now Playing itself, where it would sit behind
+                // the full player it mirrors.
+                if (nowPlaying.hasMedia && currentRoute != Routes.NOW_PLAYING) {
+                    MiniPlayer(
+                        state = nowPlaying,
+                        onTogglePlayPause = playerViewModel::togglePlayPause,
+                        onPrevious = { playerViewModel.previous() },
+                        onNext = { playerViewModel.next() },
+                        onClick = { navController.navigate(Routes.NOW_PLAYING) },
+                        backgroundStyle = appSettings.miniPlayerBackgroundStyle,
+                        palette = albumPalette,
+                    )
+                }
                 // Hidden on destinations that aren't one of the four tabs (a playlist detail,
                 // Now Playing), so those screens get the full height rather than a bar that
                 // highlights nothing.
                 if (TopLevelDestination.forRoute(currentRoute) != null) {
-                    Column {
-                        MiniPlayer(
-                            state = nowPlaying,
-                            onTogglePlayPause = playerViewModel::togglePlayPause,
-                            onNext = { playerViewModel.next() },
-                            onClick = { navController.navigate(Routes.NOW_PLAYING) },
-                        )
-                        MuseFlowNavBar(
-                            destinations = TopLevelDestination.entries,
-                            currentRoute = currentRoute,
-                            onNavigate = { destination ->
-                                navController.navigateToTab(destination.route)
-                            },
-                        )
-                    }
+                    MuseFlowNavBar(
+                        destinations = TopLevelDestination.entries,
+                        currentRoute = currentRoute,
+                        onNavigate = { destination ->
+                            navController.navigateToTab(destination.route)
+                        },
+                    )
                 }
-            },
-        ) { innerPadding ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                contentAlignment = Alignment.Center,
-            ) {
-                MuseFlowNavHost(
-                    navController = navController,
-                    onPlayTrack = playerViewModel::play,
-                    playerViewModel = playerViewModel,
-                    appSettings = appSettings,
-                    albumPalette = albumPalette,
-                    playerHasMedia = nowPlaying.hasMedia,
-                )
             }
+        }
+
+        val onboardingViewModel: OnboardingViewModel = viewModel()
+        val showOnboarding by onboardingViewModel.shouldShow.collectAsState()
+        if (showOnboarding) {
+            OnboardingDialog(onContinue = onboardingViewModel::markSeen)
         }
       }
     }
@@ -196,12 +261,21 @@ private fun MuseFlowNavHost(
     playerViewModel: PlayerViewModel,
     appSettings: AppSettingsState,
     albumPalette: AlbumPalette?,
-    playerHasMedia: Boolean,
     modifier: Modifier = Modifier,
 ) {
     // Read once, when the graph is first built: changing the preference shouldn't yank the user
     // to a different tab mid-session, it should apply from the next launch.
     val startDestination = remember { appSettings.defaultOpenTab.toRoute() }
+
+    // Threaded into every screen that can open a track's actions sheet, so "View artist"/"View
+    // album" reaches the same NavHostController every other navigation action here uses. The ids
+    // travel URL-encoded (see [Routes.artist]/[Routes.album]) since a browseId can itself contain
+    // "/"-like characters that would otherwise be read as extra path segments.
+    val onGoToArtist: (String) -> Unit = { navController.navigate(Routes.artist(it)) }
+    val onGoToAlbum: (String) -> Unit = { navController.navigate(Routes.album(it)) }
+    val onGoToRemotePlaylist: (String, String, String, String?) -> Unit = { id, title, subtitle, imageUrl ->
+        navController.navigate(Routes.remotePlaylist(id, title, subtitle, imageUrl))
+    }
 
     NavHost(
         navController = navController,
@@ -210,12 +284,92 @@ private fun MuseFlowNavHost(
     ) {
         topLevelGraph(
             onPlayTrack = onPlayTrack,
+            playerViewModel = playerViewModel,
             onOpenPlaylist = { navController.navigate(Routes.playlist(it)) },
+            onOpenLibraryStats = { navController.navigate(Routes.LIBRARY_STATS) },
             onOpenEqualizer = { navController.navigate(Routes.EQUALIZER) },
-            playerHasMedia = playerHasMedia,
+            onOpenHistory = { navController.navigate(Routes.HISTORY) },
+            onOpenBackup = { navController.navigate(Routes.BACKUP) },
+            onOpenCrashLogs = { navController.navigate(Routes.CRASH_LOGS) },
+            onOpenCharts = { navController.navigate(Routes.CHARTS) },
+            onOpenNewReleases = { navController.navigate(Routes.NEW_RELEASES) },
+            onOpenExplore = { navController.navigate(Routes.EXPLORE) },
+            onGoToArtist = onGoToArtist,
+            onGoToAlbum = onGoToAlbum,
+            onGoToRemotePlaylist = onGoToRemotePlaylist,
         )
+        composable(Routes.BACKUP) {
+            BackupSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.CRASH_LOGS) {
+            CrashLogsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.CHARTS) {
+            ChartsScreen(
+                onPlayTrack = onPlayTrack,
+                playerViewModel = playerViewModel,
+                onBack = { navController.popBackStack() },
+                onGoToArtist = onGoToArtist,
+                onGoToAlbum = onGoToAlbum,
+            )
+        }
+        composable(Routes.NEW_RELEASES) {
+            NewReleasesScreen(
+                onOpenAlbum = onGoToAlbum,
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(Routes.EXPLORE) {
+            ExploreScreen(
+                onOpenBrowse = { browseId, params ->
+                    navController.navigate(Routes.browse(browseId, params))
+                },
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(
+            route = Routes.BROWSE,
+            arguments = listOf(
+                navArgument(Routes.BROWSE_ID_ARG) { type = NavType.StringType },
+                navArgument(Routes.BROWSE_PARAMS_ARG) {
+                    type = NavType.StringType
+                    nullable = true
+                },
+            ),
+        ) { entry ->
+            val browseId = entry.arguments?.getString(Routes.BROWSE_ID_ARG)?.let {
+                java.net.URLDecoder.decode(it, "UTF-8")
+            } ?: return@composable
+            val params = entry.arguments?.getString(Routes.BROWSE_PARAMS_ARG)
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+            BrowseScreen(
+                browseId = browseId,
+                params = params,
+                onPlayTrack = onPlayTrack,
+                playerViewModel = playerViewModel,
+                onBack = { navController.popBackStack() },
+                onGoToArtist = onGoToArtist,
+                onGoToAlbum = onGoToAlbum,
+            )
+        }
         composable(Routes.EQUALIZER) {
             EqualizerScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.HISTORY) {
+            HistoryScreen(
+                onPlayTrack = onPlayTrack,
+                playerViewModel = playerViewModel,
+                onBack = { navController.popBackStack() },
+                onGoToArtist = onGoToArtist,
+                onGoToAlbum = onGoToAlbum,
+            )
+        }
+        composable(Routes.LIBRARY_STATS) {
+            StatsScreen(
+                onBack = { navController.popBackStack() },
+                onGoToArtist = onGoToArtist,
+            )
         }
         composable(
             route = Routes.PLAYLIST,
@@ -224,7 +378,70 @@ private fun MuseFlowNavHost(
             PlaylistDetailScreen(
                 playlistId = entry.arguments?.getLong(Routes.PLAYLIST_ARG) ?: 0L,
                 onPlayTrack = onPlayTrack,
+                playerViewModel = playerViewModel,
                 onBack = { navController.popBackStack() },
+                onGoToArtist = onGoToArtist,
+                onGoToAlbum = onGoToAlbum,
+            )
+        }
+        composable(
+            route = Routes.ARTIST,
+            arguments = listOf(navArgument(Routes.ARTIST_ARG) { type = NavType.StringType }),
+        ) { entry ->
+            val artistId = entry.arguments?.getString(Routes.ARTIST_ARG)?.let {
+                java.net.URLDecoder.decode(it, "UTF-8")
+            } ?: return@composable
+            ArtistScreen(
+                artistId = artistId,
+                onPlayTrack = onPlayTrack,
+                playerViewModel = playerViewModel,
+                onBack = { navController.popBackStack() },
+                onGoToArtist = onGoToArtist,
+                onGoToAlbum = onGoToAlbum,
+            )
+        }
+        composable(
+            route = Routes.ALBUM,
+            arguments = listOf(navArgument(Routes.ALBUM_ARG) { type = NavType.StringType }),
+        ) { entry ->
+            val albumId = entry.arguments?.getString(Routes.ALBUM_ARG)?.let {
+                java.net.URLDecoder.decode(it, "UTF-8")
+            } ?: return@composable
+            AlbumScreen(
+                albumId = albumId,
+                onPlayTrack = onPlayTrack,
+                playerViewModel = playerViewModel,
+                onBack = { navController.popBackStack() },
+                onGoToArtist = onGoToArtist,
+                onGoToAlbum = onGoToAlbum,
+            )
+        }
+        composable(
+            route = Routes.REMOTE_PLAYLIST,
+            arguments = listOf(
+                navArgument(Routes.REMOTE_PLAYLIST_ARG) { type = NavType.StringType },
+                navArgument(Routes.REMOTE_PLAYLIST_TITLE_ARG) { type = NavType.StringType },
+                navArgument(Routes.REMOTE_PLAYLIST_SUBTITLE_ARG) { type = NavType.StringType },
+                navArgument(Routes.REMOTE_PLAYLIST_IMAGE_ARG) {
+                    type = NavType.StringType
+                    nullable = true
+                },
+            ),
+        ) { entry ->
+            fun arg(name: String) = entry.arguments?.getString(name)?.let {
+                java.net.URLDecoder.decode(it, "UTF-8")
+            }
+            val playlistId = arg(Routes.REMOTE_PLAYLIST_ARG) ?: return@composable
+            RemotePlaylistScreen(
+                playlistId = playlistId,
+                title = arg(Routes.REMOTE_PLAYLIST_TITLE_ARG) ?: "Playlist",
+                subtitle = arg(Routes.REMOTE_PLAYLIST_SUBTITLE_ARG).orEmpty(),
+                imageUrl = arg(Routes.REMOTE_PLAYLIST_IMAGE_ARG)?.takeIf { it.isNotEmpty() },
+                onPlayTrack = onPlayTrack,
+                playerViewModel = playerViewModel,
+                onBack = { navController.popBackStack() },
+                onGoToArtist = onGoToArtist,
+                onGoToAlbum = onGoToAlbum,
             )
         }
         playerGraph(
@@ -232,6 +449,8 @@ private fun MuseFlowNavHost(
             appSettings = appSettings,
             albumPalette = albumPalette,
             onCollapse = { navController.popBackStack() },
+            onGoToArtist = onGoToArtist,
+            onGoToAlbum = onGoToAlbum,
         )
     }
 }
@@ -243,8 +462,11 @@ private fun NavGraphBuilder.playerGraph(
     appSettings: AppSettingsState,
     albumPalette: AlbumPalette?,
     onCollapse: () -> Unit,
+    onGoToArtist: (String) -> Unit,
+    onGoToAlbum: (String) -> Unit,
 ) {
     composable(Routes.NOW_PLAYING) {
+        val context = LocalContext.current
         val state by playerViewModel.state.collectAsState()
         val actionsViewModel: TrackActionsViewModel = viewModel()
         val likedKeys by actionsViewModel.likedKeys.collectAsState()
@@ -255,7 +477,32 @@ private fun NavGraphBuilder.playerGraph(
         // the same title/artist download key the repositories index by.
         val currentTrack = playerViewModel.currentTrackForActions()
         val key = currentTrack?.downloadKey()
+        val sleepTimerRemainingMs by playerViewModel.sleepTimerRemainingMs.collectAsState()
+        var menuTrack by remember { mutableStateOf<TrackResult?>(null) }
 
+        // Hoisted out of the lyrics slot (rather than kept lazy behind "lyrics panel open") so the
+        // main player menu's "Copy lyrics"/"Search lyrics online" - folded in from the lyrics
+        // panel's own former menu - can offer them without requiring the panel to have been opened
+        // first.
+        val lyricsViewModel: LyricsViewModel = viewModel()
+        val lyrics by lyricsViewModel.state.collectAsState()
+        val lyricsPositionMs by playerViewModel.lyricsPositionMs.collectAsState()
+        val clipboard = LocalClipboardManager.current
+
+        LaunchedEffect(state.title, state.artist) {
+            // Only a confirmed real YouTube id, never the "title|artist" stand-in a stored track
+            // without one reports itself as - see hasRealVideoId's own reasoning. A fabricated id
+            // here would just make the YouTube-tab fallback fail instead of being skipped.
+            val videoId = currentTrack?.asTrackResult()
+                ?.takeIf { it.hasRealVideoId() }
+                ?.id
+            lyricsViewModel.load(
+                title = state.title,
+                artist = state.artist,
+                durationSeconds = (state.durationMs / 1000).toInt().takeIf { it > 0 },
+                videoId = videoId,
+            )
+        }
 
         NowPlayingScreen(
             state = state,
@@ -266,6 +513,8 @@ private fun NavGraphBuilder.playerGraph(
             onToggleShuffle = playerViewModel::toggleShuffle,
             onCycleRepeat = playerViewModel::cycleRepeatMode,
             onPlayQueueItem = playerViewModel::playQueueItem,
+            onMoveQueueItem = playerViewModel::moveQueueItem,
+            onRemoveQueueItem = playerViewModel::removeQueueItem,
             onCollapse = onCollapse,
             isLiked = key != null && likedKeys.contains(key),
             isDownloaded = key != null && downloadedKeys.contains(key),
@@ -284,23 +533,15 @@ private fun NavGraphBuilder.playerGraph(
                 PlayerButtonColorOption.Secondary -> MaterialTheme.colorScheme.secondary
                 PlayerButtonColorOption.Tertiary -> MaterialTheme.colorScheme.tertiary
             },
+            sleepTimerRemainingMs = sleepTimerRemainingMs,
+            onStartSleepTimer = playerViewModel::startSleepTimer,
+            onCancelSleepTimer = playerViewModel::cancelSleepTimer,
+            onSetPlaybackSpeed = playerViewModel::setPlaybackSpeed,
+            onOpenMenu = { menuTrack = currentTrack?.asTrackResult() },
             lyricsContent = { slotModifier ->
-                val lyricsViewModel: LyricsViewModel = viewModel()
-                val lyrics by lyricsViewModel.state.collectAsState()
-
-                // Keyed on the track so skipping refetches, and so the fetch only happens once
-                // the user actually opens lyrics rather than on every track change.
-                LaunchedEffect(state.title, state.artist) {
-                    lyricsViewModel.load(
-                        title = state.title,
-                        artist = state.artist,
-                        durationSeconds = (state.durationMs / 1000).toInt().takeIf { it > 0 },
-                    )
-                }
-
                 LyricsView(
                     result = lyrics,
-                    positionMs = state.positionMs,
+                    positionMs = lyricsPositionMs,
                     // Named param: `it` here would bind to the enclosing composable() lambda's
                     // NavBackStackEntry, not the timestamp.
                     onSeekTo = { timestampMs -> playerViewModel.seekToMs(timestampMs) },
@@ -312,7 +553,53 @@ private fun NavGraphBuilder.playerGraph(
                     glow = appSettings.glowingLyricsEffect,
                     autoScroll = appSettings.autoScrollLyrics,
                     tapToSeek = appSettings.changeLyricsOnClick,
+                    wordAnimationStyle = appSettings.wordAnimationStyle,
                 )
+            },
+        )
+
+        // Always mounted - NOT wrapped in `if (menuTrack != null)`. TrackActionsHost owns its own
+        // "Details"/"Add to playlist" dialog state internally via `remember`, entered only *after*
+        // the sheet itself dismisses (see its doc). Wrapping the whole call in an `if` keyed on
+        // `menuTrack` tore that state down the instant the sheet's onDismiss ran (menuTrack = null
+        // happens on every sheet action, "Details" included) - the dialog was asked to open and
+        // destroyed in the same frame, which is why it never appeared. Passing `track` straight
+        // through as a nullable param instead - the same pattern every other screen already uses -
+        // keeps TrackActionsHost itself permanently composed, so its dialogs outlive the sheet.
+        TrackActionsHost(
+            track = menuTrack,
+            onDismiss = { menuTrack = null },
+            playerViewModel = playerViewModel,
+            actionsViewModel = actionsViewModel,
+            onGoToArtist = onGoToArtist,
+            onGoToAlbum = onGoToAlbum,
+            // Now Playing already has its own dedicated queue/like/download controls elsewhere on
+            // screen - repeating them here for the track that's already playing was confusing more
+            // than useful (some read as broken since acting on "the currently playing track"
+            // doesn't do anything visibly different).
+            showQueueActions = false,
+            showLikeAction = false,
+            showDownloadAction = false,
+            // Folds the lyrics panel's own former "⋮" menu into this one - one menu button on the
+            // whole screen instead of two stacked on top of each other. Always present (not gated
+            // on lyrics already being loaded) - "Search lyrics online" never needed lyrics text at
+            // all, and "Copy lyrics" checks the live state at tap time rather than a value snapshotted
+            // when the menu happened to open, so it works the first time Now Playing is opened
+            // rather than only after the lyrics panel has been shown once.
+            onCopyLyrics = {
+                val text = lyrics.asCopyableText()
+                if (text != null) {
+                    clipboard.setText(AnnotatedString(text))
+                    Toast.makeText(context, "Lyrics copied", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "No lyrics to copy yet", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onSearchLyricsOnline = {
+                val query = java.net.URLEncoder.encode("${state.title} ${state.artist} lyrics", "UTF-8")
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, "https://www.google.com/search?q=$query".toUri()))
+                }
             },
         )
     }
@@ -323,16 +610,71 @@ private fun NavGraphBuilder.playerGraph(
  * of growing one monolithic `NavHost` block. */
 private fun NavGraphBuilder.topLevelGraph(
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit,
+    // Passed rather than resolved with viewModel() inside each screen: the track context menu's
+    // queue actions have to reach the same activity-scoped controller the mini-player uses, and a
+    // viewModel() call inside a composable() would be scoped to that NavBackStackEntry instead -
+    // a second MediaController connection queueing into a player nobody can see.
+    playerViewModel: PlayerViewModel,
     onOpenPlaylist: (Long) -> Unit,
+    onOpenLibraryStats: () -> Unit,
     onOpenEqualizer: () -> Unit,
-    playerHasMedia: Boolean,
+    onOpenHistory: () -> Unit,
+    onOpenBackup: () -> Unit,
+    onOpenCrashLogs: () -> Unit,
+    onOpenCharts: () -> Unit,
+    onOpenNewReleases: () -> Unit,
+    onOpenExplore: () -> Unit,
+    onGoToArtist: (String) -> Unit,
+    onGoToAlbum: (String) -> Unit,
+    onGoToRemotePlaylist: (String, String, String, String?) -> Unit,
 ) {
-    composable(Routes.HOME) { HomeScreen(onPlayTrack = onPlayTrack, isPlayerActive = playerHasMedia) }
-    composable(Routes.SEARCH) { SearchScreen(onPlayTrack = onPlayTrack) }
-    composable(Routes.LIBRARY) {
-        LibraryScreen(onPlayTrack = onPlayTrack, onOpenPlaylist = onOpenPlaylist)
+    composable(Routes.HOME) {
+        HomeScreen(
+            onPlayTrack = onPlayTrack,
+            onOpenPlaylist = onOpenPlaylist,
+            onOpenRemotePlaylist = onGoToRemotePlaylist,
+        )
     }
-    composable(Routes.SETTINGS) { SettingsScreen(onOpenEqualizer = onOpenEqualizer) }
+    composable(Routes.SEARCH) {
+        SearchScreen(
+            onPlayTrack = onPlayTrack,
+            playerViewModel = playerViewModel,
+            onGoToArtist = onGoToArtist,
+            onGoToAlbum = onGoToAlbum,
+            onGoToPlaylist = onGoToRemotePlaylist,
+            onOpenCharts = onOpenCharts,
+            onOpenNewReleases = onOpenNewReleases,
+            onOpenExplore = onOpenExplore,
+        )
+    }
+    composable(Routes.LIBRARY) {
+        LibraryScreen(
+            onPlayTrack = onPlayTrack,
+            playerViewModel = playerViewModel,
+            onOpenPlaylist = onOpenPlaylist,
+            onOpenHistory = onOpenHistory,
+            onOpenStats = onOpenLibraryStats,
+            onGoToArtist = onGoToArtist,
+            onGoToAlbum = onGoToAlbum,
+        )
+    }
+    composable(Routes.SETTINGS) {
+        SettingsScreen(
+            onOpenEqualizer = onOpenEqualizer,
+            onOpenBackup = onOpenBackup,
+            onOpenCrashLogs = onOpenCrashLogs,
+        )
+    }
+}
+
+/** Flattens whatever lyrics are currently showing into one copyable block of plain text, or null
+ * when there's nothing worth copying (still loading, instrumental, not found, or an error) - the
+ * lyrics menu's "Copy lyrics" disables itself in exactly those cases rather than copying a blank
+ * string or a UI message. */
+private fun LyricsResult?.asCopyableText(): String? = when (this) {
+    is LyricsResult.PlainOnly -> text
+    is LyricsResult.Synced -> lines.joinToString("\n") { it.text }
+    else -> null
 }
 
 /**

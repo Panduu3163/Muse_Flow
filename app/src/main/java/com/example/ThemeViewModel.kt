@@ -37,6 +37,12 @@ data class ThemeState(
     val darkTheme: Boolean = true,
     /** Re-seed the palette from the current track's album art while something is playing. */
     val dynamicAlbumColor: Boolean = false,
+    /** False only for the single frame before DataStore's first real read completes - lets the
+     * root composable hold a blank screen for that one frame instead of briefly painting the
+     * *real* default seed colour (which looks identical to "not loaded yet" and was getting
+     * mistaken for it - see [MuseFlowApp]'s doc comment) and then recomposing into whatever the
+     * user actually chose. */
+    val isLoaded: Boolean = false,
 ) {
     val isUsingDefaultSeed: Boolean get() = seedColor == DefaultThemeColor
 }
@@ -48,6 +54,7 @@ private class ThemeRepository(private val context: Context) {
             pureBlack = prefs[ThemePreferenceKeys.PURE_BLACK] ?: false,
             darkTheme = prefs[ThemePreferenceKeys.DARK_THEME] ?: true,
             dynamicAlbumColor = prefs[ThemePreferenceKeys.DYNAMIC_ALBUM_COLOR] ?: false,
+            isLoaded = true,
         )
     }
 

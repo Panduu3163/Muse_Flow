@@ -47,18 +47,69 @@ class TrackActionsViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    /**
+     * Likes or unlikes [tracks] as a batch.
+     *
+     * Takes the target state rather than toggling each track, because a mixed selection has no
+     * sensible per-track toggle: half the rows would flip one way and half the other, and the user
+     * asked for one thing. The caller decides the direction from what it can see.
+     */
+    fun setLiked(tracks: List<Track>, liked: Boolean) {
+        viewModelScope.launch {
+            tracks.forEach { track ->
+                if (liked) likedRepository.like(track) else likedRepository.unlike(track)
+            }
+        }
+    }
+
     fun download(track: Track) = downloadRepository.startDownload(track)
+
+    /**
+     * Queues a download for each of [tracks].
+     *
+     * Already-downloaded tracks are the caller's to filter - the repository treats a repeat as a
+     * fresh download, so the bar drops them before calling.
+     */
+    fun downloadAll(tracks: List<Track>) = tracks.forEach(downloadRepository::startDownload)
 
     fun cancelDownload(track: Track) = downloadRepository.cancelDownload(track)
 
-    fun addToPlaylist(playlistId: Long, track: Track) {
-        viewModelScope.launch { playlistRepository.addTracks(playlistId, listOf(track)) }
+    /** Deletes a completed download's file and its row, freeing the storage it holds. */
+    fun deleteDownload(track: Track) = deleteDownloads(listOf(track))
+
+    fun deleteDownloads(tracks: List<Track>) {
+        viewModelScope.launch { tracks.forEach { downloadRepository.deleteDownload(it) } }
     }
 
-    fun createPlaylistWith(name: String, track: Track) {
+    fun removeFromPlaylist(playlistId: Long, track: Track) =
+        removeFromPlaylist(playlistId, listOf(track))
+
+    fun removeFromPlaylist(playlistId: Long, tracks: List<Track>) {
+        viewModelScope.launch {
+            tracks.forEach { playlistRepository.removeTrack(playlistId, it.downloadKey()) }
+        }
+    }
+
+    fun addToPlaylist(playlistId: Long, track: Track) = addToPlaylist(playlistId, listOf(track))
+
+    fun addToPlaylist(playlistId: Long, tracks: List<Track>) {
+        viewModelScope.launch { playlistRepository.addTracks(playlistId, tracks) }
+    }
+
+    fun createPlaylistWith(name: String, track: Track) = createPlaylistWith(name, listOf(track))
+
+    fun createPlaylistWith(name: String, tracks: List<Track>) {
         viewModelScope.launch {
             val id = playlistRepository.create(name)
-            playlistRepository.addTracks(id, listOf(track))
+            playlistRepository.addTracks(id, tracks)
         }
+    }
+
+    /** One-tap "Add" for a readymade remote playlist (Search/Browse result) - saves it to Library
+     * under its own name and cover, no naming prompt. Unlike [createPlaylistWith], the name and
+     * artwork are already known (they came from the source playlist itself), so there is nothing
+     * for the user to decide here. */
+    fun addRemotePlaylistToLibrary(name: String, coverImageUrl: String?, tracks: List<Track>) {
+        viewModelScope.launch { playlistRepository.importOnlinePlaylist(name, coverImageUrl, tracks) }
     }
 }

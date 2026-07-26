@@ -722,7 +722,11 @@ object YouTube {
     }
 
     suspend fun newReleaseAlbums(): Result<List<AlbumItem>> = runCatching {
-        val response = innerTube.browse(WEB_REMIX, browseId = "FEmusic_new_releases_albums").body<BrowseResponse>()
+        // The explore page's "New releases" tile navigates to browseId "FEmusic_new_releases" (no
+        // "_albums" suffix, no params) - confirmed from the raw explore page response, where it's a
+        // plain musicNavigationButtonRenderer, not a carousel shelf with a "more" button.
+        // "FEmusic_new_releases_albums" (the old guess, and a still-plausible-looking id) 404s.
+        val response = innerTube.browse(WEB_REMIX, browseId = "FEmusic_new_releases").body<BrowseResponse>()
         response.contents?.singleColumnBrowseResultsRenderer?.tabs?.firstOrNull()?.tabRenderer?.content?.sectionListRenderer?.contents?.firstOrNull()?.gridRenderer?.items
             ?.mapNotNull { it.musicTwoRowItemRenderer }
             ?.mapNotNull(NewReleaseAlbumPage::fromMusicTwoRowItemRenderer)
@@ -937,12 +941,13 @@ object YouTube {
     }
 
     suspend fun getChartsPage(continuation: String? = null): Result<ChartsPage> = runCatching {
-        val response = innerTube.browse(
+        val httpResponse = innerTube.browse(
             client = WEB_REMIX,
             browseId = "FEmusic_charts",
             params = "ggMGCgQIgAQ%3D",
             continuation = continuation
-        ).body<BrowseResponse>()
+        )
+        val response = httpResponse.body<BrowseResponse>()
 
         val sections = mutableListOf<ChartsPage.ChartSection>()
     
@@ -996,6 +1001,10 @@ object YouTube {
                 }
             }
 
+        android.util.Log.d(
+            "NewReleasesDiag",
+            "charts sections=${sections.size}, itemTypes=${sections.flatMap { it.items }.map { it::class.simpleName }.groupingBy { it }.eachCount()}"
+        )
         ChartsPage(
             sections = sections,
             continuation = response.continuationContents?.sectionListContinuation?.continuations?.getContinuation()
