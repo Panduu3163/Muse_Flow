@@ -11,14 +11,14 @@ plugins {
 
 android {
   namespace = "com.example"
-  compileSdk { version = release(36) { minorApiLevel = 1 } }
+  compileSdk { version = release(37) { minorApiLevel = 1 } }
 
   defaultConfig {
     applicationId = "com.aistudio.museflow.kqfzyw"
     minSdk = 24
-    targetSdk = 36
-    versionCode = 11
-    versionName = "1.1.1"
+    targetSdk = 37
+    versionCode = 13
+    versionName = "1.1.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -58,6 +58,9 @@ android {
     }
   }
   compileOptions {
+    // Required by :innertube, which uses java.time and other API 26+ library types while this
+    // app still supports minSdk 24.
+    isCoreLibraryDesugaringEnabled = true
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
   }
@@ -76,6 +79,13 @@ secrets {
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
+
+// Robolectric's Android SDK 36 sandbox requires Java 21, but the rest of this build
+// (AGP/Kotlin toolchain, gradle.properties org.gradle.java.home) stays on Java 17.
+// Point just the unit-test JVM at a toolchain-provisioned JDK 21 instead of the daemon JVM.
+tasks.withType<Test>().configureEach {
+  javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+}
 
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
@@ -107,6 +117,10 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
+  implementation(libs.androidx.palette.ktx)
+  implementation(libs.material.kolor)
+  implementation(project(":innertube"))
+  coreLibraryDesugaring(libs.desugaring)
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
   // Uncomment to use Firestore:
@@ -125,6 +139,9 @@ dependencies {
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  implementation(libs.androidx.palette.ktx)
+  implementation(libs.androidx.work.runtime.ktx)
+  implementation(libs.jaudiotagger)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

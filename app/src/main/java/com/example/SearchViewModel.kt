@@ -1,269 +1,212 @@
 package com.example
 
 import android.app.Application
-import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
-/** Search's two data sources: [ONLINE] is the merged JioSaavn+YouTube Music search; [ON_DEVICE]
- * scans local audio files via [LocalAudioProvider]/MediaStore instead - no network involved. */
-enum class SearchMode { ONLINE, ON_DEVICE }
+/** Which kind of result the Search screen is showing. YouTube Music answers each of these with a
+ * different search filter, so they are genuinely separate queries rather than one result set
+ * sliced four ways. */
+enum class SearchFilter(val label: String) {
+    Songs("Songs"),
+    Albums("Albums"),
+    Artists("Artists"),
+    Playlists("Playlists"),
+}
+
+/** Which kind of thing a [CollectionTracks] is. Artists are drawn round and albums square, and the
+ * placeholder glyph differs, so the distinction survives past the fetch that flattens all three
+ * into a plain tracklist. */
+enum class CollectionKind { Album, Artist, Playlist }
 
 /**
- * Holds Search's UI state (query text, mode, selected tab) and every tab's fetched results,
- * scoped via `viewModel()` to Search's own [androidx.navigation.NavBackStackEntry]. That entry -
- * and this ViewModel along with it - survives being pushed under Now Playing and popped back to;
- * the plain `remember{}` state SearchScreen used to hold didn't, since its whole composition gets
- * torn down and rebuilt fresh across that navigation, discarding anything not backed by something
- * that outlives it.
+ * An album/artist/playlist the user opened from search, together with its tracks.
  *
- * Each tab's fetch is idempotent per query (see the `xFetchedFor` fields) - re-entering the
- * screen re-triggers the same `LaunchedEffect(searchQuery)` call as always, but it's now a no-op
- * if that tab already has (or is already fetching) results for the current query, rather than
- * firing a fresh network round-trip every time.
+ * These three collapse into one type because everything the sheet does with them is identical -
+ * show a header, list tracks, play them. What differs is only how the tracks were fetched.
+ */
+data class CollectionTracks(
+    val title: String,
+    val subtitle: String,
+    val imageUrl: String?,
+    val kind: CollectionKind,
+    val tracks: UiState<List<TrackResult>>,
+    /** Set only for [CollectionKind.Artist] - the browseId the follow toggle acts on. Albums and
+     * playlists aren't followable, so their sheets show no toggle at all. */
+    val artist: ArtistResult? = null,
+)
+
+/**
+ * Search state for the Search screen.
+ *
+ * Results are held as a [UiState] so the screen can distinguish "still loading" from "loaded, but
+ * genuinely nothing matched" - a distinction that matters more than usual here, because with the
+ * extractor router in strict mode an empty result is real evidence about the selected backend
+ * rather than something to paper over.
+ *
+ * Each [SearchFilter] is fetched lazily, on first view: committing a query fires one request, not
+ * four, and switching to a tab already loaded for that query re-shows it without a refetch.
  */
 class SearchViewModel(application: Application) : AndroidViewModel(application) {
 
-    val searchQueryState = mutableStateOf("")
-    var searchQuery: String
-        get() = searchQueryState.value
-        set(value) { searchQueryState.value = value }
+    private val router = MusicSearchRouter(application)
+    private val history = SearchHistoryRepository.getInstance(application)
 
-    val selectedTabState = mutableStateOf(0)
-    var selectedTab: Int
-        get() = selectedTabState.value
-        set(value) { selectedTabState.value = value }
+    private val _query = MutableStateFlow("")
+    val query: StateFlow<String> = _query.asStateFlow()
 
-    // True once the user has actually submitted a search (IME search action, or tapping a recent
-    // query) - gates the tab row/results away entirely until then, rather than showing them as
-    // soon as the user starts typing. Reset back to false when the query is cleared to empty, so
-    // clearing the bar returns to the same bare, pre-search state.
-    val hasSubmittedState = mutableStateOf(false)
-    var hasSubmitted: Boolean
-        get() = hasSubmittedState.value
-        set(value) { hasSubmittedState.value = value }
+    private val _filter = MutableStateFlow(SearchFilter.Songs)
+    val filter: StateFlow<SearchFilter> = _filter.asStateFlow()
 
-    val searchModeState = mutableStateOf(SearchMode.ONLINE)
-    var searchMode: SearchMode
-        get() = searchModeState.value
-        set(value) { searchModeState.value = value }
+    private val _results = MutableStateFlow<UiState<List<TrackResult>>>(UiState.Success(emptyList()))
+    val results: StateFlow<UiState<List<TrackResult>>> = _results.asStateFlow()
 
-    val songsResultState = mutableStateOf<UiState<List<Track>>>(UiState.Loading)
-    val albumsResultState = mutableStateOf<UiState<List<AlbumResult>>>(UiState.Loading)
-    val artistsResultState = mutableStateOf<UiState<List<ArtistResult>>>(UiState.Loading)
-    val playlistsResultState = mutableStateOf<UiState<List<PlaylistResult>>>(UiState.Loading)
-    val onDeviceResultState = mutableStateOf<UiState<List<Track>>>(UiState.Loading)
+    private val _albums = MutableStateFlow<UiState<List<AlbumResult>>>(UiState.Success(emptyList()))
+    val albums: StateFlow<UiState<List<AlbumResult>>> = _albums.asStateFlow()
 
-    private val jioSaavnProvider = JioSaavnProvider()
-    private val youTubeProvider = YouTubeMusicProvider(application)
-    private val localAudioProvider = LocalAudioProvider(application)
+    private val _artists = MutableStateFlow<UiState<List<ArtistResult>>>(UiState.Success(emptyList()))
+    val artists: StateFlow<UiState<List<ArtistResult>>> = _artists.asStateFlow()
 
-    private var songsFetchedFor: String? = null
-    private var albumsFetchedFor: String? = null
-    private var artistsFetchedFor: String? = null
-    private var playlistsFetchedFor: String? = null
-    private var onDeviceFetchedFor: Pair<String, Boolean>? = null
+    private val _playlists = MutableStateFlow<UiState<List<PlaylistResult>>>(UiState.Success(emptyList()))
+    val playlists: StateFlow<UiState<List<PlaylistResult>>> = _playlists.asStateFlow()
 
-    private var songsJob: Job? = null
-    private var albumsJob: Job? = null
-    private var artistsJob: Job? = null
-    private var playlistsJob: Job? = null
-    private var onDeviceJob: Job? = null
+    private val _suggestions = MutableStateFlow<List<String>>(emptyList())
+    val suggestions: StateFlow<List<String>> = _suggestions.asStateFlow()
 
-    fun ensureSongsLoaded() {
-        val query = searchQuery
-        if (songsFetchedFor == query) return
-        songsFetchedFor = query
-        songsJob?.cancel()
-        if (query.isBlank()) {
-            songsResultState.value = UiState.Loading
+    /** Whether a query has actually been run, so the screen can tell "nothing searched yet" from
+     * "searched, and this filter genuinely has no matches" - which read identically before, both
+     * being an empty list. */
+    private val _hasSearched = MutableStateFlow(false)
+    val hasSearched: StateFlow<Boolean> = _hasSearched.asStateFlow()
+
+    /** Which backend actually served the visible results, surfaced in the UI so the extractor
+     * toggle's effect is observable rather than guesswork. */
+    private val _activeBackend = MutableStateFlow(ExtractorPreference.default)
+    val activeBackend: StateFlow<ExtractorBackend> = _activeBackend.asStateFlow()
+
+    val recentQueries = history.observeRecent()
+
+    private var searchJob: Job? = null
+    private var suggestJob: Job? = null
+
+    /** The query the user last committed, as opposed to what they are still typing. */
+    private var committedQuery = ""
+
+    /** Which query each filter's currently-held results belong to, so switching tabs back and
+     * forth doesn't refetch what is already on screen. */
+    private val loadedFor = mutableMapOf<SearchFilter, String>()
+
+    fun onQueryChange(newQuery: String) {
+        _query.value = newQuery
+        if (newQuery.isBlank()) {
+            _suggestions.value = emptyList()
             return
         }
-        songsResultState.value = UiState.Loading
-        songsJob = viewModelScope.launch {
-            delay(350) // debounce so we don't fire a search per keystroke
-            var jioFailed = false
-            var ytFailed = false
-            val (jioResults, ytResults) = coroutineScope {
-                val jioDeferred = async {
-                    withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                        try {
-                            jioSaavnProvider.search(query).filter { it.directStreamUrl != null }
-                        } catch (e: Exception) {
-                            null
-                        }
-                    } ?: run { jioFailed = true; emptyList() }
-                }
-                val ytDeferred = async {
-                    withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                        try {
-                            youTubeProvider.search(query)
-                        } catch (e: Exception) {
-                            null
-                        }
-                    } ?: run { ytFailed = true; emptyList() }
-                }
-                jioDeferred.await() to ytDeferred.await()
-            }
-            val merged = mergeSearchResults(query, jioResults, ytResults)
-                .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
-            songsResultState.value = if (jioFailed && ytFailed) {
-                UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")
-            } else {
-                UiState.Success(merged)
-            }
+        // Debounced so a fast typist doesn't fire a request per keystroke.
+        suggestJob?.cancel()
+        suggestJob = viewModelScope.launch {
+            delay(250)
+            _suggestions.value = runCatching { router.suggestions(newQuery) }.getOrDefault(emptyList())
         }
     }
 
-    fun ensureAlbumsLoaded() {
-        val query = searchQuery
-        if (albumsFetchedFor == query) return
-        albumsFetchedFor = query
-        albumsJob?.cancel()
-        if (query.isBlank()) {
-            albumsResultState.value = UiState.Loading
-            return
-        }
-        albumsResultState.value = UiState.Loading
-        albumsJob = viewModelScope.launch {
-            delay(350)
-            var jioFailed = false
-            var ytFailed = false
-            val (jioResults, ytResults) = coroutineScope {
-                val jioDeferred = async {
-                    withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                        try {
-                            jioSaavnProvider.searchAlbums(query)
-                        } catch (e: Exception) {
-                            null
-                        }
-                    } ?: run { jioFailed = true; emptyList() }
-                }
-                val ytDeferred = async {
-                    withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                        try {
-                            youTubeProvider.searchAlbums(query)
-                        } catch (e: Exception) {
-                            null
-                        }
-                    } ?: run { ytFailed = true; emptyList() }
-                }
-                jioDeferred.await() to ytDeferred.await()
+    fun search(query: String = _query.value) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return
+
+        _query.value = trimmed
+        _suggestions.value = emptyList()
+        committedQuery = trimmed
+        _hasSearched.value = true
+        // A new query invalidates every tab, including the ones not currently visible.
+        loadedFor.clear()
+        history.record(trimmed)
+
+        runSearch(trimmed, _filter.value)
+    }
+
+    fun selectFilter(filter: SearchFilter) {
+        if (_filter.value == filter) return
+        _filter.value = filter
+        // Nothing to show for a tab the user hasn't committed a query for yet.
+        if (committedQuery.isEmpty() || loadedFor[filter] == committedQuery) return
+        runSearch(committedQuery, filter)
+    }
+
+    /**
+     * Fetches one filter's results.
+     *
+     * Only one search runs at a time: switching tabs mid-flight cancels the previous request
+     * rather than racing it, since its results are no longer the ones on screen.
+     */
+    private fun runSearch(query: String, filter: SearchFilter) {
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            _activeBackend.value = StreamResolverRouter.activeBackend(getApplication())
+
+            val succeeded = when (filter) {
+                SearchFilter.Songs -> load(_results) { router.searchTracks(query) }
+                SearchFilter.Albums -> load(_albums) { router.searchAlbums(query) }
+                SearchFilter.Artists -> load(_artists) { router.searchArtists(query) }
+                SearchFilter.Playlists -> load(_playlists) { router.searchPlaylists(query) }
             }
-            albumsResultState.value = if (jioFailed && ytFailed) {
-                UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")
-            } else {
-                UiState.Success(mergeAlbumResults(jioResults, ytResults))
-            }
+
+            // Only a success is worth remembering - a failed tab should retry when revisited.
+            if (succeeded) loadedFor[filter] = query
         }
     }
 
-    fun ensureArtistsLoaded() {
-        val query = searchQuery
-        if (artistsFetchedFor == query) return
-        artistsFetchedFor = query
-        artistsJob?.cancel()
-        if (query.isBlank()) {
-            artistsResultState.value = UiState.Loading
-            return
-        }
-        artistsResultState.value = UiState.Loading
-        artistsJob = viewModelScope.launch {
-            delay(350)
-            var jioFailed = false
-            var ytFailed = false
-            val (jioResults, ytResults) = coroutineScope {
-                val jioDeferred = async {
-                    withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                        try {
-                            jioSaavnProvider.searchArtists(query)
-                        } catch (e: Exception) {
-                            null
-                        }
-                    } ?: run { jioFailed = true; emptyList() }
-                }
-                val ytDeferred = async {
-                    withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                        try {
-                            youTubeProvider.searchArtists(query)
-                        } catch (e: Exception) {
-                            null
-                        }
-                    } ?: run { ytFailed = true; emptyList() }
-                }
-                jioDeferred.await() to ytDeferred.await()
-            }
-            artistsResultState.value = if (jioFailed && ytFailed) {
-                UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")
-            } else {
-                UiState.Success(mergeArtistResults(jioResults, ytResults))
-            }
-        }
+    /** Drives one result flow through loading -> success/error, reporting whether it succeeded. */
+    private suspend fun <T> load(
+        state: MutableStateFlow<UiState<List<T>>>,
+        fetch: suspend () -> List<T>,
+    ): Boolean {
+        state.value = UiState.Loading
+        return runCatching { fetch() }.fold(
+            onSuccess = {
+                state.value = UiState.Success(it)
+                true
+            },
+            onFailure = {
+                state.value = errorState(it)
+                false
+            },
+        )
     }
 
-    fun ensurePlaylistsLoaded() {
-        val query = searchQuery
-        if (playlistsFetchedFor == query) return
-        playlistsFetchedFor = query
-        playlistsJob?.cancel()
-        if (query.isBlank()) {
-            playlistsResultState.value = UiState.Loading
-            return
+    /**
+     * Being offline is by far the most common failure and isn't something the user can act on from
+     * a stack-trace-flavoured message, so it gets plain language. Anything else still names the
+     * backend, which is what makes a genuine extractor problem diagnosable.
+     */
+    private fun errorState(error: Throwable): UiState.Error = UiState.Error(
+        if (!isOnline(getApplication())) {
+            "Oops! You don't have internet. Connect and try again."
+        } else {
+            "${_activeBackend.value.label} search failed: " +
+                (error.message ?: error::class.simpleName ?: "unknown error")
         }
-        playlistsResultState.value = UiState.Loading
-        playlistsJob = viewModelScope.launch {
-            delay(350)
-            var jioFailed = false
-            var ytFailed = false
-            val (jioResults, ytResults) = coroutineScope {
-                val jioDeferred = async {
-                    withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                        try {
-                            jioSaavnProvider.searchPlaylists(query)
-                        } catch (e: Exception) {
-                            null
-                        }
-                    } ?: run { jioFailed = true; emptyList() }
-                }
-                val ytDeferred = async {
-                    withTimeoutOrNull(DEFAULT_LOAD_TIMEOUT_MS) {
-                        try {
-                            youTubeProvider.searchPlaylists(query)
-                        } catch (e: Exception) {
-                            null
-                        }
-                    } ?: run { ytFailed = true; emptyList() }
-                }
-                jioDeferred.await() to ytDeferred.await()
-            }
-            playlistsResultState.value = if (jioFailed && ytFailed) {
-                UiState.Error("Couldn't reach JioSaavn or YouTube Music. Check your connection and try again.")
-            } else {
-                UiState.Success(mergePlaylistResults(jioResults, ytResults))
-            }
-        }
+    )
+
+    fun clearQuery() {
+        searchJob?.cancel()
+        suggestJob?.cancel()
+        _query.value = ""
+        _suggestions.value = emptyList()
+        committedQuery = ""
+        _hasSearched.value = false
+        loadedFor.clear()
+        _results.value = UiState.Success(emptyList())
+        _albums.value = UiState.Success(emptyList())
+        _artists.value = UiState.Success(emptyList())
+        _playlists.value = UiState.Success(emptyList())
     }
 
-    fun ensureOnDeviceLoaded(hasPermission: Boolean) {
-        if (!hasPermission) return
-        val query = searchQuery
-        val key = query to hasPermission
-        if (onDeviceFetchedFor == key) return
-        onDeviceFetchedFor = key
-        onDeviceJob?.cancel()
-        onDeviceResultState.value = UiState.Loading
-        onDeviceJob = viewModelScope.launch {
-            delay(150) // still worth a light debounce so fast typing doesn't fire a query per key
-            onDeviceResultState.value = loadAsUiState(errorMessage = "Couldn't scan audio files on this device.") {
-                localAudioProvider.search(query)
-                    .mapIndexed { index, result -> result.toPlayableTrack(gradientIndex = index) }
-            }
-        }
-    }
+    fun deleteRecent(query: String) = history.delete(query)
 }

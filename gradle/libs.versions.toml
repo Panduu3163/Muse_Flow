@@ -1,47 +1,55 @@
 [versions]
-agp = "9.1.1"
-coreKtx = "1.18.0"
+agp = "9.3.0"
+coreKtx = "1.19.0"
 junit = "4.13.2"
 junitVersion = "1.3.0"
 espressoCore = "3.7.0"
-lifecycleRuntimeKtx = "2.8.7"
-lifecycleViewmodelCompose = "2.8.7"
-lifecycleRuntimeCompose = "2.8.7"
-activityCompose = "1.10.1"
-kotlin = "2.2.10"
-composeBom = "2024.09.00"
-googleDevtoolsKsp = "2.3.5"
-navigationCompose = "2.8.9"
-roomRuntime = "2.7.0"
-roomKtx = "2.7.0"
-roomCompiler = "2.7.0"
-kotlinxCoroutinesTest = "1.10.2"
-core = "1.6.1"
-runner = "1.6.2"
+lifecycleRuntimeKtx = "2.11.0"
+lifecycleViewmodelCompose = "2.11.0"
+lifecycleRuntimeCompose = "2.11.0"
+activityCompose = "1.13.0"
+kotlin = "2.4.10"
+composeBom = "2026.06.01"
+googleDevtoolsKsp = "2.3.10"
+navigationCompose = "2.9.8"
+roomRuntime = "2.8.4"
+roomKtx = "2.8.4"
+roomCompiler = "2.8.4"
+kotlinxCoroutinesTest = "1.11.0"
+core = "1.7.0"
+runner = "1.7.0"
 coilCompose = "2.7.0"
-retrofit = "2.12.0"
-converterMoshi = "2.12.0"
-kotlinxCoroutinesAndroid = "1.10.2"
-kotlinxCoroutinesCore = "1.10.2"
+retrofit = "3.0.0"
+converterMoshi = "3.0.0"
+kotlinxCoroutinesAndroid = "1.11.0"
+kotlinxCoroutinesCore = "1.11.0"
 accompanistPermissions = "0.37.3"
-playServicesLocation = "21.3.0"
-cameraCamera2 = "1.5.0"
-cameraLifecycle = "1.5.0"
-cameraView = "1.5.0"
-cameraCore = "1.5.0"
-loggingInterceptor = "4.10.0"
-okhttp = "4.10.0"
+playServicesLocation = "21.4.0"
+cameraCamera2 = "1.6.1"
+cameraLifecycle = "1.6.1"
+cameraView = "1.6.1"
+cameraCore = "1.6.1"
+loggingInterceptor = "5.4.0"
+okhttp = "5.4.0"
 moshiKotlin = "1.15.2"
 moshiKotlinCodegen = "1.15.2"
-datastorePreferences = "1.1.7"
+datastorePreferences = "1.2.1"
 robolectric = "4.16.1"
-roborazzi = "1.59.0"
-firebaseBom = "34.15.0"
+roborazzi = "1.70.0"
+firebaseBom = "34.16.0"
 secretsGradlePlugin = "2.0.1"
 googleServices = "4.5.0"
-credentials = "1.5.0"
-googleid = "1.1.1"
+credentials = "1.6.0"
+googleid = "1.2.0"
 media3 = "1.10.1"
+paletteKtx = "1.0.0"
+materialKolor = "4.1.1"
+ktor = "3.4.0"
+brotli = "0.1.2"
+newpipeextractor = "v0.25.2"
+desugaring = "2.1.5"
+workRuntimeKtx = "2.11.2"
+jaudiotagger = "3.0.1"
 
 
 [libraries]
@@ -102,6 +110,18 @@ firebase-auth = { group = "com.google.firebase", name = "firebase-auth" }
 androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
 androidx-credentials-play-services = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
 googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
+androidx-palette-ktx = { group = "androidx.palette", name = "palette-ktx", version.ref = "paletteKtx" }
+material-kolor = { module = "com.materialkolor:material-kolor", version.ref = "materialKolor" }
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
+ktor-client-encoding = { module = "io.ktor:ktor-client-encoding", version.ref = "ktor" }
+ktor-serialization-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+brotli = { module = "org.brotli:dec", version.ref = "brotli" }
+newpipeextractor = { module = "com.github.TeamNewPipe:NewPipeExtractor", version.ref = "newpipeextractor" }
+desugaring = { module = "com.android.tools:desugar_jdk_libs_nio", version.ref = "desugaring" }
+androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "workRuntimeKtx" }
+jaudiotagger = { group = "net.jthink", name = "jaudiotagger", version.ref = "jaudiotagger" }
 
 
 [plugins]
@@ -111,3 +131,5 @@ google-devtools-ksp = { id = "com.google.devtools.ksp", version.ref = "googleDev
 roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
 secrets = { id = "com.google.android.libraries.mapsplatform.secrets-gradle-plugin", version.ref = "secretsGradlePlugin" }
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+android-library = { id = "com.android.library", version.ref = "agp" }

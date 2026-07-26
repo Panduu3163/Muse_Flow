@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Context
+import com.music.innertube.models.upgradeThumbnailSize
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -29,7 +30,9 @@ class LikedSongsRepository private constructor(context: Context) {
                 streamUrl = track.streamUrl,
                 likedAt = System.currentTimeMillis(),
                 sourceId = track.sourceId,
-                sourceType = track.sourceType?.name
+                sourceType = track.sourceType?.name,
+                albumId = track.albumId,
+                artistId = track.artistId,
             )
         )
     }
@@ -55,8 +58,11 @@ fun LikedSongEntity.toTrack(): Track = Track(
     duration = duration,
     plays = "",
     gradientIndex = gradientIndex,
-    imageUrl = imageUrl,
+    // Upgraded at read time - see PlaybackHistoryEntity.toTrack's comment on why.
+    imageUrl = imageUrl?.let(::upgradeThumbnailSize),
     streamUrl = streamUrl,
     sourceType = sourceType?.let { runCatching { MusicSource.valueOf(it) }.getOrNull() },
-    sourceId = sourceId
+    sourceId = sourceId,
+    albumId = albumId,
+    artistId = artistId,
 )

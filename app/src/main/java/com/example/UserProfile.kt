@@ -1,48 +1,12 @@
 package com.example
 
-import android.app.Application
 import android.content.Context
-import android.content.Intent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PhotoCamera
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.datastore.preferences.preferencesDataStore
-import coil.compose.AsyncImage
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 
 /** First letter of the first and last word of [name], e.g. "Mynul Kabir Nayem" -> "MN". */
 fun computeInitials(name: String): String {
@@ -72,7 +36,12 @@ private object UserProfileKeys {
     val PHOTO_URI = stringPreferencesKey("photo_uri")
 }
 
-private class UserProfileRepository(private val context: Context) {
+/**
+ * Persistence for the user's display name, photo, and onboarding-completion flag, backed by
+ * DataStore Preferences so it survives process death and app restarts - critically, so
+ * onboarding is never shown a second time once completed.
+ */
+class UserProfileRepository(private val context: Context) {
     val state: Flow<UserProfileState> = context.userProfileDataStore.data.map { prefs ->
         UserProfileState(
             hasSeenOnboarding = prefs[UserProfileKeys.HAS_SEEN_ONBOARDING] ?: false,
@@ -95,160 +64,5 @@ private class UserProfileRepository(private val context: Context) {
             prefs[UserProfileKeys.DISPLAY_NAME] = displayName
             if (photoUri != null) prefs[UserProfileKeys.PHOTO_URI] = photoUri else prefs.remove(UserProfileKeys.PHOTO_URI)
         }
-    }
-}
-
-/**
- * Single source of truth for the user's display name, photo, and onboarding-completion flag.
- * Scoped to the hosting Activity (via `viewModel()`), same pattern as [ThemeViewModel]. Persisted
- * to DataStore Preferences so it survives process death and app restarts - critically, so
- * onboarding is never shown a second time once completed.
- */
-class UserProfileViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository = UserProfileRepository(application)
-
-    val state: StateFlow<UserProfileState> = repository.state.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = UserProfileState(isLoaded = false)
-    )
-
-    fun completeOnboarding(displayName: String, photoUri: String?) {
-        viewModelScope.launch { repository.completeOnboarding(displayName, photoUri) }
-    }
-
-    fun updateProfile(displayName: String, photoUri: String?) {
-        viewModelScope.launch { repository.updateProfile(displayName, photoUri) }
-    }
-}
-
-/** Circular avatar showing the user's photo if set, otherwise their initials on a gradient. */
-@Composable
-fun UserAvatar(
-    photoUri: String?,
-    initials: String,
-    size: Dp,
-    modifier: Modifier = Modifier
-) {
-    if (photoUri != null) {
-        AsyncImage(
-            model = photoUri,
-            contentDescription = "Profile photo",
-            contentScale = ContentScale.Crop,
-            modifier = modifier
-                .size(size)
-                .clip(CircleShape)
-        )
-    } else {
-        Box(
-            modifier = modifier
-                .size(size)
-                .clip(CircleShape)
-                .background(
-                    Brush.linearGradient(colors = listOf(MaterialTheme.colorScheme.tertiary, MaterialTheme.colorScheme.secondary))
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = initials,
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = (size.value * 0.32f).sp
-                ),
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
-    }
-}
-
-/**
- * Shared name-field + tappable-avatar UI used by both onboarding's profile step and Settings'
- * edit-profile screen. Opens the Android Photo Picker (no storage permission needed) to choose
- * a picture.
- */
-@Composable
-fun ProfileEditorContent(
-    displayName: String,
-    onDisplayNameChange: (String) -> Unit,
-    photoUri: String?,
-    onPhotoUriChange: (String?) -> Unit,
-    nameLabel: String,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri ->
-        if (uri != null) {
-            // Without this, the picker's content:// URI only stays readable for the current
-            // process/activity lifetime - it looks fine immediately, then silently fails to
-            // load next time the app starts (or after the picker's temp grant is cleaned up).
-            // Some URIs/OEM pickers don't support persisting at all; failing to persist just
-            // means the same "photo disappears later" bug returns for that URI, so it's worth
-            // catching rather than crashing the whole selection over it.
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (e: SecurityException) {
-                // Nothing more to do - proceed with the URI anyway, best effort.
-            }
-            onPhotoUriChange(uri.toString())
-        }
-    }
-
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(
-            modifier = Modifier
-                .clickable {
-                    photoPickerLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                    )
-                }
-                .testTag("profile_photo_picker"),
-            contentAlignment = Alignment.BottomEnd
-        ) {
-            UserAvatar(
-                photoUri = photoUri,
-                initials = computeInitials(displayName),
-                size = 96.dp
-            )
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.PhotoCamera,
-                    contentDescription = "Add a photo",
-                    tint = Color(0xFF0C0C0E),
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "Add a photo (optional)",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(modifier = Modifier.height(28.dp))
-
-        OutlinedTextField(
-            value = displayName,
-            onValueChange = onDisplayNameChange,
-            label = { Text(nameLabel) },
-            singleLine = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("display_name_field")
-        )
     }
 }

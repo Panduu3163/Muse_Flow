@@ -6,10 +6,25 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.example.ytcipher.WebViewRecoveryPolicy
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 private const val TAG = "PoToken"
+
+/**
+ * Pure decision of whether the current WebView/session needs to be torn down and re-minted before
+ * generating a PoToken for [requestedSessionId] - extracted out of [PoTokenGenerator] so this logic
+ * is directly unit-testable without a real WebView. Internal (rather than private) for that reason.
+ */
+internal fun poTokenSessionNeedsRecreate(
+    forceRecreate: Boolean,
+    hasWebView: Boolean,
+    isExpired: Boolean,
+    isDead: Boolean,
+    currentSessionId: String?,
+    requestedSessionId: String
+): Boolean = forceRecreate || !hasWebView || isExpired || isDead || currentSessionId != requestedSessionId
 
 /**
  * Public entry point for PoToken generation. Self-dispatches to [Dispatchers.IO] (same convention
@@ -27,6 +42,8 @@ object PoTokenGenerator {
     private var sessionId: String? = null
     private var sessionPoToken: String? = null
     private var webView: PoTokenWebView? = null
+
+    private val recoveryPolicy = WebViewRecoveryPolicy()
 
     private const val TOTAL_TIMEOUT_MS = 8_000L
 
@@ -61,20 +78,36 @@ object PoTokenGenerator {
         forceRecreate: Boolean
     ): PoTokenResult {
         val (activeWebView, activeSessionPoToken, wasRecreated) = mutex.withLock {
-            val needsRecreate = forceRecreate || webView == null || webView!!.isExpired ||
-                webView!!.isDead || this.sessionId != sessionId
+            val needsRecreate = poTokenSessionNeedsRecreate(
+                forceRecreate = forceRecreate,
+                hasWebView = webView != null,
+                isExpired = webView?.isExpired ?: false,
+                isDead = webView?.isDead ?: false,
+                currentSessionId = this.sessionId,
+                requestedSessionId = sessionId
+            )
 
             if (needsRecreate) {
+                if (!recoveryPolicy.shouldAttempt()) {
+                    throw PoTokenCooldownException()
+                }
                 closeWebViewLocked()
-                val created = PoTokenWebView.create(context)
+                val created = try {
+                    PoTokenWebView.create(context)
+                } catch (t: Throwable) {
+                    recoveryPolicy.onFailure()
+                    throw t
+                }
                 // The session token must be minted exactly once, before any per-video token -
                 // it's reused across every later video in this session.
                 val mintedSessionToken = try {
                     created.generatePoToken(sessionId)
                 } catch (t: Throwable) {
+                    recoveryPolicy.onFailure()
                     withContext(Dispatchers.Main) { created.close() }
                     throw t
                 }
+                recoveryPolicy.onSuccess()
                 webView = created
                 sessionPoToken = mintedSessionToken
                 this.sessionId = sessionId

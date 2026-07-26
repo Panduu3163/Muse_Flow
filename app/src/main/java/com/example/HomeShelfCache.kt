@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import com.music.innertube.models.upgradeThumbnailSize
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -81,7 +82,8 @@ fun parseTracksJson(json: String): List<Track> = runCatching {
             duration = obj.getString("duration"),
             plays = obj.optString("plays"),
             gradientIndex = obj.getInt("gradientIndex"),
-            imageUrl = obj.optNullableString("imageUrl"),
+            // Upgraded at read time - see PlaybackHistoryEntity.toTrack's comment on why.
+            imageUrl = obj.optNullableString("imageUrl")?.let(::upgradeThumbnailSize),
             streamUrl = obj.optNullableString("streamUrl"),
             sourceType = obj.optNullableString("sourceType")
                 ?.let { runCatching { MusicSource.valueOf(it) }.getOrNull() },
