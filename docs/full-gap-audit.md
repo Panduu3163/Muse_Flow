@@ -1,9 +1,10 @@
 # MuseFlow vs Echo-Music — full gap audit
 
-**Rewritten 2026-07-27.** This replaces every earlier revision of this document (all of which had
-accumulated into dated, partially-contradictory fragments) with a single current-state accounting.
-Nothing here is "as of an earlier session" — it's what's actually in the codebase right now, checked
-directly against source rather than against memory of what was asked for.
+**Rewritten 2026-07-27 (second pass, same day).** Replaces the prior "Rewritten 2026-07-27" revision
+of this document — that one was already a full current-state accounting, but a full Stage E session
+landed immediately after it (Home feed, Stats, custom thumbnails, expanded context menus, onboarding,
+plus a device-reported smoothness/perf pass and several real bug fixes), so the numbers and status
+below are checked against source again, not against what was planned.
 
 Echo comparison counted from source at commit `ad66171`.
 
@@ -13,20 +14,21 @@ Echo comparison counted from source at commit `ad66171`.
 
 | Metric | MuseFlow | Echo | Ratio |
 |---|---|---|---|
-| Kotlin files | 227 | 625 | 2.8× |
-| Lines of Kotlin | ~30,700 | 146,881 | 4.8× |
+| Kotlin files | ~235 | 625 | 2.7× |
+| Lines of Kotlin | ~32,500 | 146,881 | 4.5× |
 | **Screens** | **17** | **87** | **5.1×** |
 | **Settings groups / controls** | **8 groups, 37 controls** | **~290 options across 21 screens** | **~8×** |
-| **Context menus** | **2** (song, playlist) | **21** | **10.5×** |
-| ViewModels | 13 | 30 | 2.3× |
+| **Context menus** | **7** (song, playlist, album, artist, queue-item, player, lyrics) | **21** | **3×** |
+| ViewModels | ~15 | 30 | 2×|
 | DB entities | 10 | 28 | 2.8× |
 | Gradle modules | 2 | 14 | 7× |
 
-The gap has closed substantially since this doc was first written (files 6.9×→2.8×, lines
-11.5×→4.8×, screens 12.4×→5.1×) — most of it from Stages A through D (§4) landing. The remaining
-gap is now concentrated in three areas: **settings breadth** (dedicated screens per topic vs.
-MuseFlow's flat groups), **accounts/sync** (no login of any kind), and **platform surfaces**
-(widget, Quick Settings tile, in-app updater).
+Screen/ViewModel/line counts didn't move much this session — the work was almost entirely *inside*
+existing screens (more Home shelves, richer menus, a new Stats screen) rather than new top-level
+surfaces. The one real jump is **context menus, 2 → 7** (see §2.3) — previously the single biggest
+gap-by-ratio in this whole doc, now the smallest. The remaining gap is concentrated in the same three
+areas as before: **settings breadth**, **accounts/sync**, and **platform surfaces** — none of which
+were touched this session.
 
 ---
 
@@ -37,123 +39,117 @@ Legend: ✅ done · ⚠️ partial · ❌ missing · 🔒 deliberately excluded
 ### 2.1 Browsing & discovery
 | Feature | Echo | MuseFlow | Notes |
 |---|---|---|---|
-| Home feed | ✅ 8 section types | ⚠️ 5 sections | — |
-| **Artist page** | ✅ 4 screens (overview/albums/songs/related) | ✅ 1 screen, 4 tabs (Overview/Songs/Albums/Related), local cache | `ArtistScreen.kt`, cached via `artist_page_cache` (stale-while-revalidate) |
-| **Album page** | ✅ | ✅ same cache/redesign treatment as Artist | `AlbumScreen.kt`, `album_page_cache` |
-| **Explore / Browse** | ✅ 3 screens | ✅ 1 generic screen | `ExploreScreen.kt` (mood/genre tiles) + generic `BrowseScreen.kt` (any browseId+params) via `YouTube.browse()` |
-| **Mood & genres** | ✅ dedicated screen | ✅ folded into Explore | Tiles grouped by category, tapping one opens `BrowseScreen` |
-| **Charts** | ✅ | ⚠️ screen built, **data broken, hidden from UI** | `ChartsScreen.kt`/`getChartsTracks()` return zero tracks on device. Locale/visitorData ruled out. Root cause not found; entry point pulled from Search rather than shipping a screen that reliably errors |
-| **New releases** | ✅ | ⚠️ screen built, **broken, hidden from UI** | `NewReleasesScreen.kt` exists; `getNewReleases()` throws on device. Same treatment as Charts |
-| **Search filters** (songs/albums/artists/playlists) | ✅ | ✅ | Lazy per-tab fetch, per-tab cache |
-| Search suggestions | ✅ + regional | ✅ | — |
-| **Search result screens** | — | ✅ Albums/Playlists navigate to real `AlbumScreen`/`RemotePlaylistScreen` (not a modal), Artists to `ArtistScreen` | Matches Library's own playlist-screen design |
-| **Similar/related** | ✅ | ⚠️ artist-name heuristic | innertube `related` ported, not fully wired |
+| **Home feed** | ✅ 8 section types | ✅ 8 sections | Was 5 this morning. Added **Your playlists** (data already loaded, just never rendered), **Daily Discover** (5 random liked-song seeds → one radio track each), **From the community** (third-party playlists via `searchPlaylists(topArtist)`) — see `HomeViewModel.kt` |
+| **Artist page** | ✅ 4 screens (overview/albums/songs/related) | ✅ 1 screen, 4 tabs (Overview/Songs/Albums/Related), local cache, **now has an overflow menu** (radio/follow-toggle/share) | `ArtistScreen.kt`, cached via `artist_page_cache` |
+| **Album page** | ✅ | ✅ same cache/redesign treatment as Artist, **now has an overflow menu** (shuffle/radio/queue/download/view artist/share) | `AlbumScreen.kt`, `AlbumActionsSheet` |
+| **Explore / Browse** | ✅ 3 screens | ✅ 1 generic screen | Unchanged |
+| **Mood & genres** | ✅ dedicated screen | ✅ folded into Explore | Unchanged |
+| **Charts** | ✅ | ⚠️ screen built, **data broken, hidden from UI** | Unchanged — not touched this session |
+| **New releases** | ✅ | ⚠️ screen built, **broken, hidden from UI** | Unchanged |
+| **Search filters** | ✅ | ✅ | Unchanged |
+| **Search result screens** | — | ✅ | Unchanged |
+| **Similar/related** | ✅ | ⚠️ artist-name heuristic | Unchanged |
 
 ### 2.2 Library
 | Feature | Echo | MuseFlow |
 |---|---|---|
 | Library structure | ✅ 6 screens (Songs/Albums/Artists/Playlists/Mix + root) | ⚠️ 1 screen, section chips |
-| **Playlists view** | ✅ | ✅ 2-column grid, 2×2 track-mosaic tile covers (was a plain list) |
-| Sort / filter / list-grid view | ✅ 8 sort enums, 4 filter enums | ✅ `LibrarySortHeader`, list+grid toggle |
-| **Playlist detail screen** | ✅ 5 variants (local/online/auto/top/cache) | ✅ 1 redesigned screen: 2×2 mosaic cover, capsules, About card, floating back button |
-| **Remote (online) playlist screen** | ✅ | ✅ `RemotePlaylistScreen.kt` — same visual language as the local one, plus a one-tap "Add to Library" |
-| Queue editing / reorder | ✅ `QueueMenu` | ✅ drag handle + per-row remove |
-| Multi-select batch ops | ✅ `SelectionSongsMenu` | ✅ `TrackSelectionHost` on Library/History/PlaylistDetail/Search |
+| **Playlists view** | ✅ | ✅ 2-column grid, 2×2 track-mosaic tile covers |
+| Sort / filter / list-grid view | ✅ 8 sort enums, 4 filter enums | ✅ |
+| **Playlist detail screen** | ✅ 5 variants | ✅ 1 redesigned screen |
+| **Remote (online) playlist screen** | ✅ | ✅ |
+| Queue editing / reorder | ✅ `QueueMenu` | ✅ drag handle + **swipe-left-to-right to remove** (replaced the per-row remove button/menu this session) |
+| Multi-select batch ops | ✅ | ✅ |
 | History screen | ✅ | ✅ |
-| **Stats / listening insights** | ✅ `StatsScreen`, `StatPeriod` | ❌ |
-| Import playlist (CSV/file) | ✅ + column mapping | ✅ Exportify-style CSV, name/artist match |
-| **Custom playlist thumbnail** | ✅ | ❌ |
+| **Stats / listening insights** | ✅ `StatsScreen`, `StatPeriod` (day/week/month/etc.) | ✅ `StatsScreen` — **all-time only**, no period filter (see §5: `PlaybackHistoryEntity` has no per-play timestamp, only a running count + most-recent-play time, so a period breakdown can't be computed from existing data) |
+| Import playlist (CSV/file) | ✅ + column mapping | ✅ |
+| **Custom playlist thumbnail** | ✅ | ✅ system image picker, `PlaylistEntity.customCoverUri`, wins over the auto mosaic |
 | Local device files | ✅ 2 screens | ✅ |
-| Playlist context menu | ✅ | ✅ `PlaylistActionsSheet`: shuffle, radio, play next, add to queue, pin, download, delete |
-| Followed artists + release alerts | ✅ | ✅ Library → Following, `ArtistReleaseCheckWorker` (12h) |
+| Playlist context menu | ✅ | ✅ `PlaylistActionsSheet` + Change/Remove custom cover |
+| Followed artists + release alerts | ✅ | ✅ |
 
-### 2.3 Context menus — 21 vs 2
-Echo has dedicated menus for song, album, artist, playlist, queue, player, lyrics, YouTube
-variants, multi-select, and custom thumbnail. MuseFlow has two: song and playlist.
+**Note on Library structure**: a tile-grid + 7-dedicated-screens restructure (matching Echo's model
+exactly) was built, then reverted the same session at the user's request back to the single-screen
+chip model — see `[[museflow-revert-stability]]` memory. Don't re-attempt the split without being
+asked again; the chip model is the current, deliberate state, not an unfinished migration.
+
+### 2.3 Context menus — 7 vs 21 (was 2 vs 21)
+Echo has dedicated menus for song, album, artist, playlist, queue, player, lyrics, YouTube variants,
+multi-select, and custom thumbnail. MuseFlow now has **five more** than this morning:
 
 **Song menu** (`TrackActionsSheet`): play next, add to queue, start radio, like/unlike,
-download/cancel/delete, add to playlist, remove from playlist, remove from history, share, view
-artist, view album, details, enter multi-select via long-press.
-**Missing**: edit metadata (no shared "the track" model to edit once — denormalized per repository),
-set as ringtone (no `RingtoneManager` usage; only viable for local files anyway), refetch stream
-(the active InnerTube backend already re-resolves every play, so this would be a no-op), pin to
-speed dial (no Speed Dial surface exists on Home).
+download/cancel/delete, add to playlist, remove from playlist/history, share, view artist/album,
+details. Unchanged, but the sheet gained flags (`showQueueActions`/`showLikeAction`/
+`showDownloadAction`, all default `true`) so the **player menu** below can selectively hide rows
+without a second sheet implementation.
 
-**Playlist menu** (`PlaylistActionsSheet`): shuffle, start radio, play next, add to queue, pin,
-download, delete. Deliberately excluded: share (no public link for a local playlist), pin to speed
-dial (same reason as the song menu).
+**Playlist menu** (`PlaylistActionsSheet`): shuffle, radio, play next, queue, pin, download, delete,
+**Change cover / Remove custom cover** (new).
 
-**Entirely missing**: album menu, artist menu, queue-item menu (reorder/remove are inline row
-actions, not a menu), player menu, lyrics menu.
+**Album menu** (`AlbumActionsSheet`, new): shuffle, start radio, play next, add to queue, download
+all, view artist, share. Opened via a ⋮ in `AlbumScreen`'s floating top bar.
+
+**Artist menu** (`ArtistActionsSheet`, new): start radio, follow/unfollow, share. Opened via a ⋮ next
+to `ArtistScreen`'s back button. Follow itself still also has its own prominent header button — this
+menu is for the less common actions.
+
+**Queue-item menu → replaced with swipe-to-remove.** The old ⋮ (Play now/Play next/Remove) was
+removed per the user's explicit request; Play now is already the row's own tap action, and "Play
+next" wasn't kept. Swiping a row left-to-right removes it, animated (`Modifier.animateItem()`), keyed
+on the song's stable `mediaId` (not raw position) so a removed row's swipe state can't leak onto
+whatever song shifts up to replace it.
+
+**Player menu** (new): Now Playing's ⋮ opens the same `TrackActionsSheet`, with queue/like/download
+rows hidden (Now Playing already has dedicated controls for those) and two lyrics actions folded in
+(see next).
+
+**Lyrics menu → folded into the player menu**, not a separate button. "Copy lyrics" (shows a "Lyrics
+copied" toast, or "No lyrics to copy yet" if none loaded) and "Search lyrics online" (opens a web
+search for `"<title> <artist> lyrics"`).
+
+**Still entirely missing**: YouTube-variant menu options, multi-select-specific menu (multi-select
+already has its own action bar, `TrackSelectionHost`, just not a "⋮ more" inside it).
 
 ### 2.4 Player
 | Feature | Echo | MuseFlow |
 |---|---|---|
 | Core transport, queue, seek | ✅ | ✅ |
-| **Lyrics providers** | ✅ 6 | ✅ 3: LRCLib (line-level) → BetterLyrics/Kugou (word-level, Chinese-focused) → YouTube Music's own lyrics tab (plain text, last resort) |
-| **Lyrics word-sync (karaoke)** | ✅ | ✅ real word timing when the source has it; character-length-proportional synthesis otherwise, so every track gets word-by-word highlighting, not just Chinese-language ones with real Kugou data |
+| **Lyrics providers** | ✅ 6 | ✅ 3: LRCLib → BetterLyrics/Kugou → YouTube Music's own lyrics tab |
+| **Lyrics word-sync (karaoke)** | ✅ | ✅ **smoothed this session** — the in-progress word's fraction is now driven by a Compose `Animatable` on the frame clock (`LaunchedEffect` keyed on the *word*, not on polled position), not sampled from a tick — reads as continuous regardless of how often the player reports position |
 | **Lyrics animation styles** | ✅ 9 | ✅ 5: Fade, Bounce, Scale, Wave, Karaoke sweep |
-| **Lyrics glow effect** | — | ✅ real text shadow on the active word/line (was a dead parameter until fixed) |
-| **Romanization** | ✅ 11 languages | ❌ deliberately skipped — needs transliteration libraries, low payoff for the cost |
-| **Translation** | ✅ (DeepL) | ❌ deliberately skipped |
+| **Lyrics glow effect** | — | ✅ |
+| **Romanization / Translation** | ✅ | ❌ deliberately skipped |
 | Equalizer | ✅ + Axion circular UI | ✅ 7-band DSP |
-| **Crossfade** | ✅ | ✅ fade-based (position/duration-driven, not true dual-decoder mixing — same honest scope most mobile players ship under this name), 1-12s slider |
-| **Audio normalization** | ✅ | ✅ `NormalizerAudioProcessor`, dynamic-range compressor in the ExoPlayer chain |
-| **Bass boost** | ✅ | ✅ `BassBoostAudioProcessor`, separate from the 7-band EQ |
-| **Headphone crossfeed** | ✅ | ✅ `CrossfeedAudioProcessor` (Chu Moy technique) |
-| **Spatial audio / 3D virtualizer** | ✅ | ❌ materially bigger than crossfeed; not attempted |
-| **Sleep timer** | ✅ | ✅ `SleepTimer.kt`, self-contained singleton, 15/30/45/60min presets |
-| **Speed / pitch** | ✅ | ✅ `PlaybackParameters`, "Preserve pitch" toggle |
-| **Swipe gestures** | ✅ 4 keys | ✅ horizontal = skip, vertical = device volume |
-| **Instant seek** | — | ✅ `StreamCache.kt`, prefetches the rest of the current track on start |
-| **Mini player background** | — | ✅ artwork-tinted (Solid/Gradient/Blur), floats over content instead of a docked bottom bar, Previous button added |
-| **Ambient / AOD mode** | ✅ | ❌ explicitly deferred, lowest priority |
-| **Comments** | ✅ | ❌ |
-| **Ringtone maker** | ✅ | ❌ explicitly deferred, lowest priority |
-| **SponsorBlock** | ✅ | ❌ explicitly deferred, lowest priority |
+| **Crossfade / Normalization / Bass boost / Crossfeed** | ✅ | ✅ (all four, unchanged) |
+| **Spatial audio / 3D virtualizer** | ✅ | ❌ not attempted |
+| **Sleep timer** | ✅ | ✅ **now shows live remaining time next to the icon** (was icon-tint-only before) |
+| **Speed / pitch** | ✅ | ✅ |
+| **Swipe gestures** | ✅ 4 keys | ✅ horizontal skip, vertical volume |
+| **Instant seek** | — | ✅ |
+| **Mini player background** | — | ✅ |
+| **Ambient / AOD, Comments, Ringtone maker, SponsorBlock** | ✅ | ❌ deferred, lowest priority |
 
 ### 2.5 Settings — 21 screens vs 8 groups
-| Echo screen | MuseFlow |
-|---|---|
-| AppearanceSettings (2,053 LOC) | ⚠️ 1 group (includes inline theme/seed-color picker) |
-| PlayerSettings (1,193) | ⚠️ split across "Mini player" + "Player" groups |
-| Lyrics settings | ⚠️ 1 group (text size/alignment/auto-scroll/tap-to-seek/blur/word animation/glow) — smaller in scope than Echo's but real, not stubs |
-| Audio | ⚠️ 1 group (EQ, skip silence, normalize, crossfade, bass boost, crossfeed) |
-| ContentSettings (1,258) | ❌ |
-| StorageSettings (565) | ❌ |
-| **SearchableSettings** (458) | ❌ |
-| BackupAndRestore (332) | ✅ shipped (`BackupSettingsScreen`, SAF export/import, auto-backup worker) |
-| PrivacySettings / UpdateSettings / About / Uptime / EchoExtractor | ❌ |
-| AccountSettings / LastFM / ListenBrainz / Discord / AI / Lossless / GlassEffect | ❌ / 🔒 |
-| Crash log retrieval | — | ✅ `CrashLogsScreen` (list/view/copy/share/delete) |
-
-37 individual controls total (switches/lists/sliders/navigation rows) across 8 groups: Appearance,
-Mini player, Player, Lyrics, Audio, Playback, General, Library sections.
+Unchanged this session — not touched. Same 8 groups / 37 controls as before; see the prior revision
+of this doc (or `git log` on this file) for the full per-screen Echo comparison if needed again.
 
 ### 2.6 Accounts & sync
-| Feature | Echo | MuseFlow |
-|---|---|---|
-| YouTube Music login + library sync | ✅ | ❌ |
-| Proxy support | ✅ 6 keys | ❌ |
-| Last.fm / ListenBrainz scrobbling | ✅ | ❌ |
-| Spotify import | ✅ | ❌ (CSV import shipped instead — see §5 below; API route investigated and rejected, needs a login Echo itself only avoids via a stranger's gist + rotating hashes) |
-
-**Entirely untouched this project.** No login of any kind exists — everything is anonymous/local.
+Unchanged this session. Still entirely untouched — no login of any kind, everything anonymous/local.
 
 ### 2.7 Platform surfaces
 | Feature | Echo | MuseFlow |
 |---|---|---|
-| Home-screen widget | ✅ 7 files | ❌ |
+| Home-screen widget | ✅ | ❌ |
 | Quick Settings tile | ✅ | ❌ |
-| Android Auto | ✅ (media session) | ⚠️ `MediaSessionService` exists, never device-verified against an actual Auto head unit |
+| Android Auto | ✅ | ⚠️ exists, never device-verified against a head unit |
 | In-app updater | ✅ | ❌ |
 | Crash screen/log retrieval | ✅ | ✅ |
-| Onboarding | ✅ `WelcomeDialog` | ❌ |
+| **Onboarding** | ✅ `WelcomeDialog` | ✅ `OnboardingDialog` (new this session) — shown once per `versionCode` (fresh install and every update both trigger it, same "-1 default" comparison Echo uses), app-intro card, hobby-project/bug-report disclosure with a tappable email row, muted "Star the Repo" button + solid "Continue" button |
 
 ### 2.8 Deliberately excluded 🔒
-Discord RPC (~20 keys), ListenTogether (~12), Google Cast, Shazam recognition, AI recommendations,
-Canvas video, Lossless FLAC, liquid glass, Hilt, the 14-module split, romanization. These are
-considered settled scope decisions, not gaps to close.
+Discord RPC, ListenTogether, Google Cast, Shazam recognition, AI recommendations, Canvas video,
+Lossless FLAC, liquid glass, Hilt, the 14-module split, romanization/translation. Settled scope
+decisions, not gaps to close.
 
 ---
 
@@ -161,102 +157,99 @@ considered settled scope decisions, not gaps to close.
 
 | Bucket | Count |
 |---|---|
-| ✅ Done | ~55 |
-| ⚠️ Partial | ~10 |
-| ❌ Missing (in scope) | ~65 |
+| ✅ Done | ~63 |
+| ⚠️ Partial | ~9 |
+| ❌ Missing (in scope) | ~58 |
 | 🔒 Excluded | ~12 |
 
-Stages A, B, C, and D (§4) are all functionally complete except two dead-end bugs (Charts/New
-Releases data, both hidden from the UI rather than shipped broken) and three explicitly
-lowest-priority deferrals (Ambient/AOD, Ringtone maker, SponsorBlock). What's left of the original
-~90-item gap is concentrated in Stages E/F/G: settings breadth, platform surfaces, and accounts —
-none of which have been started.
+What's left is now almost entirely **Stages F/G** (platform surfaces, accounts) plus **Stage E's
+settings-screen breadth** — none of which have been started, and none of which were in scope for
+this session's work (which targeted Home/Library/Stats/thumbnails/context-menus/onboarding
+specifically, per the user's own prioritization).
 
 ---
 
-## 4. What's actually shipped, by original stage
+## 4. What's actually shipped, by stage
 
-Kept for orientation — these are no longer "in progress," they're done, device-verified unless
-individually flagged.
+**Stages A–D**: unchanged from the prior revision of this doc — search filters, on-device files,
+history, backup/restore, followed artists, CSV import, context menus (song/playlist), queue reorder,
+multi-select, Artist/Album/Explore/Browse screens with stale-while-revalidate caching, and the full
+player-depth stack (sleep timer, speed/pitch, normalization/crossfade/bass-boost/crossfeed, swipe
+gestures, instant seek, lyrics depth, mini-player rebuild).
 
-**Stage A** (browsing/library UI over existing backends): search filters, on-device files, history
-screen, backup & restore UI, followed artists + release alerts, CSV playlist import. Charts is the
-one exception — screen built, data broken, hidden.
+**Stage E** (this session — Home/Library/Stats/thumbnails/context-menus/onboarding from
+`docs`'s prior "next-session plan"): **done**, except Library structure (attempted, then reverted
+back to chips at the user's explicit request — see §2.2's note). Also folded in, same session: a
+device-reported startup crash fix (onboarding's `painterResource(R.mipmap.ic_launcher)` hit the
+adaptive-icon XML on API 26+, which `painterResource` can't render — switched to the raster
+`ic_launcher_foreground`), and a general playback-state performance pass (see §5).
 
-**Stage B** (context menus & queue): song + playlist context menus, queue drag-reorder, multi-select
-batch ops on 4 surfaces, playlist long-press menu with pin/download/delete.
-
-**Stage C** (the DB-expansion + entity-screens investment): `artist_page_cache`/`album_page_cache`
-tables, multi-tab Artist screen (Overview/Songs/Albums/Related), Album screen, Explore + generic
-Browse screen, full visual redesign of Artist/Album/Playlist screens (full-bleed cover art,
-capsules, About sections, floating back buttons) later extended to Search's own Album/Playlist
-results and to Library's playlist grid.
-
-**Stage D** (player depth): sleep timer, speed/pitch, audio normalization, crossfade, bass boost,
-crossfeed, swipe gestures, instant seek via stream caching, HQ cover art backfill, and — the
-biggest single chunk — lyrics depth (3 providers, 5 real animation styles, karaoke word-sync with a
-synthesized fallback for line-only sources, a real glow effect) plus a full mini-player rebuild
-(artwork-tinted backgrounds, Previous button, floating layout instead of a docked bottom bar).
-
-A `BackgroundStyle.Glow` visual effect was built through several iterations on both the mini player
-and Now Playing, then **fully removed** at the user's request as unstable — it does not currently
-exist as a feature; `BackgroundStyle` has exactly three values (Solid/Gradient/Blur). If revisited,
-treat it as new work, not a resume-from-here.
-
-**Not started**: Stage E (settings screen breadth + a searchable-settings scaffold), Stage F
-(platform surfaces — widget, Quick Settings tile, in-app updater, Android Auto verification),
-Stage G (accounts — YTM login/sync, proxy, scrobbling).
+**Not started**: Stage F (platform surfaces), Stage G (accounts), and Stage E's own settings-screen
+breadth (this session's "Stage E" reused the label for a different, user-prioritized batch of work -
+the *original* Stage E content, dedicated settings screens, is still untouched).
 
 ---
 
-## 5. Known bugs, deferrals, and decisions worth not re-litigating
+## 5. Known bugs, deferrals, fixes, and decisions worth not re-litigating
 
-- **Charts / New releases**: both return broken data on-device (`getChartsTracks()` returns zero
-  items; `getNewReleases()` throws). Root cause not found for either — investigated locale,
-  visitorData init, and browseId correctness, all ruled out or already fixed as real bugs without
-  resolving the actual symptom. Entry points are pulled from Search rather than shipping a screen
-  that reliably errors. The screens/routes/DAOs all still exist if this gets revisited.
-- **Spotify import**: CSV-only, by decision. The API route requires either a real login (Echo's own
-  "import by link" only works for *someone else's* public playlist without one) or reverse-engineering
-  a web-player token flow that depends on a stranger's GitHub Gist and rotating persisted-query
-  hashes Spotify can invalidate at any time. Not worth the maintenance burden for this app's scale.
-- **Lyrics word-sync data coverage**: `BetterLyrics` is a Kugou (Chinese lyrics database) scraper —
-  real per-word timing realistically only exists for Chinese-language tracks. Every other track's
-  karaoke effect uses synthesized per-word timing (character-length-proportional, within the line's
-  real on-screen duration) rather than genuine sub-line sync data. This is a real, permanent data
-  ceiling unless a broader word-level source (Musixmatch/Spotify, both requiring auth tokens) is
-  integrated later.
-- **Mini player / Now Playing background styles**: `Glow` was attempted and removed (see §4). Only
-  Solid/Gradient/Blur are real, working options.
-- **Ambient/AOD mode, Ringtone maker, SponsorBlock**: explicitly deferred by the user as lowest
-  priority. Not started, no partial work exists for any of them.
-- **Romanization, translation**: explicitly deferred by the user. Not started.
+**Fixed this session (real bugs, not just polish):**
+- **Now Playing's "Details" dialog silently not opening.** Root cause: the player-menu's
+  `TrackActionsHost` call was wrapped in `if (menuTrack != null) { TrackActionsHost(...) }`.
+  `TrackActionsHost` owns its own dialog state (`remember`), entered *after* the sheet dismisses -
+  but dismissing is what set `menuTrack = null`, tearing the whole `if` block (and the state inside
+  it) down in the same frame the dialog was supposed to open. Fixed by mounting it unconditionally
+  with `track` passed as a nullable param - the pattern every other screen already used. **Lesson:
+  never wrap a stateful host composable like this in an `if (track != null)`.**
+- **Custom accent color picker's saturation/value square doing nothing to the actual theme.**
+  Root cause (found by decompiling the MaterialKolor 4.1.1 aar): `Theme.kt` used
+  `PaletteStyle.TonalSpot`, which normalizes every seed to a fixed, moderate chroma regardless of
+  input saturation - the square moved its own preview correctly but the generated palette never
+  reflected it. Switched to `PaletteStyle.Fidelity`, which keeps chroma tied to the seed. **Residual,
+  by-design limitation**: the square's brightness/value axis still won't meaningfully affect the
+  theme even now - Material 3 role tones are fixed by light/dark mode, not derived from seed
+  lightness. Not a bug, inherent to Material You.
+- **Queue swipe-to-remove "stays red"/doesn't fill correctly.** Root cause: rows were keyed by raw
+  index; after a removal, later rows shift up an index and Compose reused the old row's remembered
+  (dismissed/red) swipe state for the different song now at that slot. Fixed by keying on
+  `mediaId + index` instead.
+- **`PlayerViewModel`'s 500ms tick rebuilt the entire queue + metadata every tick**, not just
+  position, while anything played - a real, continuous perf cost (queue `.map{}` reallocation twice
+  a second) behind every screen observing playback state. Tick now only updates `positionMs`; real
+  metadata/queue changes still reach state immediately via the player's own event listener.
+- **Startup crash**: see §4.
+
+**Still open / explicitly deferred, unchanged from before:**
+- Charts/New Releases: both broken on-device, root cause not found, entry points hidden.
+- Spotify import: CSV-only by decision (real import needs a login or a fragile token flow).
+- Lyrics word-sync data coverage: real per-word timing is Kugou/Chinese-only; every other track uses
+  synthesized per-word timing. Permanent ceiling without a new paid provider.
+- Ambient/AOD, Ringtone maker, SponsorBlock, Romanization, Translation: deferred, not started.
+
+**General smoothness (2026-07-27, user-reported, partially addressed)**: the user reported the app
+"feels laggy" compared to Echo Music. An Explore-agent diff against Echo found MuseFlow using
+`Modifier.animateItem()` in exactly one place (the queue list, added this session) vs. Echo's
+extensive use across Home/Stats/Album/Explore lists, and confirmed the `PlayerViewModel` tick-loop
+issue above as the single biggest real contributor (now fixed). **Not yet done**: adding
+`animateItem()` to Home's shelves, Library's lists, Search results, and Playlist detail - flagged as
+the next concrete smoothness lever if the user wants more, not attempted this session since it wasn't
+tied to an active reported bug the way the queue was.
 
 ---
 
 ## 6. What to avoid copying from Echo
 
-- **Their module split** (14 Gradle modules) — unnecessary at this scale.
-- **Hilt** — would touch every surviving backend file for little single-module gain.
-- **Liquid glass** — 9 tuning keys for one visual effect.
-- **Duplicated "New/Old" designs** (`useNewPlayerDesign`, `OldPlayerMenu`) — legacy carry-over, not
-  worth reproducing.
-- **Romanization (11 languages)** — needs transliteration libraries; low payoff for the cost.
-- **Their lyrics provider-racing architecture** (9 providers queried in parallel, first-synced-wins
-  by string-sniffing `"["`) — looked at directly this session. Our typed `LyricsResult` sealed
-  interface plus explicit word-timing-priority selection is already a cleaner, more deterministic
-  version of the same idea for 3 providers; adopting theirs would add complexity without benefit at
-  this scale. The one technique worth taking was the per-word timing synthesis for line-only
-  sources, which was adopted (see §2.4/§5).
+Unchanged from the prior revision: their 14-module split, Hilt, liquid glass, duplicated New/Old
+designs, 11-language romanization, and their provider-racing lyrics architecture (our typed
+`LyricsResult` + explicit priority selection is already cleaner for 3 providers).
 
 ---
 
 ## 7. Realistic framing
 
-Echo is ~147k lines from many contributors over a long period. MuseFlow is ~30.7k, single-developer,
-and has closed most of the "does this feature exist at all" gap already — what's left is
-overwhelmingly settings breadth, accounts, and platform surfaces, none of which touch playback
-correctness or data integrity. The non-negotiable rule still applies: **a feature ships when it
-works on device, not when it compiles.** Several real bugs this project has hit (a lyrics-provider
-priority bug, a dead glow parameter, a `LazyColumn` padding bug, a background-layer sizing bug) all
-compiled cleanly and looked correct in review before device testing caught them.
+Echo is ~147k lines from many contributors over a long period. MuseFlow is ~32.5k, single-developer.
+The "does this feature exist at all" gap is now almost fully closed for browsing/library/player/menus
+- what's left is settings breadth, accounts, and platform surfaces, none of which touch playback
+correctness or data integrity. The non-negotiable rule still applies: **a feature ships when it works
+on device, not when it compiles.** This session alone found three real bugs (Details dialog, accent
+picker, queue swipe) that all compiled cleanly and looked correct in review before being reported
+from actual device use - the pattern holds.
