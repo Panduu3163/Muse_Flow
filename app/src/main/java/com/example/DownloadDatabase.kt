@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Context
+import androidx.compose.runtime.Immutable
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -168,6 +169,7 @@ interface LikedSongDao {
  * separate field, not a repurposing of [coverImageUrl]: a user explicitly picking a cover (see
  * [PlaylistRepository.setCustomCover]) should win over the auto mosaic, where an *imported*
  * playlist's own incidental cover deliberately doesn't (see `PlaylistGridCover`'s fallback order). */
+@Immutable
 @Entity(tableName = "playlists")
 data class PlaylistEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -251,6 +253,7 @@ interface PlaylistTrackDao {
  * baseline [ArtistReleaseCheckWorker] diffs a fresh tracklist fetch against (see
  * [newReleaseTrackIds]) to detect a genuinely new release, empty until the first successful
  * check. */
+@Immutable
 @Entity(tableName = "followed_artists")
 data class FollowedArtistEntity(
     @PrimaryKey val artistId: String,

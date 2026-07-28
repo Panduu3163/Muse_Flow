@@ -148,7 +148,7 @@ fun ChartsScreen(
                         )
                     }
 
-                    LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 140.dp)) {
+                    LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 200.dp)) {
                         itemsIndexed(tracks, key = { index, _ -> index }) { _, track ->
                             TrackRow(
                                 title = track.title,

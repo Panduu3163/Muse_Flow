@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.MediaStore
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -48,11 +49,16 @@ class LocalAudioProvider(private val context: Context) {
      * is case-insensitive by default for ASCII). */
     suspend fun search(query: String): List<TrackResult> = withContext(Dispatchers.IO) {
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        // The legacy but still-functional per-album art URI base - unlike ALBUM_ART's own column
+        // (removed from the API, and unreliable on scoped storage even before that), this is a real
+        // content:// URI MediaStore's provider serves directly, so no file-path/permission dance.
+        val albumArtCollection = "content://media/external/audio/albumart".toUri()
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
-            MediaStore.Audio.Media.DURATION
+            MediaStore.Audio.Media.DURATION,
+            MediaStore.Audio.Media.ALBUM_ID,
         )
 
         val trimmed = query.trim()
@@ -80,6 +86,7 @@ class LocalAudioProvider(private val context: Context) {
             val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
             val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
             val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+            val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
             while (cursor.moveToNext()) {
                 val title = cursor.getString(titleCol)?.takeIf { it.isNotBlank() } ?: continue
                 // MediaStore reports "<unknown>" (literally) for files with no artist tag set.
@@ -87,6 +94,12 @@ class LocalAudioProvider(private val context: Context) {
                     ?.takeIf { it.isNotBlank() && it != "<unknown>" }
                     ?: "Unknown artist"
                 val uri = ContentUris.withAppendedId(collection, cursor.getLong(idCol))
+                // The classic per-album art content URI - still the simplest cross-version way to
+                // reach a local file's embedded cover art (Coil resolves it like any other content://
+                // image and just falls through to the row's placeholder icon if the album has none,
+                // same as a null imageUrl already does elsewhere).
+                val albumId = cursor.getLong(albumIdCol)
+                val artworkUri = ContentUris.withAppendedId(albumArtCollection, albumId)
                 results.add(
                     TrackResult(
                         id = uri.toString(),
@@ -95,7 +108,8 @@ class LocalAudioProvider(private val context: Context) {
                         duration = formatDurationMs(cursor.getLong(durationCol)),
                         source = "This device",
                         sourceType = MusicSource.LOCAL_DEVICE,
-                        directStreamUrl = uri.toString()
+                        directStreamUrl = uri.toString(),
+                        imageUrl = artworkUri.toString(),
                     )
                 )
             }

@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,20 +16,22 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,9 +44,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.ui.utils.bounceClick
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.AlbumResult
 import com.example.ArtistResult
@@ -59,6 +64,7 @@ import com.example.UiState
 import com.example.downloadKey
 import com.example.toPlayableTrack
 import com.example.ui.component.CollectionRow
+import com.example.ui.component.ListPlaceholder
 import com.example.ui.component.TrackActionsHost
 import com.example.ui.component.TrackRow
 import com.example.ui.component.TrackSelection
@@ -156,25 +162,51 @@ fun SearchScreen(
         // rather than a UI-level fix, so the entry points are pulled until that's done instead of
         // shipping a row that reliably shows an error.
         if (query.isBlank()) {
-            Row(
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onOpenExplore)
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .bounceClick(onClick = onOpenExplore)
                     .testTag("search_open_explore"),
-                verticalAlignment = Alignment.CenterVertically,
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
             ) {
-                Icon(
-                    imageVector = Icons.Default.Explore,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = "Explore",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(start = 16.dp),
-                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(MaterialTheme.colorScheme.primary, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Explore,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f).padding(start = 16.dp)) {
+                        Text(
+                            text = "Explore",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                        Text(
+                            text = "Moods, genres, and browse picks",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                    )
+                }
             }
         }
 
@@ -327,7 +359,7 @@ private fun TrackResults(
     selection: TrackSelection,
 ) {
     ResultsFrame(results, emptyMessage) { tracks ->
-        LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
+        LazyColumn(contentPadding = PaddingValues(bottom = 200.dp)) {
             itemsIndexed(tracks, key = { index, track -> "$index-${track.id}" }) { index, track ->
                 val key = track.toPlayableTrack(0).downloadKey()
                 TrackRow(
@@ -346,6 +378,7 @@ private fun TrackResults(
                     isDownloaded = downloadedKeys.contains(key),
                     downloadProgress = downloadsInProgress[key],
                     onOpenMenu = if (selection.active) null else { { onOpenMenu(track) } },
+                    modifier = Modifier.animateItem(),
                 )
             }
         }
@@ -369,7 +402,7 @@ private fun <T> CollectionResults(
     onOpen: (T) -> Unit,
 ) {
     ResultsFrame(results, emptyMessage) { items ->
-        LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
+        LazyColumn(contentPadding = PaddingValues(bottom = 200.dp)) {
             // Position-based keys: YouTube can return the same browseId twice in one result set,
             // and a repeated Compose key is a crash rather than a cosmetic glitch.
             itemsIndexed(items, key = { index, _ -> index }) { _, item ->
@@ -379,6 +412,7 @@ private fun <T> CollectionResults(
                     imageUrl = imageUrl(item),
                     kind = kind,
                     onClick = { onOpen(item) },
+                    modifier = Modifier.animateItem(),
                 )
             }
         }
@@ -394,9 +428,7 @@ private fun <T> ResultsFrame(
     content: @Composable (List<T>) -> Unit,
 ) {
     when (results) {
-        is UiState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
+        is UiState.Loading -> ListPlaceholder()
 
         is UiState.Error -> CenteredMessage(
             text = results.message,
@@ -413,11 +445,12 @@ private fun <T> ResultsFrame(
 
 @Composable
 private fun SuggestionList(suggestions: List<String>, onPick: (String) -> Unit) {
-    LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
+    LazyColumn(contentPadding = PaddingValues(bottom = 200.dp)) {
         items(suggestions, key = { it }) { suggestion ->
             Row(
                 // Clickable before padding, so the whole row - not just the text - responds.
                 modifier = Modifier
+                    .animateItem()
                     .fillMaxWidth()
                     .clickable { onPick(suggestion) }
                     .padding(horizontal = 20.dp, vertical = 14.dp),
@@ -448,12 +481,13 @@ private fun RecentList(
     onPick: (String) -> Unit,
     onDelete: (String) -> Unit,
 ) {
-    LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
+    LazyColumn(contentPadding = PaddingValues(bottom = 200.dp)) {
         items(recents, key = { it }) { recent ->
             Row(
                 // Clickable before padding so the whole row responds, not just the text. The
                 // delete IconButton keeps its own handler and isn't swallowed by this.
                 modifier = Modifier
+                    .animateItem()
                     .fillMaxWidth()
                     .clickable { onPick(recent) }
                     .padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 4.dp)

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -49,6 +50,9 @@ import com.example.Track
 import com.example.TrackResult
 import com.example.UiState
 import com.example.MusicSource
+import com.example.ui.component.MediaCard
+import com.example.ui.component.PlaylistCover
+import com.example.ui.component.ShimmerBlock
 
 /**
  * Home: local sections first (recently played, most played, playlists), then shelves fetched
@@ -92,7 +96,7 @@ fun HomeScreen(
             .fillMaxSize()
             .statusBarsPadding()
             .testTag("home_screen"),
-        contentPadding = PaddingValues(top = 24.dp, bottom = 140.dp),
+        contentPadding = PaddingValues(top = 24.dp, bottom = 200.dp),
     ) {
         item {
             Text(
@@ -104,24 +108,24 @@ fun HomeScreen(
         }
 
         if (recentlyPlayed.isNotEmpty()) {
-            item {
-                Shelf(title = "Recently played") {
+            item(key = "recently_played") {
+                Shelf(title = "Recently played", modifier = Modifier.animateItem()) {
                     TrackCarousel(recentlyPlayed, cardSize) { playTracks(it, recentlyPlayed) }
                 }
             }
         }
 
         if (topPlayed.isNotEmpty()) {
-            item {
-                Shelf(title = "On repeat") {
+            item(key = "on_repeat") {
+                Shelf(title = "On repeat", modifier = Modifier.animateItem()) {
                     TrackCarousel(topPlayed, cardSize) { playTracks(it, topPlayed) }
                 }
             }
         }
 
         if (forgottenFavourites.isNotEmpty()) {
-            item {
-                Shelf(title = "Forgotten favourites") {
+            item(key = "forgotten_favourites") {
+                Shelf(title = "Forgotten favourites", modifier = Modifier.animateItem()) {
                     TrackCarousel(forgottenFavourites, cardSize) {
                         playTracks(it, forgottenFavourites)
                     }
@@ -130,9 +134,9 @@ fun HomeScreen(
         }
 
         if (playlists.isNotEmpty()) {
-            item {
-                Shelf(title = "Your playlists") {
-                    PlaylistCarousel(playlists, cardSize) { onOpenPlaylist(it.id) }
+            item(key = "your_playlists") {
+                Shelf(title = "Your playlists", modifier = Modifier.animateItem()) {
+                    PlaylistCarousel(playlists, cardSize, viewModel) { onOpenPlaylist(it.id) }
                 }
             }
         }
@@ -141,14 +145,16 @@ fun HomeScreen(
             is UiState.Success -> {
                 val discovered = (dailyDiscover as UiState.Success<List<Track>>).data
                 if (discovered.isNotEmpty()) {
-                    item {
-                        Shelf(title = "Daily Discover") {
+                    item(key = "daily_discover") {
+                        Shelf(title = "Daily Discover", modifier = Modifier.animateItem()) {
                             TrackCarousel(discovered, cardSize) { playTracks(it, discovered) }
                         }
                     }
                 }
             }
-            is UiState.Loading -> item { Shelf(title = "Daily Discover") { ShelfSkeleton() } }
+            is UiState.Loading -> item(key = "daily_discover") {
+                Shelf(title = "Daily Discover", modifier = Modifier.animateItem()) { ShelfSkeleton() }
+            }
             is UiState.Error -> Unit
         }
 
@@ -156,8 +162,8 @@ fun HomeScreen(
             is UiState.Success -> {
                 val results = (communityPlaylists as UiState.Success<List<PlaylistResult>>).data
                 if (results.isNotEmpty()) {
-                    item {
-                        Shelf(title = "From the community") {
+                    item(key = "from_the_community") {
+                        Shelf(title = "From the community", modifier = Modifier.animateItem()) {
                             RemotePlaylistCarousel(results, cardSize) { playlist ->
                                 onOpenRemotePlaylist(playlist.id, playlist.title, playlist.subtitle, playlist.imageUrl)
                             }
@@ -165,12 +171,14 @@ fun HomeScreen(
                     }
                 }
             }
-            is UiState.Loading -> item { Shelf(title = "From the community") { ShelfSkeleton() } }
+            is UiState.Loading -> item(key = "from_the_community") {
+                Shelf(title = "From the community", modifier = Modifier.animateItem()) { ShelfSkeleton() }
+            }
             is UiState.Error -> Unit
         }
 
         items(shelfSpecs, key = { it.title }) { spec ->
-            Shelf(title = spec.title) {
+            Shelf(title = spec.title, modifier = Modifier.animateItem()) {
                 Crossfade(targetState = shelves[spec.title] ?: UiState.Loading, label = "shelf_${spec.title}") { state ->
                     when (state) {
                         is UiState.Loading -> ShelfSkeleton()
@@ -188,8 +196,8 @@ fun HomeScreen(
 }
 
 @Composable
-private fun Shelf(title: String, content: @Composable () -> Unit) {
-    Column(modifier = Modifier.padding(top = 20.dp)) {
+private fun Shelf(title: String, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Column(modifier = modifier.padding(top = 20.dp)) {
         Text(
             text = title,
             style = MaterialTheme.typography.titleLarge,
@@ -210,29 +218,21 @@ private fun TrackCarousel(
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(horizontal = 16.dp),
     ) {
-        items(tracks, key = { "${it.title}|${it.artist}" }) { track ->
-            Column(
-                modifier = Modifier
-                    .width(cardSize)
-                    .clickable { onPlay(track) },
-            ) {
-                Artwork(imageUrl = track.imageUrl, size = cardSize, corner = 14.dp)
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = track.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = track.artist,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+        // Position-keyed, not "title|artist" - a shelf (esp. "Forgotten favourites"/a personalized
+        // search-based shelf) can legitimately contain the same title+artist twice (e.g. a single
+        // vs. an album cut of the same song), which crashed with "Key ... was already used" under
+        // the title+artist key. Every other list in the app with this same duplicate-content risk
+        // (Library, Search) already keys by position for exactly this reason.
+        itemsIndexed(tracks, key = { index, _ -> index }) { _, track ->
+            MediaCard(
+                title = track.title,
+                subtitle = track.artist,
+                imageUrl = track.imageUrl,
+                placeholder = Icons.Default.MusicNote,
+                onClick = { onPlay(track) },
+                size = cardSize,
+                modifier = Modifier.animateItem(),
+            )
         }
     }
 }
@@ -241,6 +241,7 @@ private fun TrackCarousel(
 private fun PlaylistCarousel(
     playlists: List<PlaylistEntity>,
     cardSize: androidx.compose.ui.unit.Dp,
+    viewModel: HomeViewModel,
     onOpen: (PlaylistEntity) -> Unit,
 ) {
     LazyRow(
@@ -248,21 +249,24 @@ private fun PlaylistCarousel(
         contentPadding = PaddingValues(horizontal = 16.dp),
     ) {
         items(playlists, key = { it.id }) { playlist ->
-            Column(
-                modifier = Modifier
-                    .width(cardSize)
-                    .clickable { onOpen(playlist) },
-            ) {
-                Artwork(imageUrl = playlist.coverImageUrl, size = cardSize, corner = 14.dp)
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = playlist.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            val tracks by viewModel.tracksForPlaylist(playlist.id).collectAsState()
+            MediaCard(
+                title = playlist.name,
+                subtitle = null,
+                imageUrl = playlist.coverImageUrl,
+                placeholder = Icons.Default.MusicNote,
+                onClick = { onOpen(playlist) },
+                size = cardSize,
+                modifier = Modifier.animateItem(),
+                artwork = { artworkModifier ->
+                    PlaylistCover(
+                        tracks = tracks,
+                        fallbackCoverUrl = playlist.coverImageUrl,
+                        customCoverUri = playlist.customCoverUri,
+                        modifier = artworkModifier,
+                    )
+                },
+            )
         }
     }
 }
@@ -278,28 +282,15 @@ private fun RemotePlaylistCarousel(
         contentPadding = PaddingValues(horizontal = 16.dp),
     ) {
         items(playlists, key = { it.id }) { playlist ->
-            Column(
-                modifier = Modifier
-                    .width(cardSize)
-                    .clickable { onOpen(playlist) },
-            ) {
-                Artwork(imageUrl = playlist.imageUrl, size = cardSize, corner = 14.dp)
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = playlist.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = playlist.subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            MediaCard(
+                title = playlist.title,
+                subtitle = playlist.subtitle,
+                imageUrl = playlist.imageUrl,
+                placeholder = Icons.Default.MusicNote,
+                onClick = { onOpen(playlist) },
+                size = cardSize,
+                modifier = Modifier.animateItem(),
+            )
         }
     }
 }
@@ -314,19 +305,14 @@ private fun ShelfSkeleton() {
     ) {
         items(4) { index ->
             Column(modifier = Modifier.width(140.dp)) {
-                Box(
-                    modifier = Modifier
-                        .size(140.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                ShimmerBlock(
+                    modifier = Modifier.size(140.dp),
+                    shape = RoundedCornerShape(14.dp),
                 )
                 Spacer(Modifier.height(8.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(12.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                ShimmerBlock(
+                    modifier = Modifier.fillMaxWidth().height(12.dp),
+                    shape = RoundedCornerShape(4.dp),
                 )
             }
         }
@@ -343,32 +329,6 @@ private fun ShelfMessage(message: String) {
     )
 }
 
-@Composable
-private fun Artwork(imageUrl: String?, size: androidx.compose.ui.unit.Dp, corner: androidx.compose.ui.unit.Dp) {
-    Box(
-        modifier = Modifier
-            .size(size)
-            .clip(RoundedCornerShape(corner))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (imageUrl != null) {
-            AsyncImage(
-                model = imageUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.size(size),
-            )
-        } else {
-            Icon(
-                imageVector = Icons.Default.MusicNote,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(size / 3),
-            )
-        }
-    }
-}
 
 /** Local [Track]s already carry everything playback needs; this just restates them in the shape
  * the player takes. A track with a real [Track.streamUrl] (a download) keeps it, so it plays from

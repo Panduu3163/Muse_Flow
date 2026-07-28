@@ -57,6 +57,14 @@ class MuseFlowApplication : Application(), ImageLoaderFactory {
                 ArtistReleaseCheckWorker.schedule(this@MuseFlowApplication)
             }
         }
+
+        // Backfills a local cover file for any download made before that fix existed (or one
+        // whose cover fetch failed the first time) - see DownloadRepository.backfillMissingCovers's
+        // own doc for why this is safe to just run on every launch rather than needing a
+        // "have I done this already" flag.
+        appScope.launch {
+            runCatching { DownloadRepository.getInstance(this@MuseFlowApplication).backfillMissingCovers() }
+        }
     }
 
     /**

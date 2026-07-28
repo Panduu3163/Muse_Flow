@@ -29,14 +29,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -77,9 +79,11 @@ import com.example.Track
 import com.example.TrackResult
 import com.example.ui.component.CollectionRow
 import com.example.ui.component.LibrarySortHeader
+import com.example.ui.component.ListPlaceholder
 import com.example.ui.component.TrackActionsHost
 import com.example.ui.component.LocalMediaGate
 import com.example.ui.component.PlaylistActionsSheet
+import com.example.ui.component.SquarePlaylistCover
 import com.example.ui.component.TrackRow
 import com.example.ui.component.TrackSelection
 import com.example.ui.component.TrackSelectionHost
@@ -144,6 +148,8 @@ fun LibraryScreen(
     LaunchedEffect(section, hasLocalPermission) {
         if (section == LibrarySection.OnDevice && hasLocalPermission) viewModel.scanLocalTracks()
     }
+    var searchActive by remember { mutableStateOf(false) }
+    val searchQuery by viewModel.searchQuery.collectAsState()
     val playlists by viewModel.playlists.collectAsState()
     val liked by viewModel.likedSongs.collectAsState()
     val downloads by viewModel.downloads.collectAsState()
@@ -194,6 +200,16 @@ fun LibraryScreen(
         LibrarySection.Following -> emptyList()
     }
     val sectionResults = remember(sectionTracks) { sectionTracks.map { it.asTrackResult() } }
+    // sectionTracks (Liked/Downloads/Top 50/Recent/On device) already runs through
+    // viewModel.sortTracks(), which folds the search query in - Playlists and Following aren't
+    // Track lists, so they need their own filtered view here instead.
+    val filteredPlaylists = remember(playlists, searchQuery) { viewModel.filterPlaylists(playlists) }
+    val filteredFollowedArtists = remember(followedArtists, searchQuery) { viewModel.filterArtists(followedArtists) }
+    // "Nothing liked yet"-style messages are wrong once a search is active and just came up
+    // empty - swap in a search-specific one so an empty result doesn't read as "you have nothing
+    // here at all".
+    fun emptyMessageFor(whenNoSearch: String): String =
+        if (searchQuery.isBlank()) whenNoSearch else "No results for \"$searchQuery\"."
 
     // Anything that renumbers the list invalidates positional selection, so switching section or
     // re-sorting drops it rather than silently retargeting the ticks onto other songs.
@@ -213,6 +229,19 @@ fun LibraryScreen(
             // Stats' one entry point - Library has no dedicated tab for it, and it isn't tied to
             // any one section (it summarizes across all of them), so it lives in the header rather
             // than as an eighth chip.
+            IconButton(
+                onClick = {
+                    searchActive = !searchActive
+                    if (!searchActive) viewModel.setSearchQuery("")
+                },
+                modifier = Modifier.testTag("library_search_toggle"),
+            ) {
+                Icon(
+                    imageVector = if (searchActive) Icons.Default.Close else Icons.Default.Search,
+                    contentDescription = if (searchActive) "Close search" else "Search this section",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             IconButton(onClick = onOpenStats, modifier = Modifier.testTag("library_open_stats")) {
                 Icon(
                     imageVector = Icons.Default.BarChart,
@@ -220,6 +249,28 @@ fun LibraryScreen(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+
+        if (searchActive) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = viewModel::setSearchQuery,
+                placeholder = { Text("Search ${section.label.lowercase()}") },
+                singleLine = true,
+                leadingIcon = { Icon(imageVector = Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                            Icon(imageVector = Icons.Default.Close, contentDescription = "Clear search")
+                        }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 8.dp)
+                    .testTag("library_search_field"),
+            )
         }
 
         LazyRow(
@@ -265,7 +316,7 @@ fun LibraryScreen(
                 ascending = ascending,
                 onToggleDirection = viewModel::toggleDirection,
                 optionLabel = { it.label },
-                countLabel = "${playlists.size} playlist${if (playlists.size == 1) "" else "s"}",
+                countLabel = "${filteredPlaylists.size} playlist${if (filteredPlaylists.size == 1) "" else "s"}",
             )
 
             else -> {
@@ -286,14 +337,15 @@ fun LibraryScreen(
 
         when (section) {
             LibrarySection.Playlists -> PlaylistList(
-                playlists.sortedByLibraryOption(playlistSort, ascending),
+                filteredPlaylists.sortedByLibraryOption(playlistSort, ascending),
                 viewModel,
                 onOpenPlaylist,
                 onLongPress = { selectedPlaylistId = it.id },
+                emptyMessage = emptyMessageFor("No playlists yet. Long-press any song and choose \"Add to playlist\"."),
             )
-            LibrarySection.Liked -> TrackList(sectionTracks, "Nothing liked yet.", gridView, play, openMenu, selection)
-            LibrarySection.Downloads -> TrackList(sectionTracks, "No downloads yet.", gridView, play, openMenu, selection)
-            LibrarySection.TopPlayed -> TrackList(sectionTracks, "Play something and it'll show up here.", gridView, play, openMenu, selection)
+            LibrarySection.Liked -> TrackList(sectionTracks, emptyMessageFor("Nothing liked yet."), gridView, play, openMenu, selection)
+            LibrarySection.Downloads -> TrackList(sectionTracks, emptyMessageFor("No downloads yet."), gridView, play, openMenu, selection)
+            LibrarySection.TopPlayed -> TrackList(sectionTracks, emptyMessageFor("Play something and it'll show up here."), gridView, play, openMenu, selection)
             // The capped, sortable slice for getting back to something quickly - the full record,
             // with its own editing, lives on the History screen this links to.
             LibrarySection.Recent -> Column {
@@ -310,32 +362,31 @@ fun LibraryScreen(
                     )
                     Text(text = "View full history", modifier = Modifier.padding(start = 8.dp))
                 }
-                TrackList(sectionTracks, "Nothing played yet.", gridView, play, openMenu, selection)
+                TrackList(sectionTracks, emptyMessageFor("Nothing played yet."), gridView, play, openMenu, selection)
             }
             LibrarySection.OnDevice -> when {
                 !hasLocalPermission -> LocalMediaGate(
                     onGranted = { hasLocalPermission = true },
                 )
 
-                localTracks is UiState.Loading -> Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator()
-                }
+                localTracks is UiState.Loading -> ListPlaceholder()
 
                 localTracks is UiState.Error -> EmptyState((localTracks as UiState.Error).message)
 
                 else -> TrackList(
                     sectionTracks,
-                    "No music files found on this device.",
+                    emptyMessageFor("No music files found on this device."),
                     gridView,
                     play,
                     openMenu,
                     selection,
                 )
             }
-            LibrarySection.Following -> FollowedArtistsList(followedArtists, onGoToArtist)
+            LibrarySection.Following -> FollowedArtistsList(
+                filteredFollowedArtists,
+                onGoToArtist,
+                emptyMessage = emptyMessageFor("Not following anyone yet. Follow an artist from their page or a search result."),
+            )
         }
     }
 
@@ -407,7 +458,7 @@ private fun TrackList(
         // at every display-density setting instead of stretching cells.
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 150.dp),
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 140.dp),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 200.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -428,13 +479,14 @@ private fun TrackList(
                         if (selection.active) selection.toggle(index) else selection.start(index)
                     },
                     selected = selection.isSelected(index),
+                    modifier = Modifier.animateItem(),
                 )
             }
         }
         return
     }
 
-    LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 140.dp)) {
+    LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 200.dp)) {
         itemsIndexed(tracks, key = { index, _ -> index }) { index, track ->
             TrackRow(
                 title = track.title,
@@ -450,6 +502,7 @@ private fun TrackList(
                 selected = selection.isSelected(index),
                 // No menu button while selecting - the selection bar is the row's controls then.
                 onOpenMenu = if (selection.active) null else { { onOpenMenu(track) } },
+                modifier = Modifier.animateItem(),
             )
         }
     }
@@ -463,9 +516,10 @@ private fun TrackGridCell(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     selected: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .testTag("track_cell_${track.title.lowercase().replace(" ", "_")}"),
     ) {
@@ -537,9 +591,10 @@ private fun PlaylistList(
     viewModel: LibraryViewModel,
     onOpenPlaylist: (Long) -> Unit,
     onLongPress: (PlaylistEntity) -> Unit,
+    emptyMessage: String = "No playlists yet. Long-press any song and choose \"Add to playlist\".",
 ) {
     if (playlists.isEmpty()) {
-        EmptyState("No playlists yet. Long-press any song and choose \"Add to playlist\".")
+        EmptyState(emptyMessage)
         return
     }
     // A LazyColumn of manually chunked rows, not LazyVerticalGrid - LazyVerticalGrid clips a row
@@ -547,13 +602,13 @@ private fun PlaylistList(
     // right after being added) to a too-short height, cutting the cover and the title/count text
     // below it off entirely.
     LazyColumn(
-        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 140.dp),
+        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 200.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
         items(playlists.chunked(2), key = { row -> row.joinToString("_") { it.id.toString() } }) { row ->
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().animateItem(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 row.forEach { playlist ->
@@ -593,7 +648,7 @@ private fun PlaylistGridTile(
             )
             .testTag("playlist_row_${playlist.name.lowercase().replace(" ", "_")}"),
     ) {
-        PlaylistGridCover(tracks = tracks, fallbackCoverUrl = playlist.coverImageUrl, customCoverUri = playlist.customCoverUri)
+        SquarePlaylistCover(tracks = tracks, fallbackCoverUrl = playlist.coverImageUrl, customCoverUri = playlist.customCoverUri, shape = RoundedCornerShape(14.dp))
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -625,75 +680,6 @@ private fun PlaylistGridTile(
     }
 }
 
-/** A single grid tile's artwork: a 2x2 mosaic of the playlist's first four track thumbnails, same
- * fallback chain as [PlaylistDetailScreen]'s full-screen cover (mosaic -> a real assigned cover ->
- * one track's art -> a plain icon), just square and grid-sized instead of full-bleed. [customCoverUri]
- * (a user-picked photo) wins over everything else - see [PlaylistDetailScreen]'s `PlaylistCover` for
- * why that ranks above the mosaic, unlike an imported playlist's incidental [fallbackCoverUrl]. */
-@Composable
-private fun PlaylistGridCover(tracks: List<Track>, fallbackCoverUrl: String?, customCoverUri: String? = null) {
-    val thumbnails = remember(tracks) { tracks.mapNotNull { it.imageUrl }.distinct().take(4) }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(1f)
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-    ) {
-        when {
-            customCoverUri != null -> AsyncImage(
-                model = customCoverUri,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-
-            thumbnails.size == 4 -> Column(modifier = Modifier.fillMaxSize()) {
-                Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    GridMosaicCell(thumbnails[0], Modifier.weight(1f).fillMaxSize())
-                    GridMosaicCell(thumbnails[1], Modifier.weight(1f).fillMaxSize())
-                }
-                Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    GridMosaicCell(thumbnails[2], Modifier.weight(1f).fillMaxSize())
-                    GridMosaicCell(thumbnails[3], Modifier.weight(1f).fillMaxSize())
-                }
-            }
-
-            fallbackCoverUrl != null -> AsyncImage(
-                model = fallbackCoverUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-
-            thumbnails.isNotEmpty() -> AsyncImage(
-                model = thumbnails.first(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-
-            else -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(40.dp),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun GridMosaicCell(imageUrl: String, modifier: Modifier) {
-    AsyncImage(
-        model = imageUrl,
-        contentDescription = null,
-        contentScale = ContentScale.Crop,
-        modifier = modifier,
-    )
-}
 
 /** The list this whole session's "no way to see who you follow" gap was blocking on - reuses
  * [CollectionRow], the same row Search's album/artist/playlist results already render with, so a
@@ -702,12 +688,13 @@ private fun GridMosaicCell(imageUrl: String, modifier: Modifier) {
 private fun FollowedArtistsList(
     artists: List<FollowedArtistEntity>,
     onOpenArtist: (String) -> Unit,
+    emptyMessage: String = "Not following anyone yet. Follow an artist from their page or a search result.",
 ) {
     if (artists.isEmpty()) {
-        EmptyState("Not following anyone yet. Follow an artist from their page or a search result.")
+        EmptyState(emptyMessage)
         return
     }
-    LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 140.dp)) {
+    LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 200.dp)) {
         items(artists, key = { it.artistId }) { artist ->
             CollectionRow(
                 title = artist.name,
@@ -715,6 +702,7 @@ private fun FollowedArtistsList(
                 imageUrl = artist.imageUrl,
                 kind = CollectionKind.Artist,
                 onClick = { onOpenArtist(artist.artistId) },
+                modifier = Modifier.animateItem(),
             )
         }
     }

@@ -174,7 +174,11 @@ fun PlaylistDetailScreen(
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = listState,
-            contentPadding = PaddingValues(bottom = 140.dp),
+            // More than the 140.dp every other screen uses: this screen has no bottom nav bar of
+            // its own competing for that space (it's a pushed detail screen, not a tab), so the
+            // mini-player floats lower here and the last track row was landing tucked behind it
+            // with no way to scroll further and clear it.
+            contentPadding = PaddingValues(bottom = 200.dp),
         ) {
             item(key = "cover") {
                 PlaylistCover(
@@ -360,6 +364,7 @@ fun PlaylistDetailScreen(
                         onOpenMenu = if (selection.active) null else {
                             { selectedTrack = track.asTrackResult() }
                         },
+                        modifier = Modifier.animateItem(),
                     )
                 }
             }

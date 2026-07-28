@@ -3,6 +3,7 @@ package com.example
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,7 +45,11 @@ class AlbumPaletteViewModel(application: Application) : AndroidViewModel(applica
         }
 
         job?.cancel()
-        job = viewModelScope.launch {
+        // extractAlbumPalette already dispatches its own real work off Main - this just makes sure
+        // the trivial pre-work above (the cache lookup, `loadedUrl` bookkeeping) doesn't run inline
+        // on Main.immediate either, so this coroutine costs nothing on the main thread from the
+        // instant it launches, not just from its first suspension point onward.
+        job = viewModelScope.launch(Dispatchers.Default) {
             val extracted = runCatching {
                 extractAlbumPalette(getApplication(), artworkUrl)
             }.getOrNull()

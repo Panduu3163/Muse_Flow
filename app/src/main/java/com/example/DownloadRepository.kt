@@ -13,6 +13,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -61,6 +62,30 @@ class DownloadRepository private constructor(context: Context) {
 
     fun isDownloading(track: Track): Boolean = activeJobs.containsKey(track.downloadKey())
 
+    /**
+     * Fetches a local cover file for every completed download that doesn't already have one -
+     * anything downloaded before the local-cover-file fix (see [startDownload]'s own comment on
+     * why the fix exists), or a download whose cover fetch failed the first time.
+     *
+     * Deliberately not gated behind a "have I already run this" flag: checking whether each
+     * download already has its `.cover` file is just a filesystem stat, cheap enough to redo on
+     * every call even once everything's backfilled, and that also means a download missed the
+     * first time (e.g. the device was offline right after updating) gets picked up on the very
+     * next opportunity instead of being permanently skipped. Best-effort throughout - one track's
+     * failed fetch (still offline, thumbnail URL now dead, etc.) doesn't stop the rest.
+     */
+    suspend fun backfillMissingCovers() {
+        val completed = runCatching { dao.observeCompleted().first() }.getOrNull().orEmpty()
+        for (entity in completed) {
+            if (localCoverFile(appContext, entity.key) != null) continue
+            val url = entity.imageUrl ?: continue
+            runCatching {
+                val bytes = fetchBytes(upgradeThumbnailUrl(url)) ?: return@runCatching
+                File(downloadsDir(appContext), "${entity.key}.cover").writeBytes(bytes)
+            }
+        }
+    }
+
     fun startDownload(track: Track) {
         val key = track.downloadKey()
         if (activeJobs.containsKey(key)) return
@@ -84,9 +109,19 @@ class DownloadRepository private constructor(context: Context) {
                     DownloadNotificationHelper.showProgress(appContext, track, percent)
                 }
                 // Best-effort, never blocks/fails the download itself - see AudioTagger's doc.
-                runCatching {
-                    val coverArtBytes = track.imageUrl?.let { fetchBytes(it) }
-                    AudioTagger.embedIfSupported(targetFile, contentType, track, coverArtBytes)
+                val coverArtBytes = runCatching { track.imageUrl?.let { fetchBytes(upgradeThumbnailUrl(it)) } }.getOrNull()
+                runCatching { AudioTagger.embedIfSupported(targetFile, contentType, track, coverArtBytes) }
+                // AudioTagger only embeds into MP3/M4A containers it can actually parse - but
+                // YouTube's audio-only streams are itag 251/250/249 (Opus-in-WebM) *first* (see
+                // InnerTubeStreamResolver's own comment on try order), which jaudiotagger doesn't
+                // support at all, so embedding silently did nothing for most real downloads. A
+                // plain sibling image file works regardless of the audio container, and is what
+                // toMediaItem()/toTrack() now read for a downloaded track's artwork instead of
+                // depending on the tag ever having been written.
+                if (coverArtBytes != null) {
+                    runCatching {
+                        File(downloadsDir(appContext), "$key.cover").writeBytes(coverArtBytes)
+                    }
                 }
                 dao.upsert(
                     DownloadedTrackEntity(
@@ -111,12 +146,14 @@ class DownloadRepository private constructor(context: Context) {
                 // A user-initiated cancel (see cancelDownload) - not a failure, just clean up
                 // the partial file below and let the cancellation propagate as normal.
                 File(downloadsDir(appContext), "$key.audio").delete()
+                File(downloadsDir(appContext), "$key.cover").delete()
                 DownloadNotificationHelper.clear(appContext, key)
                 throw e
             } catch (e: Exception) {
                 // Don't leave a stale/broken row around - a partial file is useless, and the user
                 // can just tap download again.
                 File(downloadsDir(appContext), "$key.audio").delete()
+                File(downloadsDir(appContext), "$key.cover").delete()
                 _failures.update { it + (key to (e.message ?: "Download failed")) }
                 DownloadNotificationHelper.clear(appContext, key)
             } finally {
@@ -134,6 +171,7 @@ class DownloadRepository private constructor(context: Context) {
         val key = track.downloadKey()
         cancelDownload(track)
         dao.getByKey(key)?.let { File(it.filePath).delete() }
+        File(downloadsDir(appContext), "$key.cover").delete()
         dao.deleteByKey(key)
     }
 
@@ -212,6 +250,16 @@ class DownloadRepository private constructor(context: Context) {
 
     /** Small best-effort fetch for cover art bytes to embed via [AudioTagger] - failures return
      * null (caller already wraps this in [runCatching] regardless). */
+    /** A defensive safety net alongside the search-time upgrade already applied in
+     * [YouTubeMusicProvider] and `:innertube`'s `ThumbnailRenderer` - covers any [Track] whose
+     * [Track.imageUrl] reached this point from somewhere that predates or bypasses that (e.g. a
+     * denormalized copy in [LikedSongEntity]/[PlaylistTrackEntity] captured before an upgrade, or
+     * an older history row) with the exact same "some downloads have a low-res cover" symptom this
+     * would otherwise reproduce at embed time. A no-op for any URL that doesn't match the
+     * Google-style size-param pattern in the first place (e.g. an i.ytimg.com path). */
+    private fun upgradeThumbnailUrl(rawUrl: String): String =
+        rawUrl.replace(Regex("=w\\d+-h\\d+.*$"), "=w544-h544-l90-rj")
+
     private fun fetchBytes(url: String): ByteArray? {
         val request = Request.Builder().url(url).build()
         return httpClient.newCall(request).execute().use { response ->
@@ -221,6 +269,13 @@ class DownloadRepository private constructor(context: Context) {
 
     companion object {
         fun downloadsDir(context: Context): File = File(context.filesDir, "downloads")
+
+        /** The locally-saved cover for a downloaded track, if one was fetched at download time -
+         * see [startDownload]'s own comment on why this exists instead of relying on the audio
+         * file's embedded tag. Null when there's no file (nothing to fetch a cover from, the fetch
+         * failed, or this download predates this app version). */
+        fun localCoverFile(context: Context, key: String): File? =
+            File(downloadsDir(context), "$key.cover").takeIf { it.exists() }
 
         @Volatile private var instance: DownloadRepository? = null
 

@@ -12,6 +12,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -53,6 +59,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.ui.component.LyricsView
+import com.example.ui.theme.Motion
 import com.example.ui.component.MiniPlayer
 import com.example.ui.component.MuseFlowNavBar
 import com.example.ui.component.TrackActionsHost
@@ -281,6 +288,63 @@ private fun MuseFlowNavHost(
         navController = navController,
         startDestination = startDestination,
         modifier = modifier,
+        // Direction-aware slide+fade for the whole NavHost, keyed on each tab's position in
+        // TopLevelDestination - the same left/right-of-current-tab comparison Echo-Music's own
+        // MainActivity.kt uses (verified against its source, not approximated). A push destination
+        // (Artist/Album/Playlist/...) has no entry in TopLevelDestination, so indexOfFirst returns
+        // -1 for it - the "not a tab" branch below - which naturally reads as "slide in from the
+        // right" for a push and "slide out to the right" when popped back out of, with no separate
+        // tab-vs-push branch needed. Now Playing is the one deliberate exception: it isn't a tab and
+        // has no meaningful left/right position, so it always gets a vertical slide instead, reading
+        // as a sheet coming up over whatever's beneath it.
+        enterTransition = {
+            val currentRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == targetState.destination.route }
+            val previousRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == initialState.destination.route }
+            when {
+                targetState.destination.route == Routes.NOW_PLAYING ->
+                    slideInVertically(animationSpec = Motion.quickFade(200)) { it } + fadeIn(Motion.quickFade(200))
+                currentRouteIndex == -1 || currentRouteIndex > previousRouteIndex ->
+                    slideInHorizontally(animationSpec = Motion.quickFade(200)) { it / 8 } + fadeIn(Motion.quickFade(200))
+                else ->
+                    slideInHorizontally(animationSpec = Motion.quickFade(200)) { -it / 8 } + fadeIn(Motion.quickFade(200))
+            }
+        },
+        exitTransition = {
+            val currentRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == initialState.destination.route }
+            val targetRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == targetState.destination.route }
+            when {
+                initialState.destination.route == Routes.NOW_PLAYING ->
+                    slideOutVertically(animationSpec = Motion.quickFade(180)) { it } + fadeOut(Motion.quickFade(180))
+                targetRouteIndex == -1 || targetRouteIndex > currentRouteIndex ->
+                    slideOutHorizontally(animationSpec = Motion.quickFade(200)) { -it / 8 } + fadeOut(Motion.quickFade(180))
+                else ->
+                    slideOutHorizontally(animationSpec = Motion.quickFade(200)) { it / 8 } + fadeOut(Motion.quickFade(180))
+            }
+        },
+        popEnterTransition = {
+            val currentRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == targetState.destination.route }
+            val previousRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == initialState.destination.route }
+            when {
+                targetState.destination.route == Routes.NOW_PLAYING ->
+                    slideInVertically(animationSpec = Motion.quickFade(200)) { it } + fadeIn(Motion.quickFade(200))
+                previousRouteIndex != -1 && previousRouteIndex < currentRouteIndex ->
+                    slideInHorizontally(animationSpec = Motion.quickFade(200)) { it / 8 } + fadeIn(Motion.quickFade(200))
+                else ->
+                    slideInHorizontally(animationSpec = Motion.quickFade(200)) { -it / 8 } + fadeIn(Motion.quickFade(200))
+            }
+        },
+        popExitTransition = {
+            val currentRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == initialState.destination.route }
+            val targetRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == targetState.destination.route }
+            when {
+                initialState.destination.route == Routes.NOW_PLAYING ->
+                    slideOutVertically(animationSpec = Motion.quickFade(180)) { it } + fadeOut(Motion.quickFade(180))
+                currentRouteIndex != -1 && currentRouteIndex < targetRouteIndex ->
+                    slideOutHorizontally(animationSpec = Motion.quickFade(200)) { -it / 8 } + fadeOut(Motion.quickFade(180))
+                else ->
+                    slideOutHorizontally(animationSpec = Motion.quickFade(200)) { it / 8 } + fadeOut(Motion.quickFade(180))
+            }
+        },
     ) {
         topLevelGraph(
             onPlayTrack = onPlayTrack,
@@ -474,9 +538,13 @@ private fun NavGraphBuilder.playerGraph(
         val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsState()
 
         // The controller only exposes metadata, so the track is reconstructed from it to reach
-        // the same title/artist download key the repositories index by.
-        val currentTrack = playerViewModel.currentTrackForActions()
-        val key = currentTrack?.downloadKey()
+        // the same title/artist download key the repositories index by. Remembered on the same
+        // (title, artist) key the LaunchedEffect below already uses to mean "the track changed" -
+        // without this, `currentTrackForActions()` re-runs (and hands NowPlayingScreen a new Track
+        // instance) on every recomposition of this route, which defeats every callback below that's
+        // itself remembered on `currentTrack` for stability.
+        val currentTrack = remember(state.title, state.artist) { playerViewModel.currentTrackForActions() }
+        val key = remember(currentTrack) { currentTrack?.downloadKey() }
         val sleepTimerRemainingMs by playerViewModel.sleepTimerRemainingMs.collectAsState()
         var menuTrack by remember { mutableStateOf<TrackResult?>(null) }
 
@@ -488,6 +556,39 @@ private fun NavGraphBuilder.playerGraph(
         val lyrics by lyricsViewModel.state.collectAsState()
         val lyricsPositionMs by playerViewModel.lyricsPositionMs.collectAsState()
         val clipboard = LocalClipboardManager.current
+
+        // Every callback below is remembered on the same key its closure actually captures, so
+        // NowPlayingScreen (and everything it passes these on to, e.g. transport buttons wrapped in
+        // bounceClick) sees a stable reference across recompositions instead of a fresh lambda every
+        // time - a fresh lambda identity is indistinguishable from "this callback actually changed"
+        // to Compose's skip check, which was silently defeating recomposition-skipping on this
+        // screen's own most frequently-recomposing subtree (transport controls, tracked in
+        // `docs/nowplaying-jank-investigation.md`).
+        val onTogglePlayPause = remember(playerViewModel) { playerViewModel::togglePlayPause }
+        val onNext = remember(playerViewModel) { { playerViewModel.next(); Unit } }
+        val onPrevious = remember(playerViewModel) { { playerViewModel.previous(); Unit } }
+        val onSeek = remember(playerViewModel) { playerViewModel::seekTo }
+        val onToggleShuffle = remember(playerViewModel) { playerViewModel::toggleShuffle }
+        val onCycleRepeat = remember(playerViewModel) { playerViewModel::cycleRepeatMode }
+        val onPlayQueueItem = remember(playerViewModel) { playerViewModel::playQueueItem }
+        val onMoveQueueItem = remember(playerViewModel) { playerViewModel::moveQueueItem }
+        val onRemoveQueueItem = remember(playerViewModel) { playerViewModel::removeQueueItem }
+        val onToggleLike = remember(currentTrack, actionsViewModel) {
+            { currentTrack?.let(actionsViewModel::toggleLike); Unit }
+        }
+        val onDownload = remember(currentTrack, actionsViewModel) {
+            { currentTrack?.let(actionsViewModel::download); Unit }
+        }
+        val onStartSleepTimer = remember(playerViewModel) { playerViewModel::startSleepTimer }
+        val onCancelSleepTimer = remember(playerViewModel) { playerViewModel::cancelSleepTimer }
+        val onSetPlaybackSpeed = remember(playerViewModel) { playerViewModel::setPlaybackSpeed }
+        val onOpenMenu = remember(currentTrack) { { menuTrack = currentTrack?.asTrackResult() } }
+        val onLyricsSeekTo = remember(playerViewModel) { { timestampMs: Long -> playerViewModel.seekToMs(timestampMs) } }
+        val buttonColor = when (appSettings.playerButtonColor) {
+            PlayerButtonColorOption.Primary -> MaterialTheme.colorScheme.primary
+            PlayerButtonColorOption.Secondary -> MaterialTheme.colorScheme.secondary
+            PlayerButtonColorOption.Tertiary -> MaterialTheme.colorScheme.tertiary
+        }
 
         LaunchedEffect(state.title, state.artist) {
             // Only a confirmed real YouTube id, never the "title|artist" stand-in a stored track
@@ -506,21 +607,21 @@ private fun NavGraphBuilder.playerGraph(
 
         NowPlayingScreen(
             state = state,
-            onTogglePlayPause = playerViewModel::togglePlayPause,
-            onNext = { playerViewModel.next() },
-            onPrevious = { playerViewModel.previous() },
-            onSeek = playerViewModel::seekTo,
-            onToggleShuffle = playerViewModel::toggleShuffle,
-            onCycleRepeat = playerViewModel::cycleRepeatMode,
-            onPlayQueueItem = playerViewModel::playQueueItem,
-            onMoveQueueItem = playerViewModel::moveQueueItem,
-            onRemoveQueueItem = playerViewModel::removeQueueItem,
+            onTogglePlayPause = onTogglePlayPause,
+            onNext = onNext,
+            onPrevious = onPrevious,
+            onSeek = onSeek,
+            onToggleShuffle = onToggleShuffle,
+            onCycleRepeat = onCycleRepeat,
+            onPlayQueueItem = onPlayQueueItem,
+            onMoveQueueItem = onMoveQueueItem,
+            onRemoveQueueItem = onRemoveQueueItem,
             onCollapse = onCollapse,
             isLiked = key != null && likedKeys.contains(key),
             isDownloaded = key != null && downloadedKeys.contains(key),
             downloadProgress = key?.let { downloadsInProgress[it] },
-            onToggleLike = { currentTrack?.let(actionsViewModel::toggleLike) },
-            onDownload = { currentTrack?.let(actionsViewModel::download) },
+            onToggleLike = onToggleLike,
+            onDownload = onDownload,
             hideArtwork = appSettings.hidePlayerThumbnail,
             artworkCornerRadius = appSettings.thumbnailCornerRadius,
             cropArtwork = appSettings.cropAlbumArt,
@@ -528,23 +629,17 @@ private fun NavGraphBuilder.playerGraph(
             slimSlider = appSettings.playerSliderStyle == PlayerSliderStyle.Slim,
             backgroundStyle = appSettings.playerBackgroundStyle,
             palette = albumPalette,
-            buttonColor = when (appSettings.playerButtonColor) {
-                PlayerButtonColorOption.Primary -> MaterialTheme.colorScheme.primary
-                PlayerButtonColorOption.Secondary -> MaterialTheme.colorScheme.secondary
-                PlayerButtonColorOption.Tertiary -> MaterialTheme.colorScheme.tertiary
-            },
+            buttonColor = buttonColor,
             sleepTimerRemainingMs = sleepTimerRemainingMs,
-            onStartSleepTimer = playerViewModel::startSleepTimer,
-            onCancelSleepTimer = playerViewModel::cancelSleepTimer,
-            onSetPlaybackSpeed = playerViewModel::setPlaybackSpeed,
-            onOpenMenu = { menuTrack = currentTrack?.asTrackResult() },
+            onStartSleepTimer = onStartSleepTimer,
+            onCancelSleepTimer = onCancelSleepTimer,
+            onSetPlaybackSpeed = onSetPlaybackSpeed,
+            onOpenMenu = onOpenMenu,
             lyricsContent = { slotModifier ->
                 LyricsView(
                     result = lyrics,
                     positionMs = lyricsPositionMs,
-                    // Named param: `it` here would bind to the enclosing composable() lambda's
-                    // NavBackStackEntry, not the timestamp.
-                    onSeekTo = { timestampMs -> playerViewModel.seekToMs(timestampMs) },
+                    onSeekTo = onLyricsSeekTo,
                     modifier = slotModifier,
                     textSizeSp = appSettings.lyricsTextSize,
                     lineSpacing = appSettings.lyricsLineSpacing,

@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -80,8 +81,11 @@ import com.example.loadAsUiState
 import com.example.parseArtistTracklistJson
 import com.example.toJson
 import com.example.ui.component.ArtistActionsSheet
+import com.example.ui.component.MediaCard
+import com.example.ui.component.MediaGridCard
 import com.example.ui.component.TrackActionsHost
 import com.example.ui.component.TrackRow
+import com.example.ui.theme.Motion
 
 private val ARTIST_TABS = listOf("Overview", "Songs", "Albums", "Related")
 
@@ -451,7 +455,12 @@ private fun ArtistIdentity(
         }
 
         if (!tracklist.description.isNullOrBlank()) {
-            Column(modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 20.dp)
+                    .animateContentSize(animationSpec = Motion.emphasized()),
+            ) {
                 Text(
                     text = "About",
                     style = MaterialTheme.typography.titleMedium,
@@ -601,13 +610,14 @@ private fun androidx.compose.foundation.lazy.LazyListScope.artistOverviewItems(
                 contentPadding = PaddingValues(horizontal = 16.dp),
             ) {
                 items(tracklist.albums, key = { it.id }) { album ->
-                    ShelfCard(
+                    MediaCard(
                         title = album.title,
                         subtitle = album.artist,
                         imageUrl = album.imageUrl,
                         placeholder = Icons.Default.Album,
                         shape = RoundedCornerShape(10.dp),
                         onClick = { onGoToAlbum(album.id) },
+                        modifier = Modifier.animateItem(),
                     )
                 }
             }
@@ -622,20 +632,21 @@ private fun androidx.compose.foundation.lazy.LazyListScope.artistOverviewItems(
                 contentPadding = PaddingValues(horizontal = 16.dp),
             ) {
                 items(tracklist.relatedArtists, key = { it.id }) { artist ->
-                    ShelfCard(
+                    MediaCard(
                         title = artist.name,
                         subtitle = null,
                         imageUrl = artist.imageUrl,
                         placeholder = Icons.Default.Person,
                         shape = CircleShape,
                         onClick = { onGoToArtist(artist.id) },
+                        modifier = Modifier.animateItem(),
                     )
                 }
             }
         }
     }
 
-    item(key = "overview_bottom_padding") { Box(modifier = Modifier.padding(bottom = 140.dp)) }
+    item(key = "overview_bottom_padding") { Box(modifier = Modifier.padding(bottom = 200.dp)) }
 }
 
 private fun androidx.compose.foundation.lazy.LazyListScope.artistSongsItems(
@@ -657,7 +668,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.artistSongsItems(
             onOpenMenu = { onOpenMenu(track) },
         )
     }
-    item(key = "songs_bottom_padding") { Box(modifier = Modifier.padding(bottom = 140.dp)) }
+    item(key = "songs_bottom_padding") { Box(modifier = Modifier.padding(bottom = 200.dp)) }
 }
 
 private fun androidx.compose.foundation.lazy.LazyListScope.artistAlbumsItems(
@@ -676,7 +687,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.artistAlbumsItems(
         ) {
             rowAlbums.forEach { album ->
                 Box(modifier = Modifier.weight(1f)) {
-                    GridCard(
+                    MediaGridCard(
                         title = album.title,
                         subtitle = album.artist,
                         imageUrl = album.imageUrl,
@@ -689,7 +700,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.artistAlbumsItems(
             if (rowAlbums.size == 1) Box(modifier = Modifier.weight(1f))
         }
     }
-    item(key = "albums_bottom_padding") { Box(modifier = Modifier.padding(bottom = 140.dp)) }
+    item(key = "albums_bottom_padding") { Box(modifier = Modifier.padding(bottom = 200.dp)) }
 }
 
 private fun androidx.compose.foundation.lazy.LazyListScope.artistRelatedItems(
@@ -708,7 +719,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.artistRelatedItems(
         ) {
             rowArtists.forEach { artist ->
                 Box(modifier = Modifier.weight(1f)) {
-                    GridCard(
+                    MediaGridCard(
                         title = artist.name,
                         subtitle = null,
                         imageUrl = artist.imageUrl,
@@ -721,7 +732,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.artistRelatedItems(
             if (rowArtists.size == 1) Box(modifier = Modifier.weight(1f))
         }
     }
-    item(key = "related_bottom_padding") { Box(modifier = Modifier.padding(bottom = 140.dp)) }
+    item(key = "related_bottom_padding") { Box(modifier = Modifier.padding(bottom = 200.dp)) }
 }
 
 @Composable
@@ -744,121 +755,6 @@ private fun ShelfTitle(text: String) {
         color = MaterialTheme.colorScheme.onBackground,
         modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 8.dp),
     )
-}
-
-/** One card in a horizontal discography/related-artist shelf - [shape] is the one thing that
- * differs between an album (rounded square) and an artist (circle), same convention the header
- * cover above already uses. */
-@Composable
-private fun ShelfCard(
-    title: String,
-    subtitle: String?,
-    imageUrl: String?,
-    placeholder: androidx.compose.ui.graphics.vector.ImageVector,
-    shape: androidx.compose.ui.graphics.Shape,
-    onClick: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .width(120.dp)
-            .clickable(onClick = onClick),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(120.dp)
-                .clip(shape)
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (imageUrl != null) {
-                AsyncImage(
-                    model = imageUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(120.dp),
-                )
-            } else {
-                Icon(
-                    imageVector = placeholder,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 6.dp),
-        )
-        if (subtitle != null && subtitle.isNotBlank()) {
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-/** Same visual as [ShelfCard] but sized to fill its grid cell rather than a fixed 120dp width -
- * the Albums/Related tabs' full-list grids use this, the Overview shelf previews use [ShelfCard]. */
-@Composable
-private fun GridCard(
-    title: String,
-    subtitle: String?,
-    imageUrl: String?,
-    placeholder: androidx.compose.ui.graphics.vector.ImageVector,
-    shape: androidx.compose.ui.graphics.Shape,
-    onClick: () -> Unit,
-) {
-    Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(shape)
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (imageUrl != null) {
-                AsyncImage(
-                    model = imageUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Icon(
-                    imageVector = placeholder,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(48.dp),
-                )
-            }
-        }
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 6.dp),
-        )
-        if (subtitle != null && subtitle.isNotBlank()) {
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
 }
 
 @Composable

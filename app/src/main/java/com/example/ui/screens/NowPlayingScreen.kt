@@ -4,7 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -92,7 +91,9 @@ import com.example.BackgroundStyle
 import com.example.NowPlayingState
 import com.example.QueueItem
 import com.example.asPlaybackTime
+import androidx.compose.foundation.clickable
 import com.example.ui.component.SquigglySlider
+import com.example.ui.utils.bounceClick
 
 /**
  * The full-screen player: large artwork, a seekable progress bar, transport controls, and a
@@ -808,7 +809,7 @@ private fun TransportControls(
                 .size(68.dp)
                 .clip(CircleShape)
                 .background(buttonColor.takeIf { it != Color.Unspecified } ?: MaterialTheme.colorScheme.primary)
-                .clickable(onClick = onTogglePlayPause)
+                .bounceClick(onClick = onTogglePlayPause)
                 .testTag("now_playing_play_pause"),
             contentAlignment = Alignment.Center,
         ) {

@@ -2,6 +2,7 @@ package com.example
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.net.Uri
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -137,11 +138,36 @@ class PlaybackService : MediaSessionService() {
             }.getOrNull() ?: return@launch
 
             val items = saved.items.map { item ->
+                // Same reasoning as PlayerViewModel.toMediaItem(): item.artworkUrl is the original
+                // remote thumbnail, not a local path - the locally-saved cover file
+                // (DownloadRepository.localCoverFile) is the reliable source, since it works
+                // regardless of the download's audio container (most are Opus/WebM, which the
+                // embedded-tag fallback can't touch at all). Same "title::artist" key
+                // Track.downloadKey()/TrackResult.downloadKey() use - this queue-item shape has no
+                // Track of its own to call that extension on.
+                val downloadKey = "${item.title.trim().lowercase()}::${item.artist.trim().lowercase()}"
+                // artworkUri (a real file:// URI), not artworkData - this app's own in-app state
+                // only ever reads artworkUri, so bytes silently left in-app art blank. See
+                // PlayerViewModel.toMediaItem()'s fuller comment on the same fix.
+                val localCoverUri = item.localFilePath?.let {
+                    DownloadRepository.localCoverFile(this@PlaybackService, downloadKey)?.let { file -> Uri.fromFile(file) }
+                }
+                val embeddedArtBytes = if (localCoverUri == null) {
+                    item.localFilePath?.let { PlayerViewModel.readEmbeddedArtwork(it) }
+                } else {
+                    null
+                }
                 val metadata = MediaMetadata.Builder()
                     .setTitle(item.title)
                     .setArtist(item.artist)
                     .setAlbumTitle(item.album)
-                    .apply { item.artworkUrl?.let { setArtworkUri(it.toUri()) } }
+                    .apply {
+                        when {
+                            localCoverUri != null -> setArtworkUri(localCoverUri)
+                            embeddedArtBytes != null -> setArtworkData(embeddedArtBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                            item.localFilePath == null -> item.artworkUrl?.let { setArtworkUri(it.toUri()) }
+                        }
+                    }
                     .build()
                 MediaItem.Builder()
                     .setMediaId(item.mediaId)
@@ -167,25 +193,41 @@ class PlaybackService : MediaSessionService() {
      * Appends tracks similar to whatever just finished, so a finished queue continues rather than
      * stopping dead.
      *
-     * Similarity is "more from this artist", found through the normal search path. That's a
-     * deliberately modest definition - it needs no new API surface, and it's honest about being a
-     * heuristic rather than pretending to be a recommendation engine.
+     * Tries YouTube Music's own "radio"/watch-next continuation for the specific track that just
+     * finished first - a real recommendation signal (genre/mood/artist already folded into YouTube's
+     * own ranking) keyed to that one song, not a generic text search for the artist's *name*. The
+     * old approach (searching the artist name as a plain query) is what produced "searched for a
+     * Bengali indie band, queue ends, autoplay drifts into an unrelated Hindi track" - a generic
+     * name search returns whatever else matches that text, not more of the same vein, and for a
+     * thin-catalog/less-common artist that's often noise. Falls back to the old artist-name search
+     * only if the radio endpoint returns nothing (e.g. a non-YouTube source, or the request failed) -
+     * some continuation is still better than none.
      */
     private fun autoplayRelated(player: ExoPlayer) {
         if (autoplayInFlight) return
         val finished = player.currentMediaItem ?: return
-        val artist = finished.mediaMetadata.artist?.toString()?.takeIf { it.isNotBlank() } ?: return
+        val mediaId = finished.mediaId
         val existingIds = (0 until player.mediaItemCount)
             .map { player.getMediaItemAt(it).mediaId }
             .toSet()
 
         autoplayInFlight = true
         serviceScope.launch {
-            val related = runCatching { MusicSearchRouter(this@PlaybackService).searchTracks(artist) }
-                .getOrNull()
-                .orEmpty()
-                .filter { it.id !in existingIds }
-                .take(10)
+            val router = MusicSearchRouter(this@PlaybackService)
+            // Same 11-char id shape check TrackResult.hasRealVideoId() uses - a local file or a
+            // stored track with no real YouTube id would otherwise seed "radio" with a nonsense id
+            // and just fail.
+            val isRealVideoId = mediaId.length == 11 && mediaId.all { it.isLetterOrDigit() || it == '_' || it == '-' }
+            val radioResults = if (isRealVideoId) {
+                runCatching { router.getRadioTracks(mediaId) }.getOrNull().orEmpty()
+            } else {
+                emptyList()
+            }
+            val candidates = radioResults.ifEmpty {
+                val artist = finished.mediaMetadata.artist?.toString()?.takeIf { it.isNotBlank() }
+                if (artist == null) emptyList() else runCatching { router.searchTracks(artist) }.getOrNull().orEmpty()
+            }
+            val related = candidates.filter { it.id !in existingIds }.take(10)
 
             if (related.isNotEmpty()) {
                 player.addMediaItems(

@@ -1,7 +1,15 @@
 package com.example
 
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 
+/**
+ * Every field is a `val` and every field type is itself stable (String/Int/enum/nullable
+ * primitives) - safe to assert as stable up front rather than let the Compose compiler infer it,
+ * so list composables that take a [Track] can skip recomposition when an unrelated field of the
+ * containing state changes.
+ */
+@Immutable
 data class Track(
     val title: String,
     val artist: String,
@@ -50,6 +58,7 @@ fun parseDurationToSeconds(duration: String): Int {
     }
 }
 
+@Immutable
 data class Album(
     val title: String,
     val artist: String,
@@ -58,12 +67,14 @@ data class Album(
     val gradientIndex: Int
 )
 
+@Immutable
 data class Artist(
     val name: String,
     val followers: String,
     val gradientIndex: Int
 )
 
+@Immutable
 data class Playlist(
     val title: String,
     val trackCount: Int,

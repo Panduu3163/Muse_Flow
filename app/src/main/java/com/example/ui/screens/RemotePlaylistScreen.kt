@@ -145,7 +145,7 @@ fun RemotePlaylistScreen(
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     state = listState,
-                    contentPadding = PaddingValues(bottom = 140.dp),
+                    contentPadding = PaddingValues(bottom = 200.dp),
                 ) {
                     item(key = "cover") {
                         RemotePlaylistCover(tracks = tracks, fallbackCoverUrl = imageUrl)

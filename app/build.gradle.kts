@@ -49,6 +49,18 @@ android {
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
     create("beta") {
       initWith(getByName("debug"))
+      // Minified/shrunk + non-debuggable, matching Echo-Music's own release config - reinstated
+      // after direct confirmation this is what the noticeably more stable early beta build
+      // actually was (isDebuggable=false disables several JIT/AOT-relevant ART behaviors debug
+      // builds don't get, on top of R8's own optimizations). The cover-art regression traced back
+      // to this build earlier was a real bug in the artwork code itself (embedded-tag assumptions
+      // that didn't hold, then artworkData vs artworkUri - see PlayerViewModel.toMediaItem's
+      // comment), not something minification caused - it surfaced under this build only because
+      // this was the one being tested at the time.
+      isMinifyEnabled = true
+      isShrinkResources = true
+      isDebuggable = false
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Separate applicationId so this installs alongside any existing debug/release MuseFlow
       // build as its own app icon, rather than overwriting it.
       applicationIdSuffix = ".beta"

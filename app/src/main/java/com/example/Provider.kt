@@ -1,12 +1,17 @@
 package com.example
 
+import androidx.compose.runtime.Immutable
+
 /** Which backend a search result came from - lets the UI tag results (e.g. a "YouTube Music"
  * badge) and lets playback decide how to obtain a playable URL. [YOUTUBE_MUSIC] results carry
  * only a videoId and are resolved on demand by [YouTubeStreamResolver]; [LOCAL_DEVICE] results
  * (a MediaStore content:// URI) are directly playable with no resolve step. */
 enum class MusicSource { YOUTUBE_MUSIC, LOCAL_DEVICE }
 
-/** A single track found by a [Provider], from any source (YouTube Music, on-device, ...). */
+/** A single track found by a [Provider], from any source (YouTube Music, on-device, ...).
+ * Marked [Immutable] (all `val`, all stable field types) so Search/Home/Playlist list rows can
+ * skip recomposition when other state changes around them. */
+@Immutable
 data class TrackResult(
     val id: String,
     val title: String,
@@ -33,6 +38,7 @@ data class TrackResult(
 
 /** An album search result, enough to render a row and fetch its tracklist - [id] is a YouTube
  * Music browseId. */
+@Immutable
 data class AlbumResult(
     val id: String,
     val title: String,
@@ -45,6 +51,7 @@ data class AlbumResult(
 /** An artist search result, enough to render a row and fetch their top tracks - [id] is a YouTube
  * Music channel browseId. [listenerCount] is a source-formatted monthly-listener-style string
  * (e.g. "54.6M monthly audience") when the search response happened to include one for free. */
+@Immutable
 data class ArtistResult(
     val id: String,
     val name: String,
@@ -62,6 +69,7 @@ data class ArtistResult(
  * navigates here by id alone - e.g. from a Liked track's stored [TrackResult.artistId], with no
  * cached [ArtistResult] in hand) doesn't need a second fetch just to render its own title. Null
  * on a backend/page that doesn't expose them; the screen falls back to a generic label. */
+@Immutable
 data class ArtistTracklist(
     val tracks: List<TrackResult>,
     /** YouTube's subscriber count (e.g. "1.2M subscribers") and its separate monthly-listener
@@ -85,6 +93,7 @@ data class ArtistTracklist(
 
 /** An album's own header details plus its tracklist - the album-page equivalent of
  * [ArtistTracklist], for the same reason: the Album screen navigates here by id alone. */
+@Immutable
 data class AlbumDetails(
     val title: String?,
     val artist: String?,
@@ -95,6 +104,7 @@ data class AlbumDetails(
 /** One shelf of a generic browse page (a mood/genre page, or anything else reached by browseId +
  * params) - mixed content, same as an artist page's extra shelves, so it's the same four buckets
  * rather than a sealed type per item kind. */
+@Immutable
 data class BrowseSection(
     val title: String?,
     val tracks: List<TrackResult> = emptyList(),
@@ -105,6 +115,7 @@ data class BrowseSection(
 
 /** A generic browse page, reached by a `browseId` (+ optional `params`) rather than a fixed
  * endpoint - what a mood/genre tile from [MoodGenreCategory] actually opens. */
+@Immutable
 data class BrowsePage(
     val title: String?,
     val sections: List<BrowseSection>,
@@ -113,6 +124,7 @@ data class BrowsePage(
 /** One tappable mood/genre tile - [colorArgb] is the tile's own background colour from the
  * source (YouTube Music picks a different one per tile), [browseId]/[params] together are what
  * [BrowsePage] is fetched with. */
+@Immutable
 data class MoodGenreTile(
     val title: String,
     val browseId: String,
@@ -122,6 +134,7 @@ data class MoodGenreTile(
 
 /** A titled group of [MoodGenreTile]s (e.g. "Moods", "Genres") - the Explore screen's own
  * top-level content. */
+@Immutable
 data class MoodGenreCategory(
     val title: String,
     val tiles: List<MoodGenreTile>,
@@ -129,6 +142,7 @@ data class MoodGenreCategory(
 
 /** A playlist search result, enough to render a row and fetch its tracklist - [id] is a YouTube
  * Music browseId. */
+@Immutable
 data class PlaylistResult(
     val id: String,
     val title: String,

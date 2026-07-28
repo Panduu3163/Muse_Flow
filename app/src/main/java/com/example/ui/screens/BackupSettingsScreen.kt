@@ -129,7 +129,7 @@ fun BackupSettingsScreen(
         // Matches Settings' own 16dp horizontal inset and group spacing, so arriving here doesn't
         // look like a different app.
         Column(
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 140.dp),
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 200.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             PreferenceGroup(title = "Manual") {

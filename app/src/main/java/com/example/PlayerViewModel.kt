@@ -2,6 +2,7 @@ package com.example
 
 import android.app.Application
 import android.content.ComponentName
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.compose.runtime.Immutable
 import androidx.core.net.toUri
@@ -14,11 +15,13 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** One entry in the playback queue, as the Now Playing queue list renders it. [mediaId] is the
  * only field stable across a *different* item shifting into this [index] (e.g. after removing an
@@ -415,17 +418,49 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
      * which Uri.fromFile handles.
      */
     private suspend fun TrackResult.toMediaItem(): MediaItem {
-        val metadata = MediaMetadata.Builder()
-            .setTitle(title)
-            .setArtist(artist)
-            .setAlbumTitle(source)
-            .apply { imageUrl?.let { setArtworkUri(it.toUri()) } }
-            .build()
-
         val downloadedPath = runCatching { downloadRepository.getByKey(downloadKey()) }
             .getOrNull()
             ?.filePath
             ?.takeIf { File(it).exists() }
+
+        // A downloaded track's `imageUrl` is still the original *remote* thumbnail URL -
+        // DownloadRepository doesn't rewrite it. What it does instead: save a plain sibling image
+        // file at download time (DownloadRepository.localCoverFile) - the reliable source here,
+        // since it works no matter what audio container the download actually is (most are
+        // Opus-in-WebM, which AudioTagger's ID3/MP4 embedding can't touch at all - see its own
+        // download-time comment).
+        //
+        // Set as `artworkUri` (a real file:// URI), not `artworkData` (raw bytes) - this app's own
+        // NowPlayingState.artworkUrl (below, and in the media-item-transition listener) only ever
+        // reads `mediaMetadata.artworkUri`, never `artworkData`. Setting bytes instead of a URI is
+        // exactly what silently broke in-app artwork for every downloaded track, online or offline,
+        // while the system notification (whose own builder reads both) kept working - the split
+        // that made this look like an offline-only bug when it wasn't.
+        val localCoverUri = downloadedPath?.let { path ->
+            DownloadRepository.localCoverFile(getApplication(), downloadKey())?.let { Uri.fromFile(it) }
+        }
+        // Embedded-tag bytes are kept as a last-resort *notification-only* fallback for whatever
+        // handful of MP3/M4A downloads predate the local-cover-file fix and never got one - there's
+        // no URI to give those to Coil, so in-app art for that narrow legacy case still won't show,
+        // but the alternative (a temp file rewritten from the tag every playback) isn't worth it
+        // for a shrinking edge case new downloads no longer hit at all.
+        val embeddedArtBytes = if (localCoverUri == null && downloadedPath != null) readEmbeddedArtwork(downloadedPath) else null
+
+        val metadata = MediaMetadata.Builder()
+            .setTitle(title)
+            .setArtist(artist)
+            .setAlbumTitle(source)
+            .apply {
+                when {
+                    localCoverUri != null -> setArtworkUri(localCoverUri)
+                    embeddedArtBytes != null -> setArtworkData(embeddedArtBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                    downloadedPath == null -> imageUrl?.let { setArtworkUri(it.toUri()) }
+                    // Downloaded but no local cover and no embedded art either (fetch failed at
+                    // download time) - nothing reliable to show, matching how a track with no
+                    // imageUrl at all already renders (the row/notification's placeholder).
+                }
+            }
+            .build()
 
         val uri = when {
             downloadedPath != null -> Uri.fromFile(File(downloadedPath))
@@ -440,6 +475,32 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             .setUri(uri)
             .setMediaMetadata(metadata)
             .build()
+    }
+
+    companion object {
+        /** Reads whatever picture [AudioTagger.embedIfSupported] wrote into a downloaded file's own
+         * ID3/MP4 tag, straight off disk - `MediaMetadataRetriever` doesn't touch the network, so
+         * this is the one artwork source actually guaranteed to work offline. Returns null (not an
+         * exception) for a file with no embedded picture, or any read failure - artwork is always
+         * optional, never worth failing playback over. */
+        internal suspend fun readFileBytes(file: File): ByteArray? = withContext(Dispatchers.IO) {
+            runCatching { file.readBytes() }.getOrNull()
+        }
+
+        internal suspend fun readEmbeddedArtwork(filePath: String): ByteArray? = withContext(Dispatchers.IO) {
+            // Not `.use { }` - MediaMetadataRetriever only implements AutoCloseable from API 29,
+            // and this app's minSdk is 24; `release()` has always existed, so that's the one call
+            // safe across every supported version.
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(filePath)
+                retriever.embeddedPicture
+            } catch (e: Exception) {
+                null
+            } finally {
+                retriever.release()
+            }
+        }
     }
 
     override fun onCleared() {

@@ -42,6 +42,10 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
         .map { entries -> entries.map { it.artist }.filter(String::isNotBlank).distinct().size }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
+    val uniqueAlbumCount: StateFlow<Int> = history
+        .map { entries -> entries.map { it.album }.filter(String::isNotBlank).distinct().size }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
     /** Total minutes across every recorded play, estimated from each track's own duration times how
      * many times it's played - the only honest "listening time" this data supports, since it isn't
      * timestamped per play (see the class doc). */

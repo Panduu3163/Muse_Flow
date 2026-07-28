@@ -84,7 +84,7 @@ fun HistoryScreen(
             actionsViewModel = actionsViewModel,
         )
 
-        LazyColumn(contentPadding = PaddingValues(bottom = 140.dp)) {
+        LazyColumn(contentPadding = PaddingValues(bottom = 200.dp)) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("history_back")) {

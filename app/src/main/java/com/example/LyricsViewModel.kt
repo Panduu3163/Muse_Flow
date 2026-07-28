@@ -66,6 +66,17 @@ class LyricsViewModel(application: Application) : AndroidViewModel(application) 
         durationSeconds: Int?,
         videoId: String?,
     ): LyricsResult {
+        // All three providers are network-only - there's no local/cached lyrics source to fall
+        // back to - so offline, every one of them was guaranteed to fail anyway, just after each
+        // paying its own ~10s connect timeout first (sequentially, not in parallel: up to 20-30s of
+        // spinner before finally landing on the exact same NotFound this reaches instantly). Failing
+        // fast here isn't just faster, it's also what actually surfaces a message to the user in
+        // practice - anyone who isn't willing to stare at a spinner for half a minute would give up
+        // and conclude lyrics "don't show a message" offline, even though one was technically coming.
+        if (!isOnline(getApplication())) {
+            return LyricsResult.Error("No lyrics - you're offline.")
+        }
+
         val providers = buildList<suspend () -> LyricsResult> {
             add { lrcLib.fetchLyrics(title, artist, durationSeconds) }
             add { betterLyrics.fetchLyrics(title, artist, durationSeconds) }

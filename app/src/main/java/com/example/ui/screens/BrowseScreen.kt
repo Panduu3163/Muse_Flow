@@ -137,7 +137,7 @@ fun BrowseScreen(
                         )
                     }
                 } else {
-                    LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 140.dp)) {
+                    LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 200.dp)) {
                         sections.forEachIndexed { sectionIndex, section ->
                             if (section.title != null) {
                                 item(key = "title_$sectionIndex") {

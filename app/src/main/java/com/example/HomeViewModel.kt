@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ui.screens.asTrackResult
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharingStarted
@@ -55,6 +56,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     val playlists: StateFlow<List<PlaylistEntity>> = playlistRepository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** Same cached-per-id pattern as [LibraryViewModel.tracksForPlaylist] - the "Your playlists"
+     * shelf needs each playlist's own tracks too now, to build the same mosaic-cover fallback
+     * Library's grid already has for a playlist with no [PlaylistEntity.coverImageUrl] (e.g. one
+     * that came in through a Spotify import, which never sets one). Building the flow inline in
+     * the composable instead of caching it here would start a fresh empty-first collector on every
+     * recomposition - the same flicker [LibraryViewModel]'s own doc warns about. */
+    private val playlistTrackFlows = mutableMapOf<Long, StateFlow<List<Track>>>()
+
+    fun tracksForPlaylist(playlistId: Long): StateFlow<List<Track>> =
+        playlistTrackFlows.getOrPut(playlistId) {
+            playlistRepository.observeTracks(playlistId)
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        }
 
     /**
      * Habit-driven shelves, computed from real listening history rather than fetched.
@@ -108,7 +123,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         // Re-fetch whenever the user's top artists change (taste drift, or history existing for
         // the first time) - each spec already fetched is left alone, so a play recorded elsewhere
         // in the app doesn't restart every shelf's network call, only add/replace what changed.
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.Default) {
             shelfSpecs.collect { specs ->
                 _shelves.value = _shelves.value.filterKeys { title -> specs.any { it.title == title } }
                 loadShelves(specs, forceRefresh = false)
@@ -116,7 +131,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
         // Both loaded once per non-empty seed set, same guarded pattern as the shelf cache above -
         // a like/unlike elsewhere in the app shouldn't restart an in-flight or already-loaded fetch.
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.Default) {
             likedSongs.collect { liked ->
                 if (liked.isEmpty()) {
                     _dailyDiscover.value = UiState.Success(emptyList())
@@ -126,7 +141,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.Default) {
             topArtists.collect { artists ->
                 if (artists.isEmpty()) {
                     _communityPlaylists.value = UiState.Success(emptyList())
@@ -148,7 +163,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun loadDailyDiscover(liked: List<Track>) {
         _dailyDiscover.value = UiState.Loading
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.Default) {
             val seeds = liked.shuffled().take(5)
             val discovered = seeds.mapNotNull { seed ->
                 val seedResult = seed.asTrackResult()
@@ -162,7 +177,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun loadCommunityPlaylists(artists: List<String>) {
         _communityPlaylists.value = UiState.Loading
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.Default) {
             val results = artists.flatMap { artist ->
                 runCatching { searchRouter.searchPlaylists(artist) }.getOrDefault(emptyList()).take(3)
             }
@@ -174,7 +189,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         specs.forEach { spec ->
             if (!forceRefresh && _shelves.value[spec.title] != null) return@forEach
             _shelves.update(spec.title, UiState.Loading)
-            viewModelScope.launch {
+            viewModelScope.launch(Dispatchers.Default) {
                 // Cached copy first, so the shelf has content while the network call is in flight.
                 val cached = runCatching { shelfCacheDao.get(spec.title) }.getOrNull()
                     ?.let { parseTracksJson(it.tracksJson) }
