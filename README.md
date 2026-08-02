@@ -113,14 +113,7 @@ Genuine thanks to the maintainers of these projects for their work being open en
 
 ## 📦 Getting the App
 
-This is currently a personal build, not published to any app store. To build it yourself:
-
-**Prerequisites:** Android Studio (or the Android SDK + JDK 17+ directly), Kotlin 2.2+
-
-1. Clone this repo
-2. Open in Android Studio and let it sync
-3. Build a debug APK: `./gradlew assembleDebug`
-4. Install on your device
+Install the APK located on the *releases* section
 
 ---
 
