@@ -1,5 +1,6 @@
 package com.example.ui.component
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,21 +12,27 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -86,7 +93,9 @@ fun SwitchPreference(
 }
 
 /**
- * Single-choice preference rendered as a dropdown.
+ * Single-choice preference. Tapping the row opens a full-screen-style bottom sheet listing every
+ * option with the current selection checked - closing on tap - rather than an inline dropdown, so
+ * options with long labels or many entries (accent style, grid size...) get room to breathe.
  *
  * [label] converts a value to its display name, so callers can pass enums directly without every
  * enum having to know about the UI.
@@ -102,32 +111,103 @@ fun <T> ListPreference(
     enabled: Boolean = true,
     icon: ImageVector? = null,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var showPicker by remember { mutableStateOf(false) }
 
-    Box {
-        PreferenceRow(
+    PreferenceRow(
+        title = title,
+        subtitle = subtitle ?: label(selected),
+        icon = icon,
+        enabled = enabled,
+        onClick = { showPicker = true },
+        trailing = {
+            Text(
+                text = label(selected),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        },
+    )
+
+    if (showPicker) {
+        ListPreferencePicker(
             title = title,
-            subtitle = subtitle ?: label(selected),
-            icon = icon,
-            enabled = enabled,
-            onClick = { expanded = true },
-            trailing = {
-                Text(
-                    text = label(selected),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+            selected = selected,
+            options = options,
+            label = label,
+            onSelect = {
+                onSelect(it)
+                showPicker = false
             },
+            onDismiss = { showPicker = false },
         )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+    }
+}
+
+/** The full-screen picker [ListPreference] opens - a bottom sheet rather than a true separate
+ * screen/route, matching the house pattern already used by [StatsScreen]'s listening-summary
+ * sheet, so a value pick doesn't cost a back-stack entry. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun <T> ListPreferencePicker(
+    title: String,
+    selected: T,
+    options: List<T>,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        dragHandle = { BottomSheetDefaults.DragHandle() },
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 32.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 24.dp).padding(top = 4.dp, bottom = 12.dp),
+            )
             options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(label(option)) },
-                    onClick = {
-                        onSelect(option)
-                        expanded = false
-                    },
-                )
+                val isSelected = option == selected
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(option) }
+                        .padding(horizontal = 24.dp, vertical = 14.dp)
+                        .testTag("list_pref_option_${label(option).lowercase().replace(" ", "_")}"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = label(option),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                    if (isSelected) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Selected",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text(text = "Cancel")
+                }
             }
         }
     }
@@ -203,6 +283,35 @@ fun NavigationPreference(
     )
 }
 
+/**
+ * A one-shot action with no persisted state and nowhere to navigate - "Clear cache", "Clear
+ * listening history". [destructive] tints the title (and, unless overridden, the icon) with the
+ * error colour, so a row that deletes something reads as different from a row that just opens
+ * something - callers are still expected to gate the actual deletion behind a confirmation dialog
+ * themselves; this only supplies the row's look.
+ */
+@Composable
+fun ActionPreference(
+    title: String,
+    subtitle: String? = null,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    icon: ImageVector? = null,
+    destructive: Boolean = false,
+) {
+    val titleColor = if (destructive) MaterialTheme.colorScheme.error else null
+    PreferenceRow(
+        title = title,
+        subtitle = subtitle,
+        icon = icon,
+        enabled = enabled,
+        onClick = onClick,
+        titleColor = titleColor,
+        iconTint = titleColor,
+        trailing = {},
+    )
+}
+
 /** Shared row shape, so every preference type lines up on the same grid. */
 @Composable
 private fun PreferenceRow(
@@ -212,30 +321,40 @@ private fun PreferenceRow(
     enabled: Boolean,
     onClick: () -> Unit,
     trailing: @Composable () -> Unit,
+    titleColor: Color? = null,
+    iconTint: Color? = null,
 ) {
     val alpha = if (enabled) 1f else 0.4f
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 12.dp)
+            .padding(horizontal = 20.dp, vertical = 14.dp)
             .testTag("pref_${title.lowercase().replace(" ", "_")}"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (icon != null) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha),
-                modifier = Modifier.size(22.dp),
-            )
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = alpha)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = (iconTint ?: MaterialTheme.colorScheme.onSurfaceVariant).copy(alpha = alpha),
+                    modifier = Modifier.size(22.dp),
+                )
+            }
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha),
+                color = (titleColor ?: MaterialTheme.colorScheme.onSurface).copy(alpha = alpha),
             )
             if (subtitle != null) {
                 Text(

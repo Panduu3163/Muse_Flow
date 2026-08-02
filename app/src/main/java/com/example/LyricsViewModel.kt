@@ -7,17 +7,19 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
  * Fetches lyrics for whatever is playing.
  *
- * Three providers are tried in order: LRCLib first (it returns real line-by-line LRC timing, which
- * is what makes a scrolling view possible), then BetterLyrics (word-level KRC timing), then
- * YouTube Music's own lyrics tab as a last resort - it has no timing at all, only plain text, so
- * it's worse than either synced source but still better than "no lyrics found". A provider that
- * returns [LyricsResult.NotFound] is not treated as a failure - the next one is simply tried, and
- * only a genuine miss from all of them surfaces as "no lyrics".
+ * Six network providers - YouLyPlus, PaxSenix, BetterLyrics, SimpMusic, LRCLib, Kugou - are tried
+ * in the user's configured order (see [AppSettingsState.lyricsProviderOrder], reorderable from
+ * Settings > Lyrics > "Lyrics provider order"), with YouTube Music's own lyrics tab always tried
+ * last regardless of that order - it has no timing at all, only plain text, so it's strictly worse
+ * than any synced source and only worth reaching for once everything else has failed. A provider
+ * that returns [LyricsResult.NotFound] is not treated as a failure - the next one is simply tried,
+ * and only a genuine miss from all of them surfaces as "no lyrics".
  *
  * Results are cached per track for the session, so scrolling in and out of the lyrics view or
  * pausing doesn't refetch.
@@ -26,7 +28,12 @@ class LyricsViewModel(application: Application) : AndroidViewModel(application) 
 
     private val lrcLib = LrcLibProvider()
     private val betterLyrics = BetterLyricsProvider()
+    private val youLyPlus = YouLyPlusProvider()
+    private val paxSenix = PaxSenixProvider()
+    private val simpMusic = SimpMusicProvider()
+    private val kugou = KugouLyricsProvider()
     private val router = MusicSearchRouter(application)
+    private val settingsRepository = AppSettingsRepository(application)
 
     private val _state = MutableStateFlow<LyricsResult?>(null)
     val state: StateFlow<LyricsResult?> = _state.asStateFlow()
@@ -77,9 +84,24 @@ class LyricsViewModel(application: Application) : AndroidViewModel(application) 
             return LyricsResult.Error("No lyrics - you're offline.")
         }
 
+        val order = settingsRepository.state.first().lyricsProviderOrder
         val providers = buildList<suspend () -> LyricsResult> {
-            add { lrcLib.fetchLyrics(title, artist, durationSeconds) }
-            add { betterLyrics.fetchLyrics(title, artist, durationSeconds) }
+            for (id in order) {
+                when (id) {
+                    LyricsProviderId.YouLyPlus -> add { youLyPlus.fetchLyrics(title, artist, durationSeconds) }
+                    LyricsProviderId.PaxSenix -> add { paxSenix.fetchLyrics(title, artist, durationSeconds) }
+                    LyricsProviderId.BetterLyrics -> add { betterLyrics.fetchLyrics(title, artist, durationSeconds) }
+                    // SimpMusic is keyed by YouTube video id, not title/artist search - skipped
+                    // entirely (not just "tried and NotFound") when no confirmed real id is
+                    // available, same as the YouTube tab fallback below.
+                    LyricsProviderId.SimpMusic -> if (videoId != null) {
+                        add { simpMusic.fetchLyrics(videoId, durationSeconds) }
+                    }
+                    LyricsProviderId.LrcLib -> add { lrcLib.fetchLyrics(title, artist, durationSeconds) }
+                    LyricsProviderId.Kugou -> add { kugou.fetchLyrics(title, artist, durationSeconds) }
+                }
+            }
+            // Always last, regardless of the user's configured order - see class doc.
             if (videoId != null) {
                 add {
                     router.getLyricsText(videoId)
@@ -90,13 +112,13 @@ class LyricsViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Not simply "first Synced wins": LRCLib (tried first, for its broader coverage) only
-        // ever has line-level timing, never word-level - so returning on its result immediately
-        // would mean BetterLyrics's word-level KRC data (the only source that makes karaoke word
-        // sync possible) never gets a chance to run for any track LRCLib also covers, which in
-        // practice is most of them. A synced result WITH word timing is the only thing that
-        // short-circuits the loop; a synced result without it is kept as a candidate while later
-        // providers are still tried, in case one of them has the word-level version.
+        // Not simply "first Synced wins": some providers (LRCLib) only ever have line-level
+        // timing, never word-level - so returning on the first synced result immediately would
+        // mean a later provider's word-level timing (the only thing that makes karaoke word sync
+        // possible) never gets a chance to run for any track an earlier, line-only provider also
+        // covers. A synced result WITH word timing is the only thing that short-circuits the loop;
+        // a synced result without it is kept as a candidate while later providers are still tried,
+        // in case one of them has the word-level version.
         var bestSynced: LyricsResult.Synced? = null
         var plainFallback: LyricsResult? = null
         for (provider in providers) {

@@ -28,12 +28,13 @@ sealed interface ImportState {
 }
 
 /**
- * Imports a playlist exported from another service as a CSV.
+ * Imports a playlist exported from another service as a CSV, or an M3U/M3U8 playlist file.
  *
- * The file supplies names only, so every track is searched on YouTube Music and matched by
- * [isLikelyMatch] - the same comparison the app already uses to reconcile results across sources.
- * A track that doesn't match confidently is reported rather than guessed at: silently importing
- * the wrong song is worse than saying which ones need a look.
+ * Both formats are just a way of naming tracks - a CSV row or an M3U entry is parsed into a
+ * [CsvTrack] and from there the two formats share one pipeline: every track is searched on
+ * YouTube Music and matched by [isLikelyMatch] - the same comparison the app already uses to
+ * reconcile results across sources. A track that doesn't match confidently is reported rather
+ * than guessed at: silently importing the wrong song is worse than saying which ones need a look.
  */
 class PlaylistImportViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -64,10 +65,10 @@ class PlaylistImportViewModel(application: Application) : AndroidViewModel(appli
                         ?.use { it.readBytes().decodeToString() }
                         ?: error("Couldn't open that file")
                 }
-                parsePlaylistCsv(text)
-            } catch (e: CsvFormatException) {
-                _state.value = ImportState.Failed(e.message ?: "That file couldn't be read.")
-                return@launch
+                // Format is decided by file name, not by the picker's reported MIME type - SAF
+                // providers routinely hand back "text/plain" or "application/octet-stream" for
+                // both CSV and M3U alike.
+                if (isM3uFileName(fallbackName)) parsePlaylistM3u(text) else parsePlaylistCsv(text)
             } catch (e: Exception) {
                 _state.value = ImportState.Failed(e.message ?: "That file couldn't be read.")
                 return@launch

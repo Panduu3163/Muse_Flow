@@ -65,6 +65,28 @@ class MuseFlowApplication : Application(), ImageLoaderFactory {
         appScope.launch {
             runCatching { DownloadRepository.getInstance(this@MuseFlowApplication).backfillMissingCovers() }
         }
+
+        // Best-effort, once-per-cold-start check for a newer GitHub release than what's
+        // installed - see UpdateChecker's own doc for why this is safe as a bare launch-time
+        // fire-and-forget (no WorkManager/polling) and how repeat notifications for the same
+        // release are prevented.
+        appScope.launch {
+            runCatching { UpdateChecker.checkForUpdate(this@MuseFlowApplication) }
+        }
+
+        // Backfills artistId/albumId for likes/playlist tracks added before that plumbing was
+        // reliably wired through the like/add-to-playlist write path - those rows have both
+        // permanently null otherwise, which is what silently broke Now Playing's "tap the artist
+        // name" for anything liked/added before this fix, not just anything played fresh. Same
+        // "safe to just run on every launch" reasoning as backfillMissingCovers above - each
+        // query only selects rows still missing the field, so a fully-backfilled library is a
+        // no-op read on every later launch.
+        appScope.launch {
+            runCatching { LikedSongsRepository.getInstance(this@MuseFlowApplication).backfillMissingArtistIds(this@MuseFlowApplication) }
+        }
+        appScope.launch {
+            runCatching { PlaylistRepository.getInstance(this@MuseFlowApplication).backfillMissingArtistIds(this@MuseFlowApplication) }
+        }
     }
 
     /**

@@ -36,4 +36,13 @@ object StreamCache {
             StandaloneDatabaseProvider(context),
         ).also { instance = it }
     }
+
+    /** For Storage settings' "Clear cache": removes every resource without releasing the cache
+     * instance itself - [PlaybackService]/[PlayerViewModel] may still hold a [CacheDataSource]
+     * wrapping it, so closing the cache out from under an in-progress playback would be a much
+     * bigger footgun than just emptying it. */
+    fun clear(context: Context) {
+        val cache = get(context)
+        cache.keys.toList().forEach { key -> cache.removeResource(key) }
+    }
 }

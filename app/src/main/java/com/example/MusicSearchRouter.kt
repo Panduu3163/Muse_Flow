@@ -104,7 +104,7 @@ class MusicSearchRouter(private val context: Context) {
         }
 
     /** New releases. Only InnerTube exposes these; the legacy provider returns none. */
-    suspend fun getNewReleases(): List<AlbumResult> =
+    suspend fun getNewReleases(): List<TrackResult> =
         when (StreamResolverRouter.activeBackend(context)) {
             ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).getNewReleases()
             ExtractorBackend.LEGACY -> emptyList()

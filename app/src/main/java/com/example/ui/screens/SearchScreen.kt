@@ -22,9 +22,11 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -151,16 +153,9 @@ fun SearchScreen(
         // No backend chip: with the extractor picker removed from Settings there's only one
         // backend, so naming it was developer-facing noise rather than information.
 
-        // A browse entry point rather than a search result - shown above recents/suggestions
-        // (not inside that `when` below) so it's visible regardless of whether either has
-        // anything to show, the same way a real charts page is reachable independent of history.
-        //
-        // Charts/New releases rows are hidden (not deleted - onOpenCharts/onOpenNewReleases,
-        // ChartsScreen and NewReleasesScreen all still exist and are still routed) because both
-        // backends are broken: getChartsTracks() silently returns zero tracks and
-        // newReleaseAlbums() 404s. Both need real investigation (see full-gap-audit.md §2.9)
-        // rather than a UI-level fix, so the entry points are pulled until that's done instead of
-        // shipping a row that reliably shows an error.
+        // Browse entry points rather than search results - shown above recents/suggestions (not
+        // inside that `when` below) so they're visible regardless of whether either has anything
+        // to show, the same way a real charts page is reachable independent of history.
         if (query.isBlank()) {
             Surface(
                 modifier = Modifier
@@ -193,20 +188,43 @@ fun SearchScreen(
                             text = "Explore",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            color = androidx.compose.ui.graphics.Color.White,
                         )
                         Text(
                             text = "Moods, genres, and browse picks",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f),
                         )
                     }
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                        tint = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f),
                     )
                 }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                BrowseTile(
+                    icon = Icons.AutoMirrored.Filled.TrendingUp,
+                    label = "Charts",
+                    onClick = onOpenCharts,
+                    testTag = "search_open_charts",
+                    modifier = Modifier.weight(1f),
+                )
+                BrowseTile(
+                    icon = Icons.Default.NewReleases,
+                    label = "New releases",
+                    onClick = onOpenNewReleases,
+                    testTag = "search_open_new_releases",
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
 
@@ -327,6 +345,40 @@ fun SearchScreen(
         onGoToArtist = onGoToArtist,
         onGoToAlbum = onGoToAlbum,
     )
+}
+
+@Composable
+private fun BrowseTile(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    testTag: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.bounceClick(onClick = onClick).testTag(testTag),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(start = 10.dp),
+            )
+        }
+    }
 }
 
 @Composable

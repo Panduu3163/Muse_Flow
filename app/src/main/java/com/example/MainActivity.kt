@@ -63,19 +63,30 @@ import com.example.ui.theme.Motion
 import com.example.ui.component.MiniPlayer
 import com.example.ui.component.MuseFlowNavBar
 import com.example.ui.component.TrackActionsHost
+import com.example.ui.screens.AboutScreen
 import com.example.ui.screens.AlbumScreen
+import com.example.ui.screens.AppearanceSettingsScreen
 import com.example.ui.screens.ArtistScreen
+import com.example.ui.screens.AudioSettingsScreen
 import com.example.ui.screens.BackupSettingsScreen
 import com.example.ui.screens.ChartsScreen
 import com.example.ui.screens.CrashLogsScreen
 import com.example.ui.screens.BrowseScreen
 import com.example.ui.screens.EqualizerScreen
 import com.example.ui.screens.ExploreScreen
+import com.example.ui.screens.GeneralSettingsScreen
+import com.example.ui.screens.LibrarySectionsSettingsScreen
+import com.example.ui.screens.LyricsProviderPriorityScreen
+import com.example.ui.screens.LyricsSettingsScreen
+import com.example.ui.screens.MiniPlayerSettingsScreen
 import com.example.ui.screens.NewReleasesScreen
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.asTrackResult
 import com.example.ui.screens.LibraryScreen
+import com.example.ui.screens.PlaybackSettingsScreen
+import com.example.ui.screens.PlayerSettingsScreen
+import com.example.ui.screens.PrivacySettingsScreen
 import com.example.ui.screens.StatsScreen
 import com.example.ui.screens.NowPlayingScreen
 import com.example.ui.screens.OnboardingDialog
@@ -83,12 +94,30 @@ import com.example.ui.screens.PlaylistDetailScreen
 import com.example.ui.screens.RemotePlaylistScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.StorageSettingsScreen
 import com.example.ui.theme.MuseFlowTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // No-arg enableEdgeToEdge() draws AndroidX's own default theme-aware scrim over the
+        // navigation-bar area (for legibility against arbitrary content) - a fixed translucent
+        // overlay independent of whatever this app itself draws underneath. Against a colourful,
+        // continuously-animated background there (Live Mesh/Blur mini-player), that scrim reads as
+        // a visible seam/colour mismatch right at the nav-bar boundary. This app already handles
+        // its own bottom-bar contrast (MiniPlayer/MuseFlowNavBar are opaque floating cards with
+        // their own scrims), so the system's extra scrim is redundant - making both bar styles
+        // fully transparent lets this app's own Compose background paint through uninterrupted.
+        enableEdgeToEdge(
+            statusBarStyle = androidx.activity.SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ),
+            navigationBarStyle = androidx.activity.SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ),
+        )
         setContent { MuseFlowApp() }
     }
 }
@@ -118,6 +147,18 @@ fun MuseFlowApp() {
 
     val appSettingsViewModel: AppSettingsViewModel = viewModel()
     val appSettings by appSettingsViewModel.state.collectAsState()
+
+    // Applied reactively (not just read once at startup), so toggling "Disable screenshots" in
+    // Settings takes effect on the window immediately - no relaunch needed either way.
+    val activity = LocalContext.current as? android.app.Activity
+    LaunchedEffect(appSettings.disableScreenshots, activity) {
+        val window = activity?.window ?: return@LaunchedEffect
+        if (appSettings.disableScreenshots) {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
 
     // Hoisted to the root so both the player background and the app-wide accent read one palette.
     val paletteViewModel: AlbumPaletteViewModel = viewModel()
@@ -355,6 +396,17 @@ private fun MuseFlowNavHost(
             onOpenHistory = { navController.navigate(Routes.HISTORY) },
             onOpenBackup = { navController.navigate(Routes.BACKUP) },
             onOpenCrashLogs = { navController.navigate(Routes.CRASH_LOGS) },
+            onOpenStorage = { navController.navigate(Routes.STORAGE) },
+            onOpenAbout = { navController.navigate(Routes.ABOUT) },
+            onOpenSettingsAppearance = { navController.navigate(Routes.SETTINGS_APPEARANCE) },
+            onOpenSettingsMiniPlayer = { navController.navigate(Routes.SETTINGS_MINI_PLAYER) },
+            onOpenSettingsPlayer = { navController.navigate(Routes.SETTINGS_PLAYER) },
+            onOpenSettingsLyrics = { navController.navigate(Routes.SETTINGS_LYRICS) },
+            onOpenSettingsAudio = { navController.navigate(Routes.SETTINGS_AUDIO) },
+            onOpenSettingsPlayback = { navController.navigate(Routes.SETTINGS_PLAYBACK) },
+            onOpenSettingsGeneral = { navController.navigate(Routes.SETTINGS_GENERAL) },
+            onOpenSettingsPrivacy = { navController.navigate(Routes.SETTINGS_PRIVACY) },
+            onOpenSettingsLibrarySections = { navController.navigate(Routes.SETTINGS_LIBRARY_SECTIONS) },
             onOpenCharts = { navController.navigate(Routes.CHARTS) },
             onOpenNewReleases = { navController.navigate(Routes.NEW_RELEASES) },
             onOpenExplore = { navController.navigate(Routes.EXPLORE) },
@@ -368,6 +420,48 @@ private fun MuseFlowNavHost(
         composable(Routes.CRASH_LOGS) {
             CrashLogsScreen(onBack = { navController.popBackStack() })
         }
+        composable(Routes.STORAGE) {
+            StorageSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.ABOUT) {
+            AboutScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.SETTINGS_APPEARANCE) {
+            AppearanceSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.SETTINGS_MINI_PLAYER) {
+            MiniPlayerSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.SETTINGS_PLAYER) {
+            PlayerSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.SETTINGS_LYRICS) {
+            LyricsSettingsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenProviderOrder = { navController.navigate(Routes.SETTINGS_LYRICS_PROVIDER_ORDER) },
+            )
+        }
+        composable(Routes.SETTINGS_LYRICS_PROVIDER_ORDER) {
+            LyricsProviderPriorityScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.SETTINGS_AUDIO) {
+            AudioSettingsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenEqualizer = { navController.navigate(Routes.EQUALIZER) },
+            )
+        }
+        composable(Routes.SETTINGS_PLAYBACK) {
+            PlaybackSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.SETTINGS_GENERAL) {
+            GeneralSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.SETTINGS_PRIVACY) {
+            PrivacySettingsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.SETTINGS_LIBRARY_SECTIONS) {
+            LibrarySectionsSettingsScreen(onBack = { navController.popBackStack() })
+        }
         composable(Routes.CHARTS) {
             ChartsScreen(
                 onPlayTrack = onPlayTrack,
@@ -379,8 +473,11 @@ private fun MuseFlowNavHost(
         }
         composable(Routes.NEW_RELEASES) {
             NewReleasesScreen(
-                onOpenAlbum = onGoToAlbum,
+                onPlayTrack = onPlayTrack,
+                playerViewModel = playerViewModel,
                 onBack = { navController.popBackStack() },
+                onGoToArtist = onGoToArtist,
+                onGoToAlbum = onGoToAlbum,
             )
         }
         composable(Routes.EXPLORE) {
@@ -627,6 +724,10 @@ private fun NavGraphBuilder.playerGraph(
             cropArtwork = appSettings.cropAlbumArt,
             wavySlider = appSettings.playerSliderStyle == PlayerSliderStyle.Wavy,
             slimSlider = appSettings.playerSliderStyle == PlayerSliderStyle.Slim,
+            squigglySlider = appSettings.playerSliderStyle == PlayerSliderStyle.Squiggly,
+            transportStyle = appSettings.playerTransportStyle,
+            swipeToChangeSongEnabled = appSettings.swipeToChangeSongEnabled,
+            showCodecInfo = appSettings.showCodecInfo,
             backgroundStyle = appSettings.playerBackgroundStyle,
             palette = albumPalette,
             buttonColor = buttonColor,
@@ -635,6 +736,7 @@ private fun NavGraphBuilder.playerGraph(
             onCancelSleepTimer = onCancelSleepTimer,
             onSetPlaybackSpeed = onSetPlaybackSpeed,
             onOpenMenu = onOpenMenu,
+            onGoToArtist = onGoToArtist,
             lyricsContent = { slotModifier ->
                 LyricsView(
                     result = lyrics,
@@ -716,6 +818,17 @@ private fun NavGraphBuilder.topLevelGraph(
     onOpenHistory: () -> Unit,
     onOpenBackup: () -> Unit,
     onOpenCrashLogs: () -> Unit,
+    onOpenStorage: () -> Unit,
+    onOpenAbout: () -> Unit,
+    onOpenSettingsAppearance: () -> Unit,
+    onOpenSettingsMiniPlayer: () -> Unit,
+    onOpenSettingsPlayer: () -> Unit,
+    onOpenSettingsLyrics: () -> Unit,
+    onOpenSettingsAudio: () -> Unit,
+    onOpenSettingsPlayback: () -> Unit,
+    onOpenSettingsGeneral: () -> Unit,
+    onOpenSettingsPrivacy: () -> Unit,
+    onOpenSettingsLibrarySections: () -> Unit,
     onOpenCharts: () -> Unit,
     onOpenNewReleases: () -> Unit,
     onOpenExplore: () -> Unit,
@@ -755,9 +868,19 @@ private fun NavGraphBuilder.topLevelGraph(
     }
     composable(Routes.SETTINGS) {
         SettingsScreen(
-            onOpenEqualizer = onOpenEqualizer,
+            onOpenAppearance = onOpenSettingsAppearance,
+            onOpenMiniPlayer = onOpenSettingsMiniPlayer,
+            onOpenPlayer = onOpenSettingsPlayer,
+            onOpenLyrics = onOpenSettingsLyrics,
+            onOpenAudio = onOpenSettingsAudio,
+            onOpenPlayback = onOpenSettingsPlayback,
+            onOpenGeneral = onOpenSettingsGeneral,
+            onOpenPrivacy = onOpenSettingsPrivacy,
+            onOpenLibrarySections = onOpenSettingsLibrarySections,
             onOpenBackup = onOpenBackup,
+            onOpenStorage = onOpenStorage,
             onOpenCrashLogs = onOpenCrashLogs,
+            onOpenAbout = onOpenAbout,
         )
     }
 }

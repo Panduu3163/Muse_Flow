@@ -45,6 +45,9 @@ data class QueueItem(
 data class NowPlayingState(
     val title: String = "",
     val artist: String = "",
+    /** The artist's browseId, when known - lets Now Playing's artist name navigate straight to
+     * their page. Null for local files or any source with no artist browseId. */
+    val artistId: String? = null,
     val artworkUrl: String? = null,
     val isPlaying: Boolean = false,
     val positionMs: Long = 0L,
@@ -205,6 +208,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         _state.value = NowPlayingState(
             title = metadata.title?.toString().orEmpty(),
             artist = metadata.artist?.toString().orEmpty(),
+            artistId = metadata.extras?.getString("artistId"),
             artworkUrl = metadata.artworkUri?.toString(),
             isPlaying = player.isPlaying,
             positionMs = player.currentPosition.coerceAtLeast(0L),
@@ -450,6 +454,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             .setTitle(title)
             .setArtist(artist)
             .setAlbumTitle(source)
+            // Carried through extras so Now Playing's artist name can navigate straight to the
+            // artist page - MediaMetadata has no first-class artistId field of its own.
+            .setExtras(android.os.Bundle().apply { artistId?.let { putString("artistId", it) } })
             .apply {
                 when {
                     localCoverUri != null -> setArtworkUri(localCoverUri)

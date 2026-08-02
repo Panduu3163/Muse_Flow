@@ -118,7 +118,9 @@ fun LibraryScreen(
                 LibrarySection.Liked -> settings.showLikedPlaylist
                 LibrarySection.Downloads -> settings.showDownloadedPlaylist
                 LibrarySection.TopPlayed -> settings.showTopPlaylist
-                LibrarySection.Recent -> settings.showCachedPlaylist
+                // Retired as a chip - the header's History shortcut and "View full history" link
+                // are the one path to recent plays now, not a duplicate chip section.
+                LibrarySection.Recent -> false
                 // Always offered: it needs no prior activity to be worth opening, unlike the
                 // history-driven sections, and it's the only route to files already on the phone.
                 LibrarySection.OnDevice -> true
@@ -241,6 +243,21 @@ fun LibraryScreen(
                     contentDescription = if (searchActive) "Close search" else "Search this section",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            if (settings.showRecentlyPlayedShortcut) {
+                // Opens the real History screen directly - the same destination "View full
+                // history" inside the old Recent chip pointed to - rather than a second,
+                // separate recently-played surface with its own copy of the same data.
+                IconButton(
+                    onClick = onOpenHistory,
+                    modifier = Modifier.testTag("library_open_recently_played"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.History,
+                        contentDescription = "Recently played",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             IconButton(onClick = onOpenStats, modifier = Modifier.testTag("library_open_stats")) {
                 Icon(
@@ -398,6 +415,7 @@ fun LibraryScreen(
         onGoToArtist = onGoToArtist,
         onGoToAlbum = onGoToAlbum,
     )
+
 
     selectedPlaylist?.let { playlist ->
         // Subscribes this playlist's track flow so it's populated even if its detail screen has

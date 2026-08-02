@@ -82,6 +82,15 @@ fun BackupSettingsScreen(
         uri?.let { importViewModel.importFrom(it, displayNameOf(context, it)) }
     }
 
+    // A separate launcher rather than reusing importLauncher: the two need different MIME
+    // filters, even though both end up calling the same importFrom, which tells CSV and M3U
+    // apart by file name.
+    val importM3uLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { importViewModel.importFrom(it, displayNameOf(context, it)) }
+    }
+
     val exportLauncher = rememberLauncherForActivityResult(
         // A dated default name, because the second backup is the one where an overwritten first
         // one hurts.
@@ -157,6 +166,14 @@ fun BackupSettingsScreen(
                     icon = Icons.AutoMirrored.Filled.PlaylistAdd,
                     enabled = importState !is ImportState.Matching,
                     onClick = { importLauncher.launch(arrayOf("*/*")) },
+                )
+                NavigationPreference(
+                    title = "Import M3U playlist",
+                    subtitle = "An M3U or M3U8 playlist file. Tracks are matched on YouTube " +
+                        "Music.",
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    enabled = importState !is ImportState.Matching,
+                    onClick = { importM3uLauncher.launch(arrayOf("*/*")) },
                 )
             }
 

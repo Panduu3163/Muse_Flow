@@ -41,6 +41,11 @@ import com.example.TopLevelDestination
  * the window edge, so the themed background stays visible behind it. The selected tab gets a
  * filled "pill" behind its icon plus a springy scale bump - motion feedback that makes a tap feel
  * acknowledged without an animation long enough to delay the actual navigation.
+ *
+ * Deliberately NOT tinted from the current track's album palette (tried once, reverted at the
+ * user's explicit request) - this bar's colour follows the app theme only, not whatever's
+ * playing. The colour "seam" this was originally meant to fix was actually the system's own
+ * edge-to-edge scrim (see MainActivity.onCreate's enableEdgeToEdge call), not this bar.
  */
 @Composable
 fun MuseFlowNavBar(

@@ -62,6 +62,26 @@ class PlaylistRepository private constructor(context: Context) {
         trackDao.delete(playlistId, key)
     }
 
+    /** Same one-time backfill as [LikedSongsRepository.backfillMissingArtistIds], for playlist
+     * tracks added before artistId/albumId were reliably threaded through - see its doc for the
+     * full reasoning (exact-videoId re-match, never a fuzzy guess). */
+    suspend fun backfillMissingArtistIds(context: Context) {
+        val missing = runCatching { trackDao.getAll() }.getOrNull().orEmpty()
+            .filter { it.artistId == null && it.sourceType == MusicSource.YOUTUBE_MUSIC.name && it.sourceId != null }
+        if (missing.isEmpty()) return
+
+        val router = MusicSearchRouter(context)
+        for (entity in missing) {
+            runCatching {
+                val results = router.searchTracks("${entity.title} ${entity.artist}")
+                val match = results.firstOrNull { it.id == entity.sourceId } ?: return@runCatching
+                if (match.artistId != null || match.albumId != null) {
+                    trackDao.updateArtistAndAlbumId(entity.key, match.artistId, match.albumId)
+                }
+            }
+        }
+    }
+
     suspend fun setPinned(playlistId: Long, pinned: Boolean) {
         dao.setPinned(playlistId, pinned)
     }

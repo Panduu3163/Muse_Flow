@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.platform.testTag
@@ -207,12 +208,16 @@ private fun SyncedLyrics(
                 }
             }
 
+            // Fixed white/dimmed-white rather than the app's dynamic theme colours - a
+            // per-track/seed-driven accent can land close in hue or lightness to the inactive
+            // colour (the same low-contrast failure mode the Stats/Search screens had), which
+            // makes the sung-vs-upcoming word transition barely perceptible and leaves only the
+            // coarser line-level cues (bold weight, the active-line scale bump) visibly "doing"
+            // anything - reading as the whole line reacting at once instead of each word. A fixed
+            // white scale guarantees the per-word contrast regardless of theme/seed, and is what
+            // actually sells styles like Metro's tile/Vivi Music's gradient sweep.
             val color by animateColorAsState(
-                targetValue = if (isActive) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                targetValue = if (isActive) Color.White else Color.White.copy(alpha = 0.45f),
                 label = "lyric_colour",
             )
             val scale by animateFloatAsState(
@@ -220,8 +225,12 @@ private fun SyncedLyrics(
                 label = "lyric_scale",
             )
 
-            val activeTextColor = MaterialTheme.colorScheme.primary
-            val inactiveTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+            val activeTextColor = Color.White
+            val inactiveTextColor = Color.White.copy(alpha = 0.45f)
+            // Dark, not theme-driven either: Metro's "sung tile" is a solid block in sungColor
+            // (now white) with the character punched out in this colour - it needs to stay dark
+            // for the punched-out text to read against a white tile regardless of theme.
+            val metroTileTextColor = Color.Black
 
             Text(
                 text = if (karaoke) {
@@ -233,6 +242,7 @@ private fun SyncedLyrics(
                         upcomingColor = inactiveTextColor,
                         style = wordAnimationStyle,
                         glow = glow,
+                        metroTileTextColor = metroTileTextColor,
                     )
                 } else {
                     AnnotatedString(line.text)
@@ -318,13 +328,14 @@ private fun buildKaraokeText(
     upcomingColor: Color,
     style: WordAnimationStyle,
     glow: Boolean,
+    metroTileTextColor: Color,
 ): AnnotatedString = buildAnnotatedString {
     words.forEachIndexed { index, word ->
         if (index > 0) append(" ")
         when {
             index < activeWordIndex -> withStyle(sungSpan(sungColor, glow)) { append(word.text) }
             index > activeWordIndex -> withStyle(SpanStyle(color = upcomingColor)) { append(word.text) }
-            else -> appendInProgressWord(word.text, activeWordProgress, sungColor, upcomingColor, style, glow)
+            else -> appendInProgressWord(word.text, activeWordProgress, sungColor, upcomingColor, style, glow, metroTileTextColor)
         }
     }
 }
@@ -343,6 +354,7 @@ private fun androidx.compose.ui.text.AnnotatedString.Builder.appendInProgressWor
     upcomingColor: Color,
     style: WordAnimationStyle,
     glow: Boolean,
+    metroTileTextColor: Color,
 ) {
     when (style) {
         WordAnimationStyle.Karaoke -> {
@@ -388,6 +400,108 @@ private fun androidx.compose.ui.text.AnnotatedString.Builder.appendInProgressWor
                 shadow = if (glow) Shadow(color = sungColor, blurRadius = 14f * fraction) else null,
             )
         ) { append(text) }
+
+        // Adapted from Echo Music's METRO_LYRICS style (ui/component/MetroLyrics.kt), which
+        // renders lyrics on a raw Canvas with a hard per-character cut and bold, high-contrast
+        // glyphs - a blocky "tile" look rather than the smooth colour/size ramps every other
+        // style here uses. That canvas approach doesn't translate directly onto this
+        // AnnotatedString-based renderer, so the technique is adapted rather than ported
+        // verbatim: a hard (non-lerped) snap at the halfway point, a solid background "tile"
+        // behind the already-sung portion, and a jump straight to Black weight - no easing
+        // anywhere, on purpose.
+        WordAnimationStyle.Metro -> {
+            val cut = (text.length * fraction).toInt().coerceIn(0, text.length)
+            if (cut > 0) {
+                withStyle(
+                    SpanStyle(
+                        color = metroTileTextColor,
+                        background = sungColor,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = androidx.compose.ui.unit.TextUnit(0.5f, androidx.compose.ui.unit.TextUnitType.Sp),
+                    )
+                ) { append(text.substring(0, cut)) }
+            }
+            if (cut < text.length) {
+                withStyle(
+                    SpanStyle(
+                        color = upcomingColor,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = androidx.compose.ui.unit.TextUnit(0.5f, androidx.compose.ui.unit.TextUnitType.Sp),
+                    )
+                ) { append(text.substring(cut)) }
+            }
+        }
+
+        // Adapted from Echo Music's LYRICS_V2 ("Lyrics V2 (Fluid)") style
+        // (ui/component/LyricsV2.kt, AnimatedWordV2) - a continuous sine-driven float/scale
+        // bounce on the active word plus a soft-edged wipe (there it's a `drawWithContent`
+        // gradient mask; here the same "soft edge instead of a hard cut" idea is reproduced by
+        // ramping alpha smoothly over a couple of characters around the cut point instead of
+        // Karaoke's binary switch) - continuous motion rather than the discrete per-word jumps
+        // the other styles use.
+        WordAnimationStyle.Fluid -> {
+            val smooth = fraction * fraction * (3f - 2f * fraction) // smoothstep, matches AnimatedWordV2's use of sin-based easing for continuous motion
+            val bounce = kotlin.math.sin(fraction * Math.PI).toFloat()
+            val cutPos = text.length * fraction
+            val edgeChars = 1.5f
+            text.forEachIndexed { i, c ->
+                val charAlpha = (((cutPos - i) / edgeChars) + 0.5f).coerceIn(0f, 1f)
+                withStyle(
+                    SpanStyle(
+                        color = lerp(upcomingColor, sungColor, charAlpha),
+                        fontSize = androidx.compose.ui.unit.TextUnit(1f + bounce * 0.06f, androidx.compose.ui.unit.TextUnitType.Em),
+                        baselineShift = BaselineShift(bounce * 0.06f),
+                        shadow = if (glow) Shadow(color = sungColor, blurRadius = 10f * smooth) else null,
+                    )
+                ) { append(c) }
+            }
+        }
+
+        // Adapted from Echo Music's "Vivi Music (Fluid)" style (echomusic_1 in
+        // constants/PreferenceKeys.kt, rendered by ui/component/EchoMusicLyrics.kt) - a
+        // horizontal gradient brush swept across the *whole word* as one span (rather than
+        // per-character, like Karaoke/Metro/Fluid above) with a glow shadow that intensifies as
+        // the sweep progresses, giving a soft "light passing through" look distinct from the
+        // hard/discrete styles.
+        WordAnimationStyle.ViviMusic -> withStyle(
+            SpanStyle(
+                brush = Brush.horizontalGradient(
+                    0f to sungColor,
+                    (fraction - 0.05f).coerceAtLeast(0f) to sungColor,
+                    (fraction + 0.05f).coerceAtMost(1f) to sungColor.copy(alpha = 0.45f),
+                    1f to upcomingColor.copy(alpha = 0.45f),
+                ),
+                fontWeight = FontWeight.ExtraBold,
+                shadow = Shadow(
+                    color = sungColor.copy(alpha = 0.6f * fraction),
+                    blurRadius = (12f * fraction).coerceAtLeast(0.1f),
+                ),
+            )
+        ) { append(text) }
+
+        // Adapted from Echo Music's APPLE style (ui/component/Lyrics.kt, the
+        // `LyricsAnimationStyle.APPLE` branch) - Apple Music's real lyrics UI ramps each word in
+        // with a smoothstep opacity/weight curve rather than a hard colour swap, so the sung
+        // word "settles in" instead of snapping - reproduced here as a smoothstep-eased alpha
+        // ramp (0.55 -> 1.0, matching Echo's own floor/ceiling) plus a weight step up to
+        // ExtraBold and a glow that grows with the smoothed progress squared, same as the
+        // source's `glowIntensity = smoothProgress * smoothProgress`.
+        WordAnimationStyle.AppleMusic -> {
+            val smooth = fraction * fraction * (3f - 2f * fraction)
+            val alpha = 0.55f + 0.45f * smooth
+            withStyle(
+                SpanStyle(
+                    color = sungColor.copy(alpha = alpha),
+                    fontWeight = if (fraction >= 0.999f) FontWeight.ExtraBold else FontWeight.SemiBold,
+                    shadow = if (glow) {
+                        Shadow(
+                            color = sungColor.copy(alpha = 0.2f + 0.4f * smooth * smooth),
+                            blurRadius = 10f + 12f * smooth * smooth,
+                        )
+                    } else null,
+                )
+            ) { append(text) }
+        }
     }
 }
 

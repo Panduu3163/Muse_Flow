@@ -1,11 +1,33 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,6 +42,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -48,6 +71,7 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
@@ -66,6 +90,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -74,6 +100,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
@@ -82,13 +110,19 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import coil.compose.AsyncImage
+import coil.compose.rememberAsyncImagePainter
 import com.example.AlbumPalette
 import com.example.BackgroundStyle
 import com.example.NowPlayingState
+import com.example.PlayerTransportStyle
 import com.example.QueueItem
 import com.example.asPlaybackTime
 import androidx.compose.foundation.clickable
@@ -126,6 +160,10 @@ fun NowPlayingScreen(
     cropArtwork: Boolean = true,
     wavySlider: Boolean = false,
     slimSlider: Boolean = false,
+    squigglySlider: Boolean = false,
+    swipeToChangeSongEnabled: Boolean = true,
+    showCodecInfo: Boolean = false,
+    transportStyle: PlayerTransportStyle = PlayerTransportStyle.Static,
     backgroundStyle: BackgroundStyle = BackgroundStyle.Solid,
     palette: AlbumPalette? = null,
     buttonColor: Color = Color.Unspecified,
@@ -137,6 +175,7 @@ fun NowPlayingScreen(
      * the "player menu" the gap audit flagged as entirely missing, reusing the same sheet every
      * other track list already opens rather than inventing a second, narrower one. */
     onOpenMenu: () -> Unit = {},
+    onGoToArtist: (String) -> Unit = {},
     /** Rendered in place of the artwork when the lyrics toggle is on. Passed as a slot so this
      * screen stays free of lyrics fetching and its ViewModel. */
     lyricsContent: @Composable (Modifier) -> Unit = {},
@@ -162,6 +201,7 @@ fun NowPlayingScreen(
             onRemoveQueueItem = onRemoveQueueItem,
             onCollapse = onCollapse,
             onOpenMenu = onOpenMenu,
+            onGoToArtist = onGoToArtist,
             isLiked = isLiked,
             isDownloaded = isDownloaded,
             downloadProgress = downloadProgress,
@@ -172,6 +212,10 @@ fun NowPlayingScreen(
             cropArtwork = cropArtwork,
             wavySlider = wavySlider,
             slimSlider = slimSlider,
+            squigglySlider = squigglySlider,
+            swipeToChangeSongEnabled = swipeToChangeSongEnabled,
+            showCodecInfo = showCodecInfo,
+            transportStyle = transportStyle,
             buttonColor = buttonColor,
             sleepTimerRemainingMs = sleepTimerRemainingMs,
             onStartSleepTimer = onStartSleepTimer,
@@ -218,19 +262,29 @@ private fun PlayerBackground(
             )
         }
 
-        // BackgroundStyle.Glow removed - was here, to be reimplemented later.
+        style == BackgroundStyle.LiveMesh && artworkUrl != null -> LiveMeshBackground(artworkUrl = artworkUrl, base = base)
 
         style == BackgroundStyle.Blur && artworkUrl != null -> {
             Box(modifier = Modifier.fillMaxSize().background(base)) {
-                AsyncImage(
-                    model = artworkUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .blur(40.dp)
-                        .alpha(0.45f),
-                )
+                // Keyed on the URL so a track change cross-fades the blurred backdrop in/out
+                // instead of the new cover popping in over the old one mid-frame.
+                AnimatedContent(
+                    targetState = artworkUrl,
+                    transitionSpec = {
+                        fadeIn(tween(700)) togetherWith fadeOut(tween(700))
+                    },
+                    label = "blur_bg_crossfade",
+                ) { url ->
+                    AsyncImage(
+                        model = url,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .blur(40.dp)
+                            .alpha(0.45f),
+                    )
+                }
                 // Scrim: a blurred cover is still busy enough to hurt text legibility.
                 Box(
                     modifier = Modifier
@@ -241,6 +295,116 @@ private fun PlayerBackground(
         }
 
         else -> Box(modifier = Modifier.fillMaxSize().background(base))
+    }
+}
+
+/**
+ * [BackgroundStyle.LiveMesh]: three blurred, saturated copies of the current artwork, each
+ * rotating independently at its own slow speed. Ported directly from Echo-Music's own
+ * `LIVE_MESH`/`LIQUID_GLASS` player background (`Player.kt`'s `PlayerBackgroundStyle.LIVE_MESH,
+ * PlayerBackgroundStyle.LIQUID_GLASS ->` branch) rather than derived independently - their real
+ * numbers (1.7x container-level oversize, 100-120dp blur, 128x128 software-decoded source) are
+ * what actually keeps the rotation's edge hidden. A smaller blur radius (tried in an earlier pass,
+ * for frame-rate headroom) technically still covers every pixel but stops masking the seam: a
+ * large blur radius smears the geometric edge into invisibility, which is the real mechanism at
+ * work here, not any particular oversize-scale formula - so this deliberately does NOT chase a
+ * tighter one.
+ */
+@Composable
+private fun LiveMeshBackground(artworkUrl: String, base: Color) {
+    val context = LocalContext.current
+    val infiniteTransition = rememberInfiniteTransition(label = "liveMeshRotation")
+    val anchorRotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = -360f,
+        animationSpec = infiniteRepeatable(animation = tween(80_000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+        label = "anchorRotation",
+    )
+    val fastRotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(animation = tween(40_000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+        label = "fastRotation",
+    )
+    val slowRotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(animation = tween(60_000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+        label = "slowRotation",
+    )
+    val saturatedColorFilter = remember {
+        ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.8f) })
+    }
+    val imageRequest = remember(artworkUrl) {
+        coil.request.ImageRequest.Builder(context)
+            .data(artworkUrl)
+            .size(128, 128)
+            .allowHardware(false)
+            .build()
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(base)) {
+        // Cross-fades the whole mesh on track change, rather than each layer's own AsyncImage
+        // popping to the new artwork independently.
+        AnimatedContent(
+            targetState = imageRequest,
+            transitionSpec = { fadeIn(tween(1500)) togetherWith fadeOut(tween(1500)) },
+            label = "liveMeshBackground",
+        ) { request ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = 1.7f
+                        scaleY = 1.7f
+                    },
+            ) {
+                AsyncImage(
+                    model = request,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    colorFilter = saturatedColorFilter,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .blur(100.dp)
+                        .graphicsLayer { rotationZ = anchorRotation },
+                )
+                AsyncImage(
+                    model = request,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    colorFilter = saturatedColorFilter,
+                    alignment = Alignment.TopStart,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .blur(120.dp)
+                        .graphicsLayer {
+                            rotationZ = fastRotation
+                            alpha = 0.6f
+                        },
+                )
+                AsyncImage(
+                    model = request,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    colorFilter = saturatedColorFilter,
+                    alignment = Alignment.BottomEnd,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .blur(120.dp)
+                        .graphicsLayer {
+                            rotationZ = slowRotation
+                            alpha = 0.5f
+                        },
+                )
+                Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.2f)))
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.25f)))),
+                )
+            }
+        }
     }
 }
 
@@ -259,7 +423,11 @@ private fun PlayerBackground(
  * feedback the hardware volume buttons give.
  */
 @Composable
-private fun Modifier.artworkSwipeGestures(onNext: () -> Unit, onPrevious: () -> Unit): Modifier {
+private fun Modifier.artworkSwipeGestures(
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+    swipeToChangeSongEnabled: Boolean = true,
+): Modifier {
     val context = LocalContext.current
     val audioManager = remember {
         context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
@@ -276,7 +444,7 @@ private fun Modifier.artworkSwipeGestures(onNext: () -> Unit, onPrevious: () -> 
                 verticalAccum = 0f
             },
             onDragEnd = {
-                if (axis == 'h' && abs(horizontalAccum) > 120f) {
+                if (swipeToChangeSongEnabled && axis == 'h' && abs(horizontalAccum) > 120f) {
                     if (horizontalAccum < 0) onNext() else onPrevious()
                 }
                 axis = null
@@ -284,7 +452,9 @@ private fun Modifier.artworkSwipeGestures(onNext: () -> Unit, onPrevious: () -> 
             onDrag = { change, dragAmount ->
                 change.consume()
                 if (axis == null) {
-                    axis = if (abs(dragAmount.x) > abs(dragAmount.y)) 'h' else 'v'
+                    // Vertical volume-swipe always available regardless of the setting - only the
+                    // horizontal skip gesture is what "swipe to change song" turns off.
+                    axis = if (swipeToChangeSongEnabled && abs(dragAmount.x) > abs(dragAmount.y)) 'h' else 'v'
                 }
                 when (axis) {
                     'h' -> horizontalAccum += dragAmount.x
@@ -334,12 +504,17 @@ private fun PlayerContent(
     cropArtwork: Boolean,
     wavySlider: Boolean,
     slimSlider: Boolean,
+    squigglySlider: Boolean = false,
+    swipeToChangeSongEnabled: Boolean = true,
+    showCodecInfo: Boolean = false,
+    transportStyle: PlayerTransportStyle = PlayerTransportStyle.Static,
     buttonColor: Color,
     sleepTimerRemainingMs: Long? = null,
     onStartSleepTimer: (Int) -> Unit = {},
     onCancelSleepTimer: () -> Unit = {},
     onSetPlaybackSpeed: (Float, Float) -> Unit = { _, _ -> },
     onOpenMenu: () -> Unit = {},
+    onGoToArtist: (String) -> Unit = {},
     lyricsContent: @Composable (Modifier) -> Unit,
 ) {
     var showQueue by remember { mutableStateOf(false) }
@@ -368,35 +543,8 @@ private fun PlayerContent(
                 )
             }
             Spacer(Modifier.weight(1f))
-            Row(
-                modifier = Modifier
-                    .clickable { showSleepTimerDialog = true }
-                    .testTag("now_playing_sleep_timer"),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // The remaining time next to the icon, not just a tinted icon - the tint alone
-                // said "a timer is running" but not "how much longer," which is the one thing
-                // someone glancing at this actually wants to know.
-                if (sleepTimerRemainingMs != null) {
-                    Text(
-                        text = sleepTimerRemainingMs.asPlaybackTime(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(end = 2.dp),
-                    )
-                }
-                IconButton(onClick = { showSleepTimerDialog = true }) {
-                    Icon(
-                        imageVector = Icons.Default.Bedtime,
-                        contentDescription = "Sleep timer",
-                        tint = if (sleepTimerRemainingMs != null) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                }
-            }
+            // Sleep timer/lyrics/queue moved out of this bar and into PlayerQuickActionsRow
+            // (below the transport controls) - see its own doc for why.
             IconButton(
                 onClick = { showSpeedDialog = true },
                 modifier = Modifier.testTag("now_playing_speed"),
@@ -405,37 +553,6 @@ private fun PlayerContent(
                     imageVector = Icons.Default.Speed,
                     contentDescription = "Playback speed",
                     tint = if (state.speed != 1f) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-            IconButton(
-                onClick = {
-                    showLyrics = !showLyrics
-                    if (showLyrics) showQueue = false
-                },
-                modifier = Modifier.testTag("now_playing_lyrics_toggle"),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Lyrics,
-                    contentDescription = if (showLyrics) "Hide lyrics" else "Show lyrics",
-                    tint = if (showLyrics) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-            IconButton(onClick = {
-                showQueue = !showQueue
-                if (showQueue) showLyrics = false
-            }) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                    contentDescription = if (showQueue) "Hide queue" else "Show queue",
-                    tint = if (showQueue) {
                         MaterialTheme.colorScheme.primary
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -480,7 +597,11 @@ private fun PlayerContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
-                    .artworkSwipeGestures(onNext = onNext, onPrevious = onPrevious),
+                    .artworkSwipeGestures(
+                        onNext = onNext,
+                        onPrevious = onPrevious,
+                        swipeToChangeSongEnabled = swipeToChangeSongEnabled,
+                    ),
             )
             Spacer(Modifier.weight(0.5f))
         } else {
@@ -489,31 +610,16 @@ private fun PlayerContent(
             Spacer(Modifier.weight(1f))
         }
 
-        // Like and download flank the title rather than joining the transport row: they're
-        // track-level actions, not playback controls, and keeping them apart stops the row of
-        // primary controls from growing to six equally-weighted buttons.
+        // Title/artist left-aligned, download+like grouped as one joined pill on the right -
+        // ported from Echo-Music's own download/like button pair (`Player.kt`: shareShape/
+        // favShape, asymmetric rounded corners so the two half-pills read as one shape) rather
+        // than the previous like-left/title-center/download-right symmetric flanking.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 20.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(
-                onClick = onToggleLike,
-                enabled = state.hasMedia,
-                modifier = Modifier.testTag("now_playing_like"),
-            ) {
-                Icon(
-                    imageVector = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = if (isLiked) "Remove from Liked" else "Add to Liked",
-                    tint = if (isLiked) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = state.title.ifBlank { "Nothing playing" },
@@ -521,7 +627,7 @@ private fun PlayerContent(
                     color = MaterialTheme.colorScheme.onBackground,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
+                    textAlign = TextAlign.Start,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
@@ -530,53 +636,114 @@ private fun PlayerContent(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
+                    textAlign = TextAlign.Start,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 4.dp),
+                        .padding(top = 4.dp)
+                        .then(
+                            state.artistId?.let { artistId ->
+                                Modifier
+                                    .clickable { onGoToArtist(artistId) }
+                                    .testTag("now_playing_artist_name")
+                            } ?: Modifier
+                        ),
                 )
             }
 
-            IconButton(
-                onClick = onDownload,
-                enabled = state.hasMedia && !isDownloaded && downloadProgress == null,
-                modifier = Modifier.testTag("now_playing_download"),
-            ) {
-                when {
-                    isDownloaded -> Icon(
-                        imageVector = Icons.Default.DownloadDone,
-                        contentDescription = "Downloaded",
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                    downloadProgress != null && downloadProgress >= 0 -> CircularProgressIndicator(
-                        progress = { downloadProgress / 100f },
-                        modifier = Modifier.size(22.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    )
-                    downloadProgress != null -> CircularProgressIndicator(
-                        modifier = Modifier.size(22.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    else -> Icon(
-                        imageVector = Icons.Default.Download,
-                        contentDescription = "Download",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            Spacer(Modifier.width(12.dp))
+
+            val shareShape = RoundedCornerShape(topStart = 50.dp, bottomStart = 50.dp, topEnd = 4.dp, bottomEnd = 4.dp)
+            val favShape = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 50.dp, bottomEnd = 50.dp)
+            val pillContainerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(shareShape)
+                        .background(pillContainerColor)
+                        .clickable(
+                            enabled = state.hasMedia && !isDownloaded && downloadProgress == null,
+                            onClick = onDownload,
+                        )
+                        .testTag("now_playing_download"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    when {
+                        isDownloaded -> Icon(
+                            imageVector = Icons.Default.DownloadDone,
+                            contentDescription = "Downloaded",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        downloadProgress != null && downloadProgress >= 0 -> CircularProgressIndicator(
+                            progress = { downloadProgress / 100f },
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        )
+                        downloadProgress != null -> CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        else -> Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = "Download",
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(favShape)
+                        .background(pillContainerColor)
+                        .clickable(enabled = state.hasMedia, onClick = onToggleLike)
+                        .testTag("now_playing_like"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = if (isLiked) "Remove from Liked" else "Add to Liked",
+                        tint = if (isLiked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                 }
             }
         }
 
-        SeekBar(state = state, onSeek = onSeek, wavySlider = wavySlider, slimSlider = slimSlider)
+        SeekBar(
+            state = state,
+            onSeek = onSeek,
+            wavySlider = wavySlider,
+            slimSlider = slimSlider,
+            squigglySlider = squigglySlider,
+            showCodecInfo = showCodecInfo,
+        )
 
         TransportControls(
             state = state,
             buttonColor = buttonColor,
+            transportStyle = transportStyle,
             onTogglePlayPause = onTogglePlayPause,
             onNext = onNext,
             onPrevious = onPrevious,
+        )
+
+        PlayerQuickActionsRow(
+            state = state,
+            showQueue = showQueue,
+            showLyrics = showLyrics,
+            sleepTimerRemainingMs = sleepTimerRemainingMs,
+            onToggleQueue = {
+                showQueue = !showQueue
+                if (showQueue) showLyrics = false
+            },
+            onToggleLyrics = {
+                showLyrics = !showLyrics
+                if (showLyrics) showQueue = false
+            },
+            onOpenSleepTimer = { showSleepTimerDialog = true },
             onToggleShuffle = onToggleShuffle,
             onCycleRepeat = onCycleRepeat,
         )
@@ -723,21 +890,37 @@ private fun SeekBar(
     onSeek: (Float) -> Unit,
     wavySlider: Boolean,
     slimSlider: Boolean,
+    squigglySlider: Boolean = false,
+    showCodecInfo: Boolean = false,
 ) {
     var scrubPosition by remember { mutableStateOf<Float?>(null) }
     val displayed = scrubPosition ?: state.progress
 
     Column(modifier = Modifier.padding(top = 24.dp)) {
-        if (wavySlider) {
-            SquigglySlider(
+        when {
+            // A tighter, faster-wiggling wave than Wavy - same component, different tuning.
+            squigglySlider -> SquigglySlider(
                 progress = state.progress,
                 onSeek = onSeek,
                 playing = state.isPlaying,
                 activeColor = MaterialTheme.colorScheme.primary,
                 inactiveColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                visibleCycles = 3f,
+                phaseDurationMs = 1400,
+                pillThumb = true,
             )
-        } else {
-            Slider(
+
+            wavySlider -> SquigglySlider(
+                progress = state.progress,
+                onSeek = onSeek,
+                playing = state.isPlaying,
+                activeColor = MaterialTheme.colorScheme.primary,
+                inactiveColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                visibleCycles = 1.2f,
+                phaseDurationMs = 2200,
+            )
+
+            else -> Slider(
                 value = displayed,
                 onValueChange = { scrubPosition = it },
                 onValueChangeFinished = {
@@ -763,6 +946,168 @@ private fun SeekBar(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        if (showCodecInfo) {
+            val codecLabel by com.example.CurrentCodecInfo.current.collectAsState()
+            codecLabel?.let { label ->
+                Box(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.Center) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A scalloped "cookie" outline - self-rotating (the caller only supplies a target angle, not a
+ * pre-rotated path), ported directly from Echo-Music's `WavyShape` (`Player.kt`) for the "Wheel"
+ * [PlayerTransportStyle]. [indent] 0 is a plain circle; Echo animates it in/out (0 <-> 0.08) so
+ * the shape only actually scallops while playing, flattening to a circle when paused.
+ */
+private data class WavyShape(
+    val sides: Int,
+    val indent: Float,
+    val rotationDegrees: Float,
+) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        val path = Path()
+        val maxRadiusX = size.width / 2f
+        val maxRadiusY = size.height / 2f
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val steps = 120
+        val rotationRad = rotationDegrees * Math.PI / 180.0
+        for (i in 0..steps) {
+            val angle = i * Math.PI * 2 / steps
+            val bumpAngle = angle - rotationRad
+            val r = 1f - indent + indent * cos(sides * bumpAngle)
+            val x = cx + maxRadiusX * r * cos(angle)
+            val y = cy + maxRadiusY * r * sin(angle)
+            if (i == 0) path.moveTo(x.toFloat(), y.toFloat()) else path.lineTo(x.toFloat(), y.toFloat())
+        }
+        path.close()
+        return Outline.Generic(path)
+    }
+}
+
+/**
+ * The queue/sleep-timer/lyrics/shuffle/repeat row - five boxed buttons in one continuous strip,
+ * pill-rounded on the two outer ends and square-ish in between. Ported directly from Echo-Music's
+ * `PlayerQueueButton` row (`Queue.kt`: `queueShape`/`middleShape`/`repeatShape`, and the button's
+ * own filled-when-active/outlined-when-inactive treatment), not independently designed - same
+ * shapes, same 42dp button size, same 1dp/30%-alpha border on the inactive state.
+ */
+@Composable
+private fun PlayerQuickActionsRow(
+    state: NowPlayingState,
+    showQueue: Boolean,
+    showLyrics: Boolean,
+    sleepTimerRemainingMs: Long?,
+    onToggleQueue: () -> Unit,
+    onToggleLyrics: () -> Unit,
+    onOpenSleepTimer: () -> Unit,
+    onToggleShuffle: () -> Unit,
+    onCycleRepeat: () -> Unit,
+) {
+    val buttonSize = 42.dp
+    val queueShape = RoundedCornerShape(topStart = 50.dp, bottomStart = 50.dp, topEnd = 3.dp, bottomEnd = 3.dp)
+    val middleShape = RoundedCornerShape(3.dp)
+    val repeatShape = RoundedCornerShape(topStart = 3.dp, bottomStart = 3.dp, topEnd = 50.dp, bottomEnd = 50.dp)
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(top = 20.dp),
+    ) {
+        PlayerQuickActionButton(
+            icon = Icons.AutoMirrored.Filled.QueueMusic,
+            contentDescription = if (showQueue) "Hide queue" else "Show queue",
+            isActive = showQueue,
+            shape = queueShape,
+            size = buttonSize,
+            onClick = onToggleQueue,
+        )
+        PlayerQuickActionButton(
+            icon = Icons.Default.Bedtime,
+            contentDescription = "Sleep timer",
+            isActive = sleepTimerRemainingMs != null,
+            shape = middleShape,
+            size = buttonSize,
+            text = sleepTimerRemainingMs?.asPlaybackTime(),
+            onClick = onOpenSleepTimer,
+        )
+        PlayerQuickActionButton(
+            icon = Icons.Default.Lyrics,
+            contentDescription = if (showLyrics) "Hide lyrics" else "Show lyrics",
+            isActive = showLyrics,
+            shape = middleShape,
+            size = buttonSize,
+            onClick = onToggleLyrics,
+        )
+        PlayerQuickActionButton(
+            icon = Icons.Default.Shuffle,
+            contentDescription = "Shuffle",
+            isActive = state.shuffleEnabled,
+            shape = middleShape,
+            size = buttonSize,
+            onClick = onToggleShuffle,
+        )
+        PlayerQuickActionButton(
+            icon = if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+            contentDescription = "Repeat mode",
+            isActive = state.repeatMode != Player.REPEAT_MODE_OFF,
+            shape = repeatShape,
+            size = buttonSize,
+            onClick = onCycleRepeat,
+        )
+    }
+}
+
+@Composable
+private fun PlayerQuickActionButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String?,
+    isActive: Boolean,
+    shape: RoundedCornerShape,
+    size: androidx.compose.ui.unit.Dp,
+    onClick: () -> Unit,
+    text: String? = null,
+) {
+    val base = Modifier
+        .size(size)
+        .clip(shape)
+        .clickable(onClick = onClick)
+    val styled = if (isActive) {
+        base.background(MaterialTheme.colorScheme.primary)
+    } else {
+        base.border(width = 1.dp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f), shape = shape)
+    }
+    Box(modifier = styled, contentAlignment = Alignment.Center) {
+        if (text != null) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = if (isActive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        } else {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = if (isActive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
+            )
+        }
     }
 }
 
@@ -770,31 +1115,35 @@ private fun SeekBar(
 private fun TransportControls(
     state: NowPlayingState,
     buttonColor: Color,
+    transportStyle: PlayerTransportStyle,
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
-    onToggleShuffle: () -> Unit,
-    onCycleRepeat: () -> Unit,
+) {
+    val resolvedButtonColor = buttonColor.takeIf { it != Color.Unspecified } ?: MaterialTheme.colorScheme.primary
+    when (transportStyle) {
+        PlayerTransportStyle.Wheel -> WheelTransportControls(state, resolvedButtonColor, onTogglePlayPause, onNext, onPrevious)
+        PlayerTransportStyle.Pill -> PillTransportControls(state, resolvedButtonColor, onTogglePlayPause, onNext, onPrevious)
+        PlayerTransportStyle.Static -> StaticTransportControls(state, resolvedButtonColor, onTogglePlayPause, onNext, onPrevious)
+    }
+}
+
+/** The original three separate circular buttons, corner-morphing play/pause included - unchanged
+ * default behaviour, just extracted out of [TransportControls] so the other two styles could be
+ * added alongside it without one giant branching function. */
+@Composable
+private fun StaticTransportControls(
+    state: NowPlayingState,
+    buttonColor: Color,
+    onTogglePlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 20.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
+        modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
+        horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onToggleShuffle) {
-            Icon(
-                imageVector = Icons.Default.Shuffle,
-                contentDescription = "Shuffle",
-                tint = if (state.shuffleEnabled) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-        }
-
         IconButton(onClick = onPrevious, enabled = state.hasPrevious) {
             Icon(
                 imageVector = Icons.Default.SkipPrevious,
@@ -804,11 +1153,21 @@ private fun TransportControls(
             )
         }
 
+        Spacer(Modifier.width(24.dp))
+
+        // Corner roundness morphs between a nearly-circular paused state and a more squared-off
+        // playing state, echoing Echo-Music's play/pause treatment - a small, purely cosmetic
+        // touch, not a shape swap that would affect layout or hit target size.
+        val playPauseCornerRadius by animateDpAsState(
+            targetValue = if (state.isPlaying) 24.dp else 36.dp,
+            animationSpec = tween(90),
+            label = "play_pause_corner_radius",
+        )
         Box(
             modifier = Modifier
                 .size(68.dp)
-                .clip(CircleShape)
-                .background(buttonColor.takeIf { it != Color.Unspecified } ?: MaterialTheme.colorScheme.primary)
+                .clip(RoundedCornerShape(playPauseCornerRadius))
+                .background(buttonColor)
                 .bounceClick(onClick = onTogglePlayPause)
                 .testTag("now_playing_play_pause"),
             contentAlignment = Alignment.Center,
@@ -821,6 +1180,8 @@ private fun TransportControls(
             )
         }
 
+        Spacer(Modifier.width(24.dp))
+
         IconButton(onClick = onNext, enabled = state.hasNext) {
             Icon(
                 imageVector = Icons.Default.SkipNext,
@@ -829,20 +1190,151 @@ private fun TransportControls(
                 modifier = Modifier.size(36.dp),
             )
         }
+    }
+}
 
-        IconButton(onClick = onCycleRepeat) {
+/** "Wheel": play/pause is a plain circle at rest, growing a slowly-rotating scalloped edge while
+ * playing - ported from Echo-Music's `cookieIndent`/`WavyShape(9, cookieIndent, rotation)`
+ * treatment (`Player.kt`) verbatim, same easing/duration numbers included. Prev/next stay plain
+ * circular buttons, matching Echo's own layout (the cookie shape is play/pause-only there too). */
+@Composable
+private fun WheelTransportControls(
+    state: NowPlayingState,
+    buttonColor: Color,
+    onTogglePlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onPrevious, enabled = state.hasPrevious) {
             Icon(
-                imageVector = if (state.repeatMode == Player.REPEAT_MODE_ONE) {
-                    Icons.Default.RepeatOne
-                } else {
-                    Icons.Default.Repeat
-                },
-                contentDescription = "Repeat mode",
-                tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.primary
-                },
+                imageVector = Icons.Default.SkipPrevious,
+                contentDescription = "Previous track",
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(36.dp),
+            )
+        }
+
+        Spacer(Modifier.width(24.dp))
+
+        val cookieIndent by animateFloatAsState(
+            targetValue = if (state.isPlaying) 0.08f else 0f,
+            animationSpec = tween(durationMillis = 300, easing = LinearEasing),
+            label = "cookie_indent",
+        )
+        val rotation by rememberInfiniteTransition(label = "cookie_rotation").animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(animation = tween(8000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+            label = "cookie_rotation_value",
+        )
+        val shape = if (cookieIndent > 0f) WavyShape(9, cookieIndent, rotation) else androidx.compose.foundation.shape.CircleShape
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(shape)
+                .background(buttonColor)
+                .bounceClick(onClick = onTogglePlayPause)
+                .testTag("now_playing_play_pause"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (state.isPlaying) "Pause" else "Play",
+                tint = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(34.dp),
+            )
+        }
+
+        Spacer(Modifier.width(24.dp))
+
+        IconButton(onClick = onNext, enabled = state.hasNext) {
+            Icon(
+                imageVector = Icons.Default.SkipNext,
+                contentDescription = "Next track",
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(36.dp),
+            )
+        }
+    }
+}
+
+/** "Pill": prev/play-pause/next joined into one continuous pill, no gap between segments -
+ * rounded-left on prev, square-ish centre on play/pause, rounded-right on next. Adapted from
+ * Echo-Music's `shareShape`/`favShape` asymmetric-corner technique (`Player.kt`, its download/
+ * like button pair) - that's a two-segment split; this extends the same idea to three. */
+@Composable
+private fun PillTransportControls(
+    state: NowPlayingState,
+    buttonColor: Color,
+    onTogglePlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+) {
+    val leftShape = RoundedCornerShape(topStart = 32.dp, bottomStart = 32.dp, topEnd = 4.dp, bottomEnd = 4.dp)
+    val centerShape = RoundedCornerShape(4.dp)
+    val rightShape = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 32.dp, bottomEnd = 32.dp)
+
+    // A real gap between the three segments (6dp - the same spacing Echo-Music's own
+    // PlayerQueueButton row uses between its buttons), not touching edge-to-edge - a fully fused
+    // pill with zero gap read as cramped/congested rather than deliberate. Each segment keeps its
+    // own asymmetric corner shape (rounded outer edge, squarer inner edge), so the "one shape,
+    // three parts" read is still there, just with breathing room.
+    Row(
+        modifier = Modifier
+            .padding(top = 20.dp)
+            .height(64.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 64.dp, height = 64.dp)
+                .clip(leftShape)
+                .background(buttonColor.copy(alpha = 0.4f))
+                .then(if (state.hasPrevious) Modifier.bounceClick(onClick = onPrevious) else Modifier),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.SkipPrevious,
+                contentDescription = "Previous track",
+                tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = if (state.hasPrevious) 1f else 0.4f),
+                modifier = Modifier.size(30.dp),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(width = 92.dp, height = 64.dp)
+                .clip(centerShape)
+                .background(buttonColor)
+                .bounceClick(onClick = onTogglePlayPause)
+                .testTag("now_playing_play_pause"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (state.isPlaying) "Pause" else "Play",
+                tint = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(34.dp),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(width = 64.dp, height = 64.dp)
+                .clip(rightShape)
+                .background(buttonColor.copy(alpha = 0.4f))
+                .then(if (state.hasNext) Modifier.bounceClick(onClick = onNext) else Modifier),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.SkipNext,
+                contentDescription = "Next track",
+                tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = if (state.hasNext) 1f else 0.4f),
+                modifier = Modifier.size(30.dp),
             )
         }
     }

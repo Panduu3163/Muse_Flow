@@ -201,12 +201,12 @@ private fun ListeningSummaryButton(
                     text = "Listening Summary",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    color = Color.White,
                 )
                 Text(
                     text = "$totalMinutesLabel total",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                    color = Color.White.copy(alpha = 0.85f),
                 )
             }
         }
@@ -291,7 +291,7 @@ private fun ListeningSummarySheet(
                         Text(
                             text = "TOTAL LISTENING TIME",
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = Color.White.copy(alpha = 0.85f),
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -303,7 +303,7 @@ private fun ListeningSummarySheet(
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = (-1).sp,
                             ),
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            color = Color.White,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )

@@ -86,22 +86,14 @@ class InnerTubeMusicProvider(private val context: Context) : Provider<TrackResul
     suspend fun suggestions(query: String): List<String> =
         YouTube.searchSuggestions(query).getOrNull()?.queries.orEmpty()
 
-    /** YouTube Music's own "New releases" shelf (`FEmusic_new_releases_albums`) - an endpoint the
-     * legacy provider never had either. */
-    suspend fun getNewReleases(): List<AlbumResult> =
-        YouTube.newReleaseAlbums()
+    /** YouTube Music's own "New releases" shelf (`FEmusic_new_releases`) - an endpoint the legacy
+     * provider never had either. As of the current page layout this is a songs/videos carousel, not
+     * an albums grid (see [YouTube.newReleaseSongs]'s doc), so this returns playable tracks. */
+    suspend fun getNewReleases(): List<TrackResult> =
+        YouTube.newReleaseSongs()
             .getOrThrow()
-            .distinctBy { it.browseId }
-            .map { album ->
-                AlbumResult(
-                    id = album.browseId,
-                    title = album.title,
-                    artist = album.artists?.joinToString(", ") { it.name }.orEmpty(),
-                    imageUrl = album.thumbnail,
-                    songCount = null,
-                    sourceType = MusicSource.YOUTUBE_MUSIC,
-                )
-            }
+            .distinctBy { it.id }
+            .map { it.toTrackResult() }
 
     /**
      * A generic browse page - what a [MoodGenreTile] (or anything else reached by browseId+params

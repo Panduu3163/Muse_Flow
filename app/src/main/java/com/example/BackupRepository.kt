@@ -190,6 +190,8 @@ internal fun LikedSongEntity.toBackupJson(): JSONObject = JSONObject().apply {
     put("likedAt", likedAt)
     put("sourceId", sourceId ?: JSONObject.NULL)
     put("sourceType", sourceType ?: JSONObject.NULL)
+    put("albumId", albumId ?: JSONObject.NULL)
+    put("artistId", artistId ?: JSONObject.NULL)
 }
 
 internal fun JSONObject.toLikedSongEntity(): LikedSongEntity? {
@@ -205,7 +207,9 @@ internal fun JSONObject.toLikedSongEntity(): LikedSongEntity? {
         streamUrl = optNullableString("streamUrl"),
         likedAt = optLong("likedAt", System.currentTimeMillis()),
         sourceId = optNullableString("sourceId"),
-        sourceType = optNullableString("sourceType")
+        sourceType = optNullableString("sourceType"),
+        albumId = optNullableString("albumId"),
+        artistId = optNullableString("artistId"),
     )
 }
 
@@ -221,6 +225,8 @@ internal fun PlaylistTrackEntity.toBackupJson(): JSONObject = JSONObject().apply
     put("sourceId", sourceId ?: JSONObject.NULL)
     put("sourceType", sourceType ?: JSONObject.NULL)
     put("addedAt", addedAt)
+    put("albumId", albumId ?: JSONObject.NULL)
+    put("artistId", artistId ?: JSONObject.NULL)
 }
 
 internal fun JSONObject.toPlaylistTrackEntity(playlistId: Long): PlaylistTrackEntity? {
@@ -237,6 +243,8 @@ internal fun JSONObject.toPlaylistTrackEntity(playlistId: Long): PlaylistTrackEn
         streamUrl = optNullableString("streamUrl"),
         sourceId = optNullableString("sourceId"),
         sourceType = optNullableString("sourceType"),
-        addedAt = optLong("addedAt", System.currentTimeMillis())
+        addedAt = optLong("addedAt", System.currentTimeMillis()),
+        albumId = optNullableString("albumId"),
+        artistId = optNullableString("artistId"),
     )
 }

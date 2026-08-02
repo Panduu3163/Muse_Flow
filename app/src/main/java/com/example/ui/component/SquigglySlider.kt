@@ -48,6 +48,24 @@ fun SquigglySlider(
     modifier: Modifier = Modifier,
     activeColor: Color,
     inactiveColor: Color,
+    /** Cycles visible across the full width - lower is a wider, gentler wave ("Wavy"), higher is
+     * a tighter, busier one ("Squiggly"). Default matches "Wavy"'s own tuning, so anywhere this
+     * is used as a bare visual reference (the style-picker's Wavy preview cell) stays in sync
+     * with the real seek bar without repeating the numbers. */
+    visibleCycles: Float = 1.2f,
+    /** Full phase-cycle duration - lower travels faster. Default matches "Wavy"'s own tuning. */
+    phaseDurationMs: Int = 2200,
+    /** False for a purely visual preview (e.g. the style-picker's grid cells) - skips attaching
+     * this slider's own tap/drag handling entirely, rather than relying on a wrapping clickable
+     * to "win" against it. Compose dispatches gesture recognition child-first, so a real, nested
+     * interactive slider inside a clickable card silently swallows any tap that lands on the wave
+     * itself before the card's own onClick ever sees it - only taps landing on the card's other,
+     * non-slider area (e.g. its label) would have reached the card. Disabling this slider's own
+     * gestures outright, rather than fighting over dispatch order, is what actually fixes that. */
+    interactive: Boolean = true,
+    /** True only for "Squiggly" - a pill/stadium thumb matching Slim/Default's Material3 Slider
+     * thumb shape. "Wavy" keeps the original plain circle. */
+    pillThumb: Boolean = false,
 ) {
     var dragProgress by remember { mutableFloatStateOf(-1f) }
     val isDragging = dragProgress >= 0f
@@ -58,7 +76,7 @@ fun SquigglySlider(
         initialValue = 0f,
         targetValue = (2 * PI).toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1000, easing = LinearEasing),
+            animation = tween(durationMillis = phaseDurationMs, easing = LinearEasing),
             repeatMode = RepeatMode.Restart,
         ),
         label = "wave_phase",
@@ -80,29 +98,36 @@ fun SquigglySlider(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp)
-                .pointerInput(Unit) {
-                    detectTapGestures { offset ->
-                        onSeek((offset.x / size.width).coerceIn(0f, 1f))
+                .then(
+                    if (interactive) {
+                        Modifier
+                            .pointerInput(Unit) {
+                                detectTapGestures { offset ->
+                                    onSeek((offset.x / size.width).coerceIn(0f, 1f))
+                                }
+                            }
+                            .pointerInput(Unit) {
+                                detectDragGestures(
+                                    onDragEnd = {
+                                        if (dragProgress >= 0f) onSeek(dragProgress)
+                                        dragProgress = -1f
+                                    },
+                                    onDragCancel = { dragProgress = -1f },
+                                ) { change, _ ->
+                                    dragProgress = (change.position.x / size.width).coerceIn(0f, 1f)
+                                }
+                            }
+                    } else {
+                        Modifier
                     }
-                }
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragEnd = {
-                            if (dragProgress >= 0f) onSeek(dragProgress)
-                            dragProgress = -1f
-                        },
-                        onDragCancel = { dragProgress = -1f },
-                    ) { change, _ ->
-                        dragProgress = (change.position.x / size.width).coerceIn(0f, 1f)
-                    }
-                }
+                )
         ) {
             val centerY = size.height / 2f
             val activeWidth = size.width * shown
             val strokeWidth = 4.dp.toPx()
-            val waveHeight = 4.dp.toPx() * amplitude
-            // ~2.5 visible cycles across the full width, regardless of screen size.
-            val wavelength = size.width / 14f
+            val waveHeight = 7.dp.toPx() * amplitude
+            // [visibleCycles] full sine cycles across the full width, regardless of screen size.
+            val wavelength = size.width / (visibleCycles * 5.6f)
 
             // Remaining portion: always a flat line.
             drawLine(
@@ -142,12 +167,25 @@ fun SquigglySlider(
                 }
             }
 
-            // Thumb.
-            drawCircle(
-                color = activeColor,
-                radius = 7.dp.toPx(),
-                center = Offset(activeWidth, centerY),
-            )
+            // Thumb: "Squiggly" gets a vertical pill/stadium bar matching Material3's own default
+            // Slider thumb shape (what "Slim"/"Default" use); "Wavy" keeps its original plain
+            // circle.
+            if (pillThumb) {
+                val thumbWidth = 4.dp.toPx()
+                val thumbHeight = 20.dp.toPx()
+                drawRoundRect(
+                    color = activeColor,
+                    topLeft = Offset(activeWidth - thumbWidth / 2f, centerY - thumbHeight / 2f),
+                    size = androidx.compose.ui.geometry.Size(thumbWidth, thumbHeight),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(thumbWidth / 2f),
+                )
+            } else {
+                drawCircle(
+                    color = activeColor,
+                    radius = 7.dp.toPx(),
+                    center = Offset(activeWidth, centerY),
+                )
+            }
         }
     }
 }

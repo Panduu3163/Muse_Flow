@@ -3,6 +3,13 @@ package com.example.ui.component
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import com.example.ui.utils.bounceClick
 import androidx.compose.foundation.layout.Box
@@ -33,6 +40,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -105,49 +115,77 @@ fun MiniPlayer(
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainer),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (state.artworkUrl != null) {
-                            AsyncImage(
-                                model = state.artworkUrl,
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.size(44.dp),
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.MusicNote,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp),
-                            )
+                    // Keyed on title+artist (no stable track id in this state) so a genuine track
+                    // change - not just a metadata refresh of the same track - triggers the
+                    // transition, subtle since this is chrome seen dozens of times a session.
+                    androidx.compose.animation.AnimatedContent(
+                        targetState = state.title to state.artist,
+                        transitionSpec = {
+                            (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(250)) +
+                                androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(250)) { it / 3 })
+                                .togetherWith(
+                                    androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200)) +
+                                        androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(200)) { -it / 3 }
+                                )
+                        },
+                        label = "mini_player_artwork_crossfade",
+                    ) { (_, _) ->
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainer),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (state.artworkUrl != null) {
+                                AsyncImage(
+                                    model = state.artworkUrl,
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.size(44.dp),
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.MusicNote,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
                         }
                     }
 
-                    Column(
+                    androidx.compose.animation.AnimatedContent(
+                        targetState = state.title to state.artist,
+                        transitionSpec = {
+                            (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(250)) +
+                                androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(250)) { it / 3 })
+                                .togetherWith(
+                                    androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200)) +
+                                        androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(200)) { -it / 3 }
+                                )
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .padding(horizontal = 12.dp),
-                    ) {
-                        Text(
-                            text = state.title.ifBlank { "Loading…" },
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = state.artist,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        label = "mini_player_text_crossfade",
+                    ) { (title, artist) ->
+                        Column {
+                            Text(
+                                text = title.ifBlank { "Loading…" },
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = artist,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
 
                     IconButton(
@@ -233,10 +271,66 @@ private fun MiniPlayerBackground(
             Box(modifier = Modifier.fillMaxSize().background(base.copy(alpha = 0.55f)))
         }
 
-        // BackgroundStyle.Solid, BackgroundStyle.Glow (removed - was here, to be
-        // reimplemented later), or a Gradient/Blur requested before the palette/artwork
-        // arrived - an artwork-tinted flat colour rather than a fixed theme grey, so even the
-        // plain style reads as "this bar belongs to this song" instead of a constant black card.
+        // A single slow-rotating blurred/saturated copy - one layer rather than Now Playing's
+        // three, matching Echo-Music's own MiniPlayer LIVE_MESH branch (MiniPlayer.kt) exactly:
+        // container-level 1.5x oversize, 40dp blur, 60s rotation, 128x128 software-decoded
+        // source. The large blur radius is what actually hides the rotation's edge (a smaller one
+        // was tried for frame-rate headroom, but stops masking the seam - see NowPlayingScreen's
+        // LiveMeshBackground doc for the fuller reasoning), so this deliberately matches Echo's
+        // real number rather than a lighter one.
+        style == BackgroundStyle.LiveMesh && artworkUrl != null -> Box(modifier = modifier) {
+            // A fully OPAQUE base fill first, painted before anything else - this bar's own outer
+            // Surface is Color.Transparent (see MiniPlayer's call site), so without a solid layer
+            // under the rotating image, any gap the single 1.5x-scaled layer doesn't cover at some
+            // rotation angle shows straight through to whatever's on screen behind the bar, which
+            // is what actually read as "the mini player looks transparent." Echo-Music's own
+            // MiniPlayer never has this problem for exactly this reason: its outer container always
+            // paints a genuinely opaque `backgroundColor` first (`MiniPlayer.kt`, the Box wrapping
+            // `MiniPlayerBackgroundLayer`), with every background style layered on top of that, not
+            // relying on the style's own layer to provide full coverage by itself.
+            Box(modifier = Modifier.fillMaxSize().background(base))
+
+            val rotation by rememberInfiniteTransition(label = "mini_live_mesh").animateFloat(
+                initialValue = 0f,
+                targetValue = 360f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(60_000, easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart,
+                ),
+                label = "mini_live_mesh_rotation",
+            )
+            val context = androidx.compose.ui.platform.LocalContext.current
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = 1.5f
+                        scaleY = 1.5f
+                    },
+            ) {
+                AsyncImage(
+                    model = coil.request.ImageRequest.Builder(context)
+                        .data(artworkUrl)
+                        .size(128, 128)
+                        .allowHardware(false)
+                        .build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    colorFilter = remember { ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.6f) }) },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .blur(40.dp)
+                        .graphicsLayer { rotationZ = rotation },
+                )
+                Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)))
+            }
+            Box(modifier = Modifier.fillMaxSize().background(base.copy(alpha = 0.4f)))
+        }
+
+        // BackgroundStyle.Solid, or a Gradient/Blur/LiveMesh requested before the
+        // palette/artwork arrived - an artwork-tinted flat colour rather than a fixed theme grey,
+        // so even the plain style reads as "this bar belongs to this song" instead of a constant
+        // black card.
         palette != null -> Box(
             modifier = modifier
                 .background(palette.dominant.copy(alpha = 0.35f).compositeOver(base)),

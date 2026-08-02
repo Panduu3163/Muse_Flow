@@ -59,6 +59,11 @@ interface DownloadedTrackDao {
 
     @Query("DELETE FROM downloaded_tracks WHERE key = :key")
     suspend fun deleteByKey(key: String)
+
+    /** For Storage settings' "Clear downloads" - the row side of the wipe, the actual files are
+     * deleted separately by [DownloadRepository.deleteAllDownloads]. */
+    @Query("DELETE FROM downloaded_tracks")
+    suspend fun clearAll()
 }
 
 /**
@@ -160,6 +165,12 @@ interface LikedSongDao {
 
     @Query("DELETE FROM liked_songs WHERE key = :key")
     suspend fun unlike(key: String)
+
+    /** For [LikedSongsRepository]'s one-time artistId/albumId backfill - a like made before that
+     * plumbing was wired correctly has these permanently null otherwise, since nothing else ever
+     * rewrites an existing row's these two fields. */
+    @Query("UPDATE liked_songs SET artistId = :artistId, albumId = :albumId WHERE key = :key")
+    suspend fun updateArtistAndAlbumId(key: String, artistId: String?, albumId: String?)
 }
 
 /** A playlist the user has created (or imported from an online source), for Library's real
@@ -247,6 +258,17 @@ interface PlaylistTrackDao {
      * orphaned in the table forever. */
     @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId")
     suspend fun deleteAllForPlaylist(playlistId: Long)
+
+    /** One-shot (not observed), across every playlist - only [PlaylistRepository]'s one-time
+     * artistId/albumId backfill needs the whole table at once. */
+    @Query("SELECT * FROM playlist_tracks")
+    suspend fun getAll(): List<PlaylistTrackEntity>
+
+    /** By key alone (not scoped to one playlistId) - the same track can be duplicated across
+     * several playlists sharing the same key, and a backfilled artistId/albumId is correct for
+     * every one of them at once. */
+    @Query("UPDATE playlist_tracks SET artistId = :artistId, albumId = :albumId WHERE key = :key")
+    suspend fun updateArtistAndAlbumId(key: String, artistId: String?, albumId: String?)
 }
 
 /** A followed artist (see [FollowedArtistsRepository]) - [knownTrackIds] is the comma-joined

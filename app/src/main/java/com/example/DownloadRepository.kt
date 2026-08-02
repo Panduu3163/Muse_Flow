@@ -175,6 +175,16 @@ class DownloadRepository private constructor(context: Context) {
         dao.deleteByKey(key)
     }
 
+    /** For Storage settings' "Clear downloads": cancels anything mid-download, wipes every file
+     * under [downloadsDir] (both `.audio` and `.cover` siblings), and clears the Room table so
+     * nothing downloaded is left half-referencing a file that no longer exists. */
+    suspend fun deleteAllDownloads() {
+        activeJobs.keys.toList().forEach { key -> activeJobs.remove(key)?.cancel() }
+        _inProgress.update { emptyMap() }
+        dao.clearAll()
+        downloadsDir(appContext).listFiles()?.forEach { it.delete() }
+    }
+
     /** The single download-resolution path, used by every caller of [startDownload] regardless of
      * which screen triggered it (Search, an Album/Playlist/Artist tracklist, Now Playing, or a
      * re-download from the Downloads list) - mirrors the exact priority `Track.toQueueMediaItem`

@@ -27,8 +27,12 @@ import com.example.audio.EqualizerAudioProcessor
 import com.example.audio.NormalizerAudioProcessor
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
+import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CoroutineScope
@@ -57,6 +61,10 @@ import java.io.IOException
  * playable JioSaavn stream URL just before ExoPlayer needs it. This is Media3's documented lazy
  * playlist pattern, and it keeps all network/decryption work off the UI/controller side.
  */
+/** The custom session command backing the lock-screen/notification heart button - see
+ * [PlaybackService.PlaybackServiceCallback.onCustomCommand]. */
+private const val ACTION_TOGGLE_LIKE = "com.example.TOGGLE_LIKE"
+
 class PlaybackService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
@@ -65,6 +73,10 @@ class PlaybackService : MediaSessionService() {
     private val equalizerController = EqualizerController()
     private val cachedDataSourceFactory by lazy { buildCachedDataSourceFactory() }
     private var prefetchJob: Job? = null
+
+    /** Re-subscribed on every track change - drives the lock-screen/notification heart button's
+     * filled-vs-outline state (see [updateLikeCustomLayout]). */
+    private var likeObserverJob: Job? = null
 
     // Repeat mode is ALL, so auto-skipping past a failed track (see onPlayerError below) would
     // spin through the whole queue forever if NOTHING can play - overwhelmingly the "no network"
@@ -105,6 +117,7 @@ class PlaybackService : MediaSessionService() {
                     artworkUrl = metadata.artworkUri?.toString(),
                     // Only a real file survives a restart; an online URL would be expired by then.
                     localFilePath = uri?.takeIf { it.scheme == "file" }?.toString(),
+                    artistId = metadata.extras?.getString("artistId"),
                 )
             }
             if (items.isEmpty()) return@launch
@@ -161,6 +174,7 @@ class PlaybackService : MediaSessionService() {
                     .setTitle(item.title)
                     .setArtist(item.artist)
                     .setAlbumTitle(item.album)
+                    .setExtras(android.os.Bundle().apply { item.artistId?.let { putString("artistId", it) } })
                     .apply {
                         when {
                             localCoverUri != null -> setArtworkUri(localCoverUri)
@@ -186,8 +200,20 @@ class PlaybackService : MediaSessionService() {
     /** The videoId currently being warmed, so overlapping transitions don't resolve it twice. */
     private var preloadingVideoId: String? = null
 
+    /** The in-flight preload resolve, if any - cancelled on every new transition so a rapid run
+     * of skips can't leave a growing pile of stale resolves competing with the one the player
+     * actually needs next (the same shared cipher/InnerTube resolution pipeline the real,
+     * currently-needed resolve also goes through - an abandoned preload doesn't just waste
+     * bandwidth, it queues up behind everything else still running and delays the real one). */
+    private var preloadJob: Job? = null
+
     /** Guards against stacking autoplay fetches if STATE_ENDED fires more than once. */
     private var autoplayInFlight = false
+
+    /** Same 11-char id shape check [TrackResult.hasRealVideoId] uses - a local file or a stored
+     * track with no real YouTube id would otherwise seed "radio" with a nonsense id and just fail. */
+    private fun String.looksLikeRealVideoId(): Boolean =
+        length == 11 && all { it.isLetterOrDigit() || it == '_' || it == '-' }
 
     /**
      * Appends tracks similar to whatever just finished, so a finished queue continues rather than
@@ -199,9 +225,18 @@ class PlaybackService : MediaSessionService() {
      * old approach (searching the artist name as a plain query) is what produced "searched for a
      * Bengali indie band, queue ends, autoplay drifts into an unrelated Hindi track" - a generic
      * name search returns whatever else matches that text, not more of the same vein, and for a
-     * thin-catalog/less-common artist that's often noise. Falls back to the old artist-name search
-     * only if the radio endpoint returns nothing (e.g. a non-YouTube source, or the request failed) -
-     * some continuation is still better than none.
+     * thin-catalog/less-common artist that's often noise.
+     *
+     * On top of that single-track seed, a second radio is blended in from one of the user's own
+     * top-played tracks (weighted toward higher play counts, picked fresh each time so it's not the
+     * same track every autoplay) - this is what keeps a long autoplay session drifting toward the
+     * user's broader taste instead of only ever following wherever the last-played song's radio
+     * goes. Needs at least a handful of history entries to kick in; a fresh install with little/no
+     * history falls back to the single-seed behavior exactly as before - never regresses on day one.
+     *
+     * Falls back to the old artist-name search only if every radio attempt above returns nothing
+     * (e.g. a non-YouTube source, or the requests failed) - some continuation is still better than
+     * none.
      */
     private fun autoplayRelated(player: ExoPlayer) {
         if (autoplayInFlight) return
@@ -214,20 +249,53 @@ class PlaybackService : MediaSessionService() {
         autoplayInFlight = true
         serviceScope.launch {
             val router = MusicSearchRouter(this@PlaybackService)
-            // Same 11-char id shape check TrackResult.hasRealVideoId() uses - a local file or a
-            // stored track with no real YouTube id would otherwise seed "radio" with a nonsense id
-            // and just fail.
-            val isRealVideoId = mediaId.length == 11 && mediaId.all { it.isLetterOrDigit() || it == '_' || it == '-' }
-            val radioResults = if (isRealVideoId) {
+            val primaryResults = if (mediaId.looksLikeRealVideoId()) {
                 runCatching { router.getRadioTracks(mediaId) }.getOrNull().orEmpty()
             } else {
                 emptyList()
             }
-            val candidates = radioResults.ifEmpty {
+
+            // Taste-blend seed: a weighted-random pick from top-played history, excluding whatever
+            // just finished so it can't just re-seed the same radio twice in a row.
+            val topPlayed = runCatching {
+                PlaybackHistoryRepository.getInstance(this@PlaybackService).observeTopPlayed(15).first()
+            }.getOrNull().orEmpty()
+            val tasteSeed = topPlayed
+                .filter { it.sourceType == MusicSource.YOUTUBE_MUSIC.name && it.sourceId?.looksLikeRealVideoId() == true }
+                .filter { it.sourceId != mediaId }
+                .let { candidates ->
+                    if (candidates.size < 5) null else {
+                        // Weighted by play count so heavier favorites surface more often, without
+                        // it being deterministically the single most-played track every time.
+                        val totalWeight = candidates.sumOf { it.playCount.coerceAtLeast(1) }
+                        var pick = (0 until totalWeight).random()
+                        candidates.firstOrNull { entry ->
+                            pick -= entry.playCount.coerceAtLeast(1)
+                            pick < 0
+                        } ?: candidates.random()
+                    }
+                }
+            val tasteResults = tasteSeed?.sourceId?.let { seedId ->
+                runCatching { router.getRadioTracks(seedId) }.getOrNull().orEmpty()
+            }.orEmpty()
+
+            val candidates = if (primaryResults.isEmpty() && tasteResults.isEmpty()) {
                 val artist = finished.mediaMetadata.artist?.toString()?.takeIf { it.isNotBlank() }
                 if (artist == null) emptyList() else runCatching { router.searchTracks(artist) }.getOrNull().orEmpty()
+            } else {
+                // Interleave rather than concatenate, so the taste-blend seed's tracks aren't all
+                // stuck at the tail end of a 10-track batch - roughly 2 primary picks per 1 taste
+                // pick, keeping the just-finished track's own radio as the dominant signal.
+                buildList {
+                    val p = primaryResults.iterator()
+                    val t = tasteResults.iterator()
+                    while (p.hasNext() || t.hasNext()) {
+                        repeat(2) { if (p.hasNext()) add(p.next()) }
+                        if (t.hasNext()) add(t.next())
+                    }
+                }
             }
-            val related = candidates.filter { it.id !in existingIds }.take(10)
+            val related = candidates.distinctBy { it.id }.filter { it.id !in existingIds }.take(10)
 
             if (related.isNotEmpty()) {
                 player.addMediaItems(
@@ -240,6 +308,7 @@ class PlaybackService : MediaSessionService() {
                                     .setTitle(track.title)
                                     .setArtist(track.artist)
                                     .setAlbumTitle(track.source)
+                                    .setExtras(android.os.Bundle().apply { track.artistId?.let { putString("artistId", it) } })
                                     .apply { track.imageUrl?.let { setArtworkUri(it.toUri()) } }
                                     .build()
                             )
@@ -281,8 +350,9 @@ class PlaybackService : MediaSessionService() {
         val videoId = youTubeVideoIdFromResolvePlaceholder(nextUri) ?: return
         if (videoId == preloadingVideoId) return
 
+        preloadJob?.cancel()
         preloadingVideoId = videoId
-        serviceScope.launch(Dispatchers.IO) {
+        preloadJob = serviceScope.launch(Dispatchers.IO) {
             runCatching { StreamResolverRouter.resolve(this@PlaybackService, videoId) }
             preloadingVideoId = null
         }
@@ -363,6 +433,7 @@ class PlaybackService : MediaSessionService() {
                 preloadNextTrack(player)
                 saveQueue(player)
                 mediaItem?.let(::prefetchFullTrack)
+                observeLikeStateForCurrentTrack(player)
             }
 
             override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
@@ -370,6 +441,17 @@ class PlaybackService : MediaSessionService() {
             }
         })
 
+        // Which processors are *active* is decided once, by Media3's AudioProcessingPipeline, at
+        // the moment it configures itself against the current track's audio format - not
+        // re-checked on every buffer. So flipping `enabled`/intensity on an already-running
+        // processor (Normalizer/BassBoost/Crossfeed here, the equalizer below) changes the value
+        // the processor holds, but the pipeline already decided whether that processor is in the
+        // chain at all and never revisits that decision until it configures again - which is why
+        // none of these audibly did anything without a track change. A same-position seek is the
+        // lightweight way to force that reconfigure: it flushes and re-negotiates the renderer's
+        // audio pipeline against the *current* buffered media (no network refetch, no real skip),
+        // which is exactly the "revisit isActive() now" trigger Media3 doesn't otherwise expose.
+        var previousAudioFxSettings: Triple<Boolean, Pair<Boolean, Int>, Pair<Boolean, Int>>? = null
         serviceScope.launch {
             AppSettingsRepository(this@PlaybackService).state.collect { settings ->
                 player.skipSilenceEnabled = settings.skipSilence
@@ -378,6 +460,19 @@ class PlaybackService : MediaSessionService() {
                 NormalizerAudioProcessor.INSTANCE.setEnabled(settings.audioNormalizationEnabled)
                 BassBoostAudioProcessor.INSTANCE.setIntensity(settings.bassBoostEnabled, settings.bassBoostIntensity)
                 CrossfeedAudioProcessor.INSTANCE.setIntensity(settings.crossfeedEnabled, settings.crossfeedIntensity)
+
+                val current = Triple(
+                    settings.audioNormalizationEnabled,
+                    settings.bassBoostEnabled to settings.bassBoostIntensity,
+                    settings.crossfeedEnabled to settings.crossfeedIntensity,
+                )
+                // Skip the very first emission (startup's initial state, nothing to reconfigure
+                // against yet) and skip entirely when nothing audio-relevant actually changed, so
+                // unrelated settings changes (theme, density, ...) can't trigger a spurious seek.
+                if (previousAudioFxSettings != null && previousAudioFxSettings != current && player.mediaItemCount > 0) {
+                    player.seekTo(player.currentPosition)
+                }
+                previousAudioFxSettings = current
             }
         }
 
@@ -394,10 +489,22 @@ class PlaybackService : MediaSessionService() {
                     equalizerController.apply(EqualizerRepository.getInstance(this@PlaybackService).settings.first())
                 }
             }
+
+            // Drives the optional codec-info line under Now Playing's timeline - see
+            // [CurrentCodecInfo]'s doc for why this is a standalone singleton rather than a real
+            // NowPlayingState field.
+            override fun onAudioInputFormatChanged(
+                eventTime: AnalyticsListener.EventTime,
+                format: androidx.media3.common.Format,
+                decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?,
+            ) {
+                CurrentCodecInfo.update(format.sampleMimeType, format.bitrate)
+            }
         })
         // Re-applies live whenever the user changes a setting on EqualizerSettingsScreen - this
         // service never needs a direct reference to that screen (or vice versa), same
         // Flow-driven decoupling the rest of this app's settings already use.
+        var previousEqSettings: Pair<Boolean, List<Int>>? = null
         serviceScope.launch {
             EqualizerRepository.getInstance(this@PlaybackService).settings.collect { settings ->
                 // Platform effect first (a silent no-op on devices that refuse it), then our own
@@ -407,6 +514,17 @@ class PlaybackService : MediaSessionService() {
                     enabled = settings.enabled,
                     gains = settings.bandLevelsMillibel.map(EqualizerAudioProcessor::millibelToDb),
                 )
+
+                // Same reconfigure-forcing seek as the Normalizer/BassBoost/Crossfeed block above
+                // - the DSP processor's isActive() flip otherwise never reaches an already-running
+                // pipeline. The platform effect (equalizerController.apply above) doesn't need
+                // this: it's a real AudioFlinger effect, not a Media3 AudioProcessor baked into the
+                // pipeline at configure time.
+                val current = settings.enabled to settings.bandLevelsMillibel
+                if (previousEqSettings != null && previousEqSettings != current && player.mediaItemCount > 0) {
+                    player.seekTo(player.currentPosition)
+                }
+                previousEqSettings = current
             }
         }
 
@@ -429,6 +547,11 @@ class PlaybackService : MediaSessionService() {
             .setCallback(PlaybackServiceCallback())
             .apply { openAppIntent?.let { setSessionActivity(it) } }
             .build()
+
+        // Seeds the lock-screen/notification heart button's initial state - onMediaItemTransition
+        // (which also drives this) only fires on an actual transition, not for whatever the
+        // restored queue's starting track already was.
+        observeLikeStateForCurrentTrack(player)
     }
 
     /**
@@ -527,6 +650,96 @@ class PlaybackService : MediaSessionService() {
             }
             return future
         }
+
+        // Declares the "toggle like" custom command available to every controller (the system's
+        // notification/lock-screen controller included) - without this, MediaSession.setCustomLayout
+        // below would have nothing to attach the button to.
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): MediaSession.ConnectionResult {
+            val base = super.onConnect(session, controller)
+            return MediaSession.ConnectionResult.accept(
+                base.availableSessionCommands.buildUpon()
+                    .add(SessionCommand(ACTION_TOGGLE_LIKE, android.os.Bundle.EMPTY))
+                    .build(),
+                base.availablePlayerCommands,
+            )
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: android.os.Bundle,
+        ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction == ACTION_TOGGLE_LIKE) {
+                val player = mediaSession?.player ?: return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                val track = currentTrackFromPlayer(player)
+                if (track != null) {
+                    serviceScope.launch {
+                        val repository = LikedSongsRepository.getInstance(this@PlaybackService)
+                        val isLiked = repository.observeIsLiked(track).first()
+                        if (isLiked) repository.unlike(track) else repository.like(track)
+                    }
+                }
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            return super.onCustomCommand(session, controller, customCommand, args)
+        }
+    }
+
+    /** Builds enough of a [Track] from the player's own current metadata to like/unlike it - the
+     * lock-screen/notification button has no [TrackResult] to work from, only whatever
+     * [MediaMetadata] the now-playing item already carries. */
+    private fun currentTrackFromPlayer(player: Player): Track? {
+        val metadata = player.mediaMetadata
+        val title = metadata.title?.toString() ?: return null
+        val artist = metadata.artist?.toString().orEmpty()
+        val mediaId = player.currentMediaItem?.mediaId
+        val isRealVideoId = mediaId?.looksLikeRealVideoId() == true
+        return Track(
+            title = title,
+            artist = artist,
+            album = metadata.albumTitle?.toString().orEmpty(),
+            duration = "",
+            plays = "",
+            gradientIndex = 0,
+            imageUrl = metadata.artworkUri?.toString(),
+            sourceType = if (isRealVideoId) MusicSource.YOUTUBE_MUSIC else null,
+            sourceId = if (isRealVideoId) mediaId else null,
+            artistId = metadata.extras?.getString("artistId"),
+        )
+    }
+
+    /** Re-subscribes to the current track's liked state on every track change, keeping the
+     * lock-screen/notification heart button's filled-vs-outline icon in sync - including when the
+     * like itself happens from elsewhere in the app (Now Playing's own heart button), not just
+     * from this custom command. */
+    private fun observeLikeStateForCurrentTrack(player: ExoPlayer) {
+        likeObserverJob?.cancel()
+        val track = currentTrackFromPlayer(player)
+        if (track == null) {
+            updateLikeCustomLayout(isLiked = false)
+            return
+        }
+        likeObserverJob = serviceScope.launch {
+            LikedSongsRepository.getInstance(this@PlaybackService).observeIsLiked(track).collect { isLiked ->
+                updateLikeCustomLayout(isLiked)
+            }
+        }
+    }
+
+    private fun updateLikeCustomLayout(isLiked: Boolean) {
+        // The built-in ICON_HEART_FILLED/ICON_HEART_UNFILLED constants let surfaces that know how
+        // to render them (system media notification, Android Auto, ...) draw a properly themed/
+        // tinted heart; setCustomIconResId is the fallback for anything that doesn't.
+        val button = CommandButton.Builder(if (isLiked) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED)
+            .setDisplayName(if (isLiked) "Unlike" else "Like")
+            .setCustomIconResId(if (isLiked) R.drawable.ic_notif_heart_filled else R.drawable.ic_notif_heart_outline)
+            .setSessionCommand(SessionCommand(ACTION_TOGGLE_LIKE, android.os.Bundle.EMPTY))
+            .build()
+        mediaSession?.setCustomLayout(listOf(button))
     }
 
     /**

@@ -6,8 +6,9 @@ enum class BackgroundStyle(val label: String) {
     /** Vertical gradient built from the artwork's dominant and muted colours. */
     Gradient("Album gradient"),
     /** The artwork itself, blurred and dimmed behind the content. */
-    Blur("Blurred artwork")
-    // Glow removed - was a drifting-blob effect, to be reimplemented later.
+    Blur("Blurred artwork"),
+    /** Three blurred, saturated copies of the artwork rotating independently behind the content. */
+    LiveMesh("Live mesh")
 }
 
 /** Which theme color drives the Now Playing control buttons. */
@@ -20,9 +21,27 @@ enum class PlayerButtonColorOption(val label: String) {
 /** Visual style of the Now Playing progress slider. */
 enum class PlayerSliderStyle(val label: String) {
     Default("Default"),
+    /** A gentle, wide-period travelling sine wave. */
     Wavy("Wavy"),
     /** A thinner track for a more restrained player. */
-    Slim("Slim")
+    Slim("Slim"),
+    /** A tighter, faster-wiggling wave than [Wavy] - more playful, less smooth. */
+    Squiggly("Squiggly")
+}
+
+/** Visual style of Now Playing's prev/play-pause/next transport row - ported from Echo-Music's
+ * own player customisation (`useNewPlayerDesign`'s cookie/wavy play-pause shape, and its Apple
+ * Music-style joined-pill row), not independently designed. */
+enum class PlayerTransportStyle(val label: String) {
+    /** The original three separate circular buttons - unchanged default. */
+    Static("Static"),
+    /** Play/pause gets a slowly-rotating scalloped "cookie" edge while playing, flattening to a
+     * plain circle when paused - Echo-Music's `WavyShape`/`cookieIndent` treatment. */
+    Wheel("Wheel"),
+    /** Prev/play/next joined into one continuous pill - rounded left edge on prev, rounded right
+     * edge on next, square-ish centre for play/pause - Echo-Music's `shareShape`/`favShape`
+     * asymmetric-corner technique, extended to three segments. */
+    Pill("Pill")
 }
 
 /** Horizontal alignment of the lyrics text block. */
@@ -39,6 +58,10 @@ enum class WordAnimationStyle(val label: String) {
     Scale("Scale"),
     Wave("Wave"),
     Karaoke("Karaoke sweep"),
+    Metro("Metro"),
+    Fluid("Fluid (V2)"),
+    ViviMusic("Vivi Music"),
+    AppleMusic("Apple Music"),
 }
 
 /** Which bottom-nav tab is shown when the app is launched. */
@@ -72,6 +95,45 @@ enum class DisplayDensity(val label: String) {
 }
 
 /**
+ * Identifies one of MuseFlow's lyrics sources - see [LyricsViewModel] for how they're tried.
+ * [label] is what the drag-reorder settings screen shows; the enum name itself is what's
+ * persisted (comma-joined) in [AppSettingsState.lyricsProviderOrder], so renaming a `label` is
+ * safe but renaming an entry is not (it would silently reset any saved custom order back to
+ * default for existing users, since [AppSettingsRepository] falls back to the default order for
+ * any unrecognized name).
+ */
+enum class LyricsProviderId(val label: String) {
+    YouLyPlus("YouLyPlus"),
+    PaxSenix("PaxSenix"),
+    BetterLyrics("Better Lyrics"),
+    SimpMusic("SimpMusic"),
+    LrcLib("LRCLib"),
+    Kugou("Kugou");
+
+    companion object {
+        /** YouLyPlus, PaxSenix, BetterLyrics, SimpMusic, LrcLib, Kugou - the order this feature
+         * shipped with. */
+        val DEFAULT_ORDER = listOf(YouLyPlus, PaxSenix, BetterLyrics, SimpMusic, LrcLib, Kugou)
+
+        /** Parses the comma-joined DataStore value back into an order, falling back to
+         * [DEFAULT_ORDER] wholesale if it's blank. Unrecognized names (e.g. from a future
+         * downgrade) are dropped rather than crashing; any provider missing from the saved value
+         * (e.g. a newly added one after an update) is appended at the end so it's still reachable
+         * instead of silently never tried. */
+        fun deserialize(value: String): List<LyricsProviderId> {
+            if (value.isBlank()) return DEFAULT_ORDER
+            val saved = value.split(",").mapNotNull { name ->
+                runCatching { valueOf(name.trim()) }.getOrNull()
+            }
+            val missing = entries.filter { it !in saved }
+            return (saved + missing).ifEmpty { DEFAULT_ORDER }
+        }
+
+        fun serialize(order: List<LyricsProviderId>): String = order.joinToString(",") { it.name }
+    }
+}
+
+/**
  * All Appearance-adjacent app preferences beyond the app-wide background [ThemeState].
  * These are UI-only preferences: persisted via DataStore (see [AppSettingsViewModel]) so
  * choices survive relaunch, but (aside from the theme itself) don't yet drive real
@@ -88,7 +150,11 @@ data class AppSettingsState(
     val cropAlbumArt: Boolean = true,
     val playerButtonColor: PlayerButtonColorOption = PlayerButtonColorOption.Primary,
     val playerSliderStyle: PlayerSliderStyle = PlayerSliderStyle.Default,
-    val swipeToChangeSong: Boolean = false,
+    val playerTransportStyle: PlayerTransportStyle = PlayerTransportStyle.Static,
+    /** Horizontal swipe-to-skip on the Now Playing artwork. On by default to match the gesture's
+     * existing always-on behaviour; vertical swipe-to-adjust-volume is independent and unaffected
+     * by this setting - see [com.example.ui.screens.artworkSwipeGestures]. */
+    val swipeToChangeSongEnabled: Boolean = true,
     val showAnimatedCanvas: Boolean = false,
     val rotatingThumbnailAnimation: Boolean = false,
     val showCommentButton: Boolean = false,
@@ -96,6 +162,8 @@ data class AppSettingsState(
     val miniPlayerSwipeSensitivity: Int = 50,
 
     // Lyrics
+    /** User-configurable fallback order for lyrics sources - see [LyricsViewModel]. */
+    val lyricsProviderOrder: List<LyricsProviderId> = LyricsProviderId.DEFAULT_ORDER,
     val lyricsTextPosition: LyricsTextPosition = LyricsTextPosition.Center,
     val wordAnimationStyle: WordAnimationStyle = WordAnimationStyle.Fade,
     val glowingLyricsEffect: Boolean = false,
@@ -147,5 +215,17 @@ data class AppSettingsState(
     val showDownloadedPlaylist: Boolean = true,
     val showExportedPlaylist: Boolean = false,
     val showTopPlaylist: Boolean = true,
-    val showCachedPlaylist: Boolean = false
+    val showCachedPlaylist: Boolean = false,
+
+    /** The header shortcut on Library (next to search/stats) that opens a sheet of recently
+     * played tracks - independent of [showCachedPlaylist], which is the "Recent" chip *section*
+     * further down the same screen. Defaults on: unlike the chip row, this costs no extra screen
+     * real estate when collapsed, so there's no reason to hide it by default. */
+    val showRecentlyPlayedShortcut: Boolean = true,
+
+    // Privacy
+    /** Sets `FLAG_SECURE` on the activity window (applied reactively in `MuseFlowApp`), so the
+     * app is blocked from screenshots/screen recording and hidden from the recents-app switcher
+     * thumbnail. */
+    val disableScreenshots: Boolean = false
 )

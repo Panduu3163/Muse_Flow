@@ -27,6 +27,9 @@ data class SavedQueueItem(
     val artworkUrl: String?,
     /** Only set for tracks that play from a local file; online tracks are re-resolved on demand. */
     val localFilePath: String?,
+    /** The artist's browseId, when known - lets Now Playing's artist name keep working after a
+     * queue restore, not just on a freshly-started queue. */
+    val artistId: String? = null,
 )
 
 /** A restored queue: what was loaded, which item was active, and how far into it. */
@@ -56,6 +59,7 @@ class QueueRepository private constructor(private val appContext: Context) {
                         put("album", item.album)
                         item.artworkUrl?.let { put("artworkUrl", it) }
                         item.localFilePath?.let { put("localFilePath", it) }
+                        item.artistId?.let { put("artistId", it) }
                     }
                 )
             }
@@ -88,6 +92,8 @@ class QueueRepository private constructor(private val appContext: Context) {
                     artworkUrl = obj.takeIf { !it.isNull("artworkUrl") }?.optString("artworkUrl"),
                     localFilePath = obj.takeIf { !it.isNull("localFilePath") }
                         ?.optString("localFilePath"),
+                    artistId = obj.takeIf { !it.isNull("artistId") }?.optString("artistId")
+                        ?.takeIf { it.isNotBlank() },
                 )
             }
         }.getOrNull().orEmpty()
