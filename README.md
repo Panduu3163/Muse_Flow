@@ -113,7 +113,7 @@ Genuine thanks to the maintainers of these projects for their work being open en
 
 ## 📦 Getting the App
 
-Install the APK located on the *releases* section
+Install the APK located on the [*releases*](https://github.com/Panduu3163/Muse_Flow/releases) section
 
 ---
 
