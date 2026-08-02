@@ -19,44 +19,54 @@ Built with Kotlin, Jetpack Compose, and Media3 — a personal project aiming for
 
 MuseFlow is a **personal hobby project**, not a commercial product. It has bugs. It's actively being worked on. It exists because I wanted to learn and build something I'd actually use — not to compete with anyone.
 
-It also relies on unofficial/reverse-engineered access to some music platforms' internal APIs (details below), which exists in a legal gray area regarding those platforms' Terms of Service. This is the same trade-off made by several well-known open-source music apps this project draws inspiration and code from. Use accordingly.
+It also relies on unofficial/reverse-engineered access to YouTube Music's internal API (details below), which exists in a legal gray area regarding YouTube's Terms of Service. This is the same trade-off made by several well-known open-source music apps this project draws inspiration and code from. Use accordingly.
 
 ---
 
 ## ✨ Features
 
 ### 🎧 Playback
-- Background playback with a real, controllable media notification (play/pause, cover art), backed by a foreground service so it survives the screen turning off — and stops cleanly when the app is swiped away from Recents, so nothing keeps playing invisibly
+- Background playback with a real, controllable media notification (play/pause, like, cover art), backed by a foreground service so it survives the screen turning off — and stops cleanly when the app is swiped away from Recents, so nothing keeps playing invisibly
+- A **heart/like button on the lock screen and notification**, wired to the same Liked Songs list as the in-app button — like a track without unlocking your phone
 - Real shuffle/repeat (wired to ExoPlayer, not cosmetic toggles), a live queue view, and swipe-left/right on the album art to skip tracks (opt-in, off by default)
+- A real 7-band equalizer plus normalization, crossfade, bass boost, and crossfeed — all backed by actual DSP that audibly changes the sound, not settings that silently do nothing
 - Sleep timer with a live countdown shown next to the icon
-- Dynamic codec/bitrate display that reflects whatever's actually decoding, not a static label
-- A mini-player with previous/next/close, always in sync with what's really playing even after the app's been fully closed and reopened
+- Dynamic codec/bitrate display that reflects whatever's actually decoding, styled as a small pill under the seek bar, toggleable in Settings
+- **Taste-aware autoplay** — when a queue runs out, the next track blends YouTube Music's own "radio" continuation for the last song with a weighted pick from your own most-played tracks, instead of always drifting toward whatever the last song happened to be
+- A mini-player with previous/next/close and smooth crossfade transitions between tracks, always in sync with what's really playing even after the app's been fully closed and reopened
 - Offline downloads with real download progress notifications, running in a foreground service so a download in progress survives the screen turning off
 - Local device file playback alongside streaming — toggle search between Online and On-Device
-- Automatic fallback across sources if one is down or has no results
+- Automatic fallback across YouTube Music client types and stream extraction paths if one is rejected or blocked
 
 ### 🔍 Discovery
 - Search across **Songs, Albums, Artists, and Playlists**, with state that survives navigating away and back (no lost query/results/scroll position)
-- Find a song from a remembered lyric line, not just its title — YouTube Music's own search backend (the same one its official app uses) handles the matching; results are ranked for relevance instead of one source's results always burying the other's
+- Find a song from a remembered lyric line, not just its title — YouTube Music's own search backend (the same one its official app uses) handles the matching
 - Recent search history (capped, shown only while the search field is focused)
-- Real artist pages, including monthly listener counts
+- Real artist pages, including monthly listener counts, with clickable artist names throughout the app — from Search, Now Playing, restored queues, Liked Songs, and playlists alike
 - Real Home feed shelves (Recently Played, mood/genre-based shelves) — cached for offline viewing, auto-refreshes when you're back online, with a dynamic time-of-day greeting on the Home header
+- Charts and New Releases, sourced live from YouTube Music's real charts/new-music endpoints
 
 ### 🎤 Lyrics
 - Real-time synced lyrics, scrolling in time with playback
-- Word-by-word lyric highlighting where available
-- Multiple lyrics sources with automatic fallback for better coverage
+- Word-by-word lyric highlighting in 9 different animation styles (Karaoke, Bounce, Scale, Wave, Fade, Metro, Fluid, Vivi Music, Apple Music), selectable in Settings
+- **6 independent lyrics sources** (YouLyPlus, PaxSenix, Better Lyrics, SimpMusic, LRCLib, Kugou) with a drag-to-reorder fallback priority list, so a gap in one source's catalog rarely means no lyrics at all
 
 ### 🎨 Personalization
 - First-launch onboarding with a custom display name and profile photo
 - AMOLED (true black) and Gradient theme modes, with selectable color palettes
-- Deep Appearance/Player/Lyrics customization options
+- **4 Now Playing background styles**: Solid, Album Gradient, Blurred Artwork, and Live Mesh (three blurred, saturated copies of the album art rotating independently behind the content)
+- **3 selectable transport button styles**: Static (classic separate buttons), Wheel (play/pause gets a rotating scalloped edge while playing), and Pill (prev/play/next joined into one continuous rounded pill)
+- Wavy/squiggly seek-bar styles with independently tunable speed and wavelength
+- Settings organized into 12 focused categories (General, Appearance, Player, Playback, Lyrics, Audio, Mini Player, Library Sections, Privacy, Storage, Backup, About) instead of one long flat list
 
 ### 📚 Library
 - Quick-access tiles for Liked Songs, Downloaded tracks, Cached (Home's offline cache), My Top 50 (real play-count tracking, not just recency), and on-device Local files — all backed by real local data, nothing hardcoded
 - Like/unlike any track from anywhere it's listed, and download every Liked Song in one tap
 - Create playlists and actually add songs to them — from Search, Downloads, or Liked Songs — or save a whole online playlist into your library with one tap
 - Playlist covers are a real image when available, or an auto-generated 2×2 collage built from the playlist's own tracks otherwise
+- **Import playlists from CSV or M3U**, matched back to real, playable tracks
+- Full backup/restore (Liked Songs, playlists, settings) to a single portable file
+- In-app update check against this project's GitHub releases — notifies once per new version, never silently self-updates
 
 ---
 
@@ -74,13 +84,15 @@ It also relies on unofficial/reverse-engineered access to some music platforms' 
 
 ### How music sourcing works
 
-MuseFlow doesn't host or own any music. It resolves playable audio through a **provider-chain architecture** — multiple independent sources, tried and merged so no single point of failure takes down the app:
+MuseFlow doesn't host or own any music. All streaming audio comes from **YouTube Music**, resolved through a vendored `:innertube` module (a Kotlin port of YouTube Music's internal API) rather than any official, authorized API:
 
-- **JioSaavn** — primary catalog source, public API
-- **YouTube Music** — a full authenticated streaming pipeline (visitor identity, BotGuard proof-of-origin token generation, signature/cipher deobfuscation) for access to YouTube's much broader catalog
-- **LRCLib + BetterLyrics** — synced lyrics, with automatic fallback between sources for better coverage
+- A chain of YouTube client identities (Android VR, TV-embedded, iOS, and others) is tried in an order tuned by real-world testing, since which client is accepted varies by video, region, and over time
+- [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor) handles signature/cipher deobfuscation for clients that need it
+- A separate legacy resolution pipeline (visitor identity, BotGuard proof-of-origin tokens, its own cipher deobfuscation) remains available as a fallback backend
+- **Local device files** are a fully independent source — no network or resolution step involved, just a direct MediaStore read
+- **Lyrics** are sourced independently of audio, from 6 providers tried in a user-configurable priority order (see Lyrics above)
 
-Each source is isolated behind a shared `Provider` interface, so if one breaks (which does happen — these are unofficial integrations reacting to platform changes), the others keep the app functional. Search results are merged and deduplicated across sources automatically.
+Every source is isolated behind a shared `Provider` interface, so a single broken integration (which does happen — these are unofficial integrations reacting to platform changes) doesn't take the rest of the app down with it.
 
 ---
 
@@ -89,11 +101,11 @@ Each source is isolated behind a shared `Provider` interface, so if one breaks (
 MuseFlow wouldn't exist without the open-source music-client community. Significant logic, architecture patterns, and research in this project were adapted from:
 
 - [Metrolist](https://github.com/MetrolistGroup/Metrolist) — reference implementation for YouTube Music integration
+- [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor) — YouTube signature/cipher deobfuscation
 - [zemer-cipher](https://github.com/ZemerTeam/zemer-cipher) — YouTube cipher deobfuscation and PoToken generation
 - [SimpMusic](https://github.com/maxrave-dev/SimpMusic) — cross-reference for YouTube Music streaming
-- [Echo Music](https://github.com/EchoMusicApp/Echo-Music) — architectural inspiration (provider-chain/fallback pattern, feature set)
-- [LRCLib](https://lrclib.net) — synced lyrics API
-- [Better Lyrics](https://github.com/better-lyrics/better-lyrics) — lyrics fallback source
+- [Echo Music](https://github.com/EchoMusicApp/Echo-Music) — architectural inspiration and direct component ports (Live Mesh background, transport button shapes, Now Playing layout, lyrics animation styles)
+- [LRCLib](https://lrclib.net), Better Lyrics, YouLyPlus, PaxSenix, SimpMusic, Kugou — synced lyrics sources
 
 Genuine thanks to the maintainers of these projects for their work being open enough to learn from.
 
@@ -115,11 +127,13 @@ This is currently a personal build, not published to any app store. To build it 
 ## 🚧 Roadmap
 
 - [ ] A cohesive app-wide color theme overhaul (in progress — current UI mixes hardcoded per-screen colors with the shared Material theme, so a full recolor needs those consolidated first)
-- [ ] Smooth animations and transitions throughout the app
 - [ ] Album/Artist browsing inside Library itself (currently search-only)
-- [ ] Additional music source integrations
+- [ ] Home-screen widget and Quick Settings tile
+- [ ] Discord Rich Presence, Last.fm/ListenBrainz scrobbling
 - [ ] Listen Together (real-time synced listening sessions)
-- [ ] Higher audio quality tier for YouTube-sourced tracks
+- [ ] Lyrics romanization and AI-assisted translation
+- [ ] 2 more Now Playing background styles (animated glow, Apple Music–style)
+- [ ] Verified Android Auto support
 
 ---
 
