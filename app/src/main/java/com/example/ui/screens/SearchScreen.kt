@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -23,12 +24,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -106,6 +111,8 @@ fun SearchScreen(
     val searchedPlaylists by viewModel.playlists.collectAsState()
     val suggestions by viewModel.suggestions.collectAsState()
     val hasSearched by viewModel.hasSearched.collectAsState()
+    val recommendationsStartAt by viewModel.recommendationsStartAt.collectAsState()
+    val isLoadingMoreSongs by viewModel.isLoadingMore.collectAsState()
     val recentQueries by viewModel.recentQueries.collectAsState(initial = emptyList())
     val keyboard = LocalSoftwareKeyboardController.current
 
@@ -283,6 +290,9 @@ fun SearchScreen(
                                 downloadsInProgress = downloadsInProgress,
                                 onOpenMenu = { track -> selectedTrack = track },
                                 selection = selection,
+                                recommendationsStartAt = recommendationsStartAt,
+                                isLoadingMore = isLoadingMoreSongs,
+                                onLoadMore = viewModel::loadMoreSongs,
                             )
 
                             SearchFilter.Albums -> CollectionResults(
@@ -399,6 +409,13 @@ private fun FilterChips(selected: SearchFilter, onSelect: (SearchFilter) -> Unit
     }
 }
 
+/**
+ * The Songs tab's result list - direct search matches, seamlessly extending into a personalized,
+ * effectively infinite recommendation feed once those run out (mirroring how YouTube's own search
+ * behaves). [recommendationsStartAt] marks where that switch happened so a section header can drop
+ * in at exactly that row; [onLoadMore] is called as the list is scrolled near its current end,
+ * regardless of which phase it's in - the caller (SearchViewModel) decides what "more" means.
+ */
 @Composable
 private fun TrackResults(
     results: UiState<List<TrackResult>>,
@@ -409,10 +426,30 @@ private fun TrackResults(
     downloadsInProgress: Map<String, Int>,
     onOpenMenu: (TrackResult) -> Unit,
     selection: TrackSelection,
+    recommendationsStartAt: Int?,
+    isLoadingMore: Boolean,
+    onLoadMore: () -> Unit,
 ) {
     ResultsFrame(results, emptyMessage) { tracks ->
-        LazyColumn(contentPadding = PaddingValues(bottom = 200.dp)) {
+        val listState = rememberLazyListState()
+
+        // Fires as the list nears its current end - a fixed lookahead rather than "at the very
+        // last item", so the next batch has time to arrive before the user actually catches up to
+        // it. Re-armed whenever the track count changes, since a fetch that lands closes the
+        // window this snapshotFlow was watching for.
+        LaunchedEffect(listState, tracks.size) {
+            snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
+                .collect { lastVisible ->
+                    if (lastVisible != null && lastVisible >= tracks.size - 5) onLoadMore()
+                }
+        }
+
+        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 200.dp)) {
             itemsIndexed(tracks, key = { index, track -> "$index-${track.id}" }) { index, track ->
+                if (recommendationsStartAt == index) {
+                    RecommendationsHeader(modifier = Modifier.animateItem())
+                }
+
                 val key = track.toPlayableTrack(0).downloadKey()
                 TrackRow(
                     title = track.title,
@@ -433,6 +470,47 @@ private fun TrackResults(
                     modifier = Modifier.animateItem(),
                 )
             }
+
+            if (isLoadingMore) {
+                item(key = "loading_more") {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Drops into the Songs list right where direct search matches end and the personalized
+ * recommendation tail begins, so the transition reads as an intentional feature rather than search
+ * quietly getting worse. */
+@Composable
+private fun RecommendationsHeader(modifier: Modifier = Modifier) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Default.AutoAwesome,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = "Recommended for you",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(start = 10.dp),
+            )
         }
     }
 }

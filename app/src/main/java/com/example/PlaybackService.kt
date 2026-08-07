@@ -210,11 +210,6 @@ class PlaybackService : MediaSessionService() {
     /** Guards against stacking autoplay fetches if STATE_ENDED fires more than once. */
     private var autoplayInFlight = false
 
-    /** Same 11-char id shape check [TrackResult.hasRealVideoId] uses - a local file or a stored
-     * track with no real YouTube id would otherwise seed "radio" with a nonsense id and just fail. */
-    private fun String.looksLikeRealVideoId(): Boolean =
-        length == 11 && all { it.isLetterOrDigit() || it == '_' || it == '-' }
-
     /**
      * Appends tracks similar to whatever just finished, so a finished queue continues rather than
      * stopping dead.
@@ -249,7 +244,7 @@ class PlaybackService : MediaSessionService() {
         autoplayInFlight = true
         serviceScope.launch {
             val router = MusicSearchRouter(this@PlaybackService)
-            val primaryResults = if (mediaId.looksLikeRealVideoId()) {
+            val primaryResults = if (mediaId.looksLikeYouTubeVideoId()) {
                 runCatching { router.getRadioTracks(mediaId) }.getOrNull().orEmpty()
             } else {
                 emptyList()
@@ -260,21 +255,7 @@ class PlaybackService : MediaSessionService() {
             val topPlayed = runCatching {
                 PlaybackHistoryRepository.getInstance(this@PlaybackService).observeTopPlayed(15).first()
             }.getOrNull().orEmpty()
-            val tasteSeed = topPlayed
-                .filter { it.sourceType == MusicSource.YOUTUBE_MUSIC.name && it.sourceId?.looksLikeRealVideoId() == true }
-                .filter { it.sourceId != mediaId }
-                .let { candidates ->
-                    if (candidates.size < 5) null else {
-                        // Weighted by play count so heavier favorites surface more often, without
-                        // it being deterministically the single most-played track every time.
-                        val totalWeight = candidates.sumOf { it.playCount.coerceAtLeast(1) }
-                        var pick = (0 until totalWeight).random()
-                        candidates.firstOrNull { entry ->
-                            pick -= entry.playCount.coerceAtLeast(1)
-                            pick < 0
-                        } ?: candidates.random()
-                    }
-                }
+            val tasteSeed = topPlayed.pickTasteSeed(exclude = setOf(mediaId))
             val tasteResults = tasteSeed?.sourceId?.let { seedId ->
                 runCatching { router.getRadioTracks(seedId) }.getOrNull().orEmpty()
             }.orEmpty()
@@ -283,17 +264,7 @@ class PlaybackService : MediaSessionService() {
                 val artist = finished.mediaMetadata.artist?.toString()?.takeIf { it.isNotBlank() }
                 if (artist == null) emptyList() else runCatching { router.searchTracks(artist) }.getOrNull().orEmpty()
             } else {
-                // Interleave rather than concatenate, so the taste-blend seed's tracks aren't all
-                // stuck at the tail end of a 10-track batch - roughly 2 primary picks per 1 taste
-                // pick, keeping the just-finished track's own radio as the dominant signal.
-                buildList {
-                    val p = primaryResults.iterator()
-                    val t = tasteResults.iterator()
-                    while (p.hasNext() || t.hasNext()) {
-                        repeat(2) { if (p.hasNext()) add(p.next()) }
-                        if (t.hasNext()) add(t.next())
-                    }
-                }
+                interleaveTwoToOne(primaryResults, tasteResults)
             }
             val related = candidates.distinctBy { it.id }.filter { it.id !in existingIds }.take(10)
 
@@ -697,7 +668,7 @@ class PlaybackService : MediaSessionService() {
         val title = metadata.title?.toString() ?: return null
         val artist = metadata.artist?.toString().orEmpty()
         val mediaId = player.currentMediaItem?.mediaId
-        val isRealVideoId = mediaId?.looksLikeRealVideoId() == true
+        val isRealVideoId = mediaId?.looksLikeYouTubeVideoId() == true
         return Track(
             title = title,
             artist = artist,

@@ -290,6 +290,37 @@ class InnerTubeMusicProvider(private val context: Context) : Provider<TrackResul
             .distinctBy { it.id }
             .map { it.toTrackResult() }
 
+    /** First page of a songs search, paired with a continuation token - the pair
+     * [searchTracksContinuation] needs to keep paging past it. Distinct from [search] (which
+     * discards the continuation) because most callers just want a one-shot list; only the Search
+     * screen's infinite scroll needs to keep going. */
+    suspend fun searchTracksPage(query: String): TrackPage {
+        val result = YouTube.search(query, YouTube.SearchFilter.FILTER_SONG).getOrThrow()
+        return TrackPage(
+            items = result.items.filterIsInstance<SongItem>().map { it.toTrackResult() },
+            continuation = result.continuation,
+        )
+    }
+
+    /** The next page of a songs search started by [searchTracksPage]. */
+    suspend fun searchTracksContinuation(continuation: String): TrackPage {
+        val result = YouTube.searchContinuation(continuation).getOrThrow()
+        return TrackPage(
+            items = result.items.filterIsInstance<SongItem>().map { it.toTrackResult() },
+            continuation = result.continuation,
+        )
+    }
+
+    /** A page of [videoId]'s radio mix, with a continuation token so a "recommended for you" feed
+     * can keep extending it - unlike [getRadioTracks], which returns only the first batch. */
+    suspend fun getRadioTracksPage(videoId: String, continuation: String? = null): TrackPage {
+        val result = YouTube.next(WatchEndpoint(videoId = videoId), continuation = continuation).getOrThrow()
+        return TrackPage(
+            items = result.items.distinctBy { it.id }.map { it.toTrackResult() },
+            continuation = result.continuation,
+        )
+    }
+
     /** YouTube Music's own lyrics tab - plain text only (no line/word timing, unlike LRCLib/
      * BetterLyrics), so it's a last-resort fallback rather than tried first. Requires an extra
      * `next()` call to reach the tab's `lyricsEndpoint` before `lyrics()` can fetch it - the

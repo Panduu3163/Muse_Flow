@@ -81,6 +81,31 @@ class MusicSearchRouter(private val context: Context) {
             ExtractorBackend.LEGACY -> emptyList()
         }
 
+    /** First page of a songs search, with a continuation token for [searchTracksContinuation] to
+     * keep paging - what the Search screen's infinite scroll walks through before it runs out and
+     * blends into [getRadioTracksPage] recommendations. Only InnerTube exposes real pagination;
+     * the legacy provider's one-shot [searchTracks] result is treated as a single, final page. */
+    suspend fun searchTracksPage(query: String): TrackPage =
+        when (StreamResolverRouter.activeBackend(context)) {
+            ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).searchTracksPage(query)
+            ExtractorBackend.LEGACY -> TrackPage(YouTubeMusicProvider(context).search(query), continuation = null)
+        }
+
+    suspend fun searchTracksContinuation(continuation: String): TrackPage =
+        when (StreamResolverRouter.activeBackend(context)) {
+            ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).searchTracksContinuation(continuation)
+            ExtractorBackend.LEGACY -> TrackPage(emptyList(), continuation = null)
+        }
+
+    /** A page of a radio mix seeded from a track, with a continuation token - the paginated
+     * counterpart to [getRadioTracks], for a feed that keeps extending rather than taking one
+     * fixed batch. Only InnerTube exposes this. */
+    suspend fun getRadioTracksPage(videoId: String, continuation: String? = null): TrackPage =
+        when (StreamResolverRouter.activeBackend(context)) {
+            ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).getRadioTracksPage(videoId, continuation)
+            ExtractorBackend.LEGACY -> TrackPage(emptyList(), continuation = null)
+        }
+
     /** YouTube Music's own lyrics tab, plain text only. Only InnerTube exposes this. */
     suspend fun getLyricsText(videoId: String): String? =
         when (StreamResolverRouter.activeBackend(context)) {

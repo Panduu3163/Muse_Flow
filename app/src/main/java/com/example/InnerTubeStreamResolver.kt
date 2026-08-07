@@ -43,8 +43,11 @@ object InnerTubeStreamResolver {
         YouTubeClient.ANDROID_NO_SDK,
     )
 
-    /** Audio-only itags, best first: 251/250/249 are Opus, 140/141/139 are AAC. */
-    private val AUDIO_ITAG_PREFERENCE = listOf(251, 140, 250, 141, 249, 139, 171, 172)
+    /** Audio-only itags, best first, ranked by actual bitrate within each codec (251 ~160kbps
+     * Opus > 141 ~256kbps AAC > 140 ~128kbps AAC > 250 ~70kbps Opus > 249 ~50kbps Opus >
+     * 139 ~48kbps AAC > 172 ~192kbps Vorbis > 171 ~128kbps Vorbis) - this is the fallback used
+     * only when [resolveViaNewPipeOnly] has no bitrate metadata to rank by directly. */
+    private val AUDIO_ITAG_PREFERENCE = listOf(251, 141, 140, 250, 249, 139, 172, 171)
 
     /**
      * Highest-quality audio-only stream, or null if nothing playable came back.

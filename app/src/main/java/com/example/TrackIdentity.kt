@@ -16,5 +16,11 @@ package com.example
 internal fun TrackResult.hasRealVideoId(): Boolean =
     sourceType != MusicSource.LOCAL_DEVICE && YOUTUBE_VIDEO_ID.matches(id)
 
+/** Same check as [hasRealVideoId], for a bare id string with no [TrackResult] around it to read
+ * [MusicSource] from - e.g. [com.example.PlaybackHistoryEntity.sourceId], which a local file or a
+ * synthesised "title|artist" stand-in id would otherwise seed a radio/recommendation request with
+ * nonsense and just fail. */
+internal fun String.looksLikeYouTubeVideoId(): Boolean = YOUTUBE_VIDEO_ID.matches(this)
+
 /** A YouTube video id is exactly 11 URL-safe characters. */
 private val YOUTUBE_VIDEO_ID = Regex("[A-Za-z0-9_-]{11}")

@@ -153,6 +153,16 @@ data class PlaylistResult(
 )
 
 /**
+ * One page of a paginated track list, with a [continuation] token to fetch the next page - null
+ * once the source has genuinely run out (as opposed to a page that's merely empty because a
+ * dedupe filter removed everything from it).
+ */
+data class TrackPage(
+    val items: List<TrackResult>,
+    val continuation: String?,
+)
+
+/**
  * A resolved, playable audio stream. If [userAgent] is set, it must be sent as the request's
  * User-Agent header when fetching [url] - some CDNs (YouTube's) tie the URL to the User-Agent
  * that resolved it and reject a mismatched one.
