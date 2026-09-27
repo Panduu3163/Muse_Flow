@@ -2,6 +2,8 @@ package com.example.ui.utils
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -10,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.dp
 
 /**
  * A click modifier that scales the component down while pressed, for a tactile "bounce" - the
@@ -55,3 +58,16 @@ fun Modifier.bounceClick(
             onClick = onClick,
         )
 }
+
+/**
+ * A slow, readable auto-scroll for a long single-line title (Now Playing's track/artist, the
+ * mini-player's title) - [basicMarquee]'s own default velocity (30dp/s) reads as too fast to
+ * actually read the name as it goes by; this halves it. No-ops when the text already fits, same
+ * as [basicMarquee] itself, so it's safe to apply unconditionally to a title that's sometimes
+ * short and sometimes long.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+fun Modifier.slowMarquee(): Modifier = this.basicMarquee(
+    iterations = Int.MAX_VALUE,
+    velocity = 15.dp,
+)

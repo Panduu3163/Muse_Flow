@@ -4,9 +4,10 @@ package com.example
  * whichever order the underlying query already returns (most recently liked/downloaded/played
  * first, depending on the section), not a client-side sort of its own. */
 enum class TrackSortOption(val label: String) {
-    DEFAULT("Default"),
-    TITLE("Title"),
-    ARTIST("Artist")
+    DEFAULT("Date added"),
+    TITLE("Name"),
+    ARTIST("Artist"),
+    DURATION("Play time"),
 }
 
 fun List<Track>.sortedByLibraryOption(option: TrackSortOption, ascending: Boolean): List<Track> {
@@ -14,6 +15,7 @@ fun List<Track>.sortedByLibraryOption(option: TrackSortOption, ascending: Boolea
     val comparator = when (option) {
         TrackSortOption.TITLE -> compareBy<Track> { it.title.lowercase() }
         TrackSortOption.ARTIST -> compareBy<Track> { it.artist.lowercase() }
+        TrackSortOption.DURATION -> compareBy<Track> { parseDurationToSeconds(it.duration) }
         TrackSortOption.DEFAULT -> return this
     }
     return if (ascending) sortedWith(comparator) else sortedWith(comparator.reversed())

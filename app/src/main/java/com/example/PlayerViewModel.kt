@@ -4,21 +4,27 @@ import android.app.Application
 import android.content.ComponentName
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Bundle
 import androidx.compose.runtime.Immutable
 import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -45,9 +51,13 @@ data class QueueItem(
 data class NowPlayingState(
     val title: String = "",
     val artist: String = "",
-    /** The artist's browseId, when known - lets Now Playing's artist name navigate straight to
-     * their page. Null for local files or any source with no artist browseId. */
-    val artistId: String? = null,
+    /** [artist] broken back out into individual credits (name + that artist's own browseId), so
+     * Now Playing's byline can send a tap on one artist's name to *that* artist's page on a
+     * multi-artist track instead of always the first one - see [ArtistCredit]. Always has at
+     * least one entry once [artist] is non-blank (synthesized from [artist] as a whole when the
+     * source never provided structured per-artist credits, e.g. a local file), so this is always
+     * the single source of truth for rendering/clicking the artist line. */
+    val artistCredits: List<ArtistCredit> = emptyList(),
     val artworkUrl: String? = null,
     val isPlaying: Boolean = false,
     val positionMs: Long = 0L,
@@ -59,6 +69,11 @@ data class NowPlayingState(
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val hasNext: Boolean = false,
     val hasPrevious: Boolean = false,
+    /** True for a track playing straight off this device's own media store, not something
+     * downloaded through the app or streamed. Now Playing shows this as its own glyph, distinct
+     * from "downloaded" - see [com.example.ui.component.TrackRow]'s own isLocalDevice doc for why
+     * the two shouldn't share one icon. */
+    val isLocalDevice: Boolean = false,
     val queue: List<QueueItem> = emptyList(),
     val speed: Float = 1f,
     val pitch: Float = 1f,
@@ -105,8 +120,23 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     val sleepTimerRemainingMs: StateFlow<Long?> = SleepTimer.remainingMs
 
+    // One-shot, not state: a playback failure is an event ("this attempt just failed"), not a
+    // persistent condition to keep re-showing on every recomposition/screen revisit. Previously
+    // there was no feedback at all when a track failed to open - it just silently didn't play (or,
+    // mid-queue, silently skipped to another track via PlaybackService's own recovery), which was
+    // indistinguishable from "nothing happened" and made a real failure impossible to diagnose.
+    private val _playbackErrors = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val playbackErrors: SharedFlow<String> = _playbackErrors.asSharedFlow()
+
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) = syncFromPlayer(player)
+
+        override fun onPlayerError(error: PlaybackException) {
+            val title = _state.value.title.takeIf { it.isNotBlank() }
+            _playbackErrors.tryEmit(
+                if (title != null) "Couldn't play \"$title\"" else "Couldn't play this track"
+            )
+        }
     }
 
     init {
@@ -205,10 +235,24 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
 
+        val artistDisplay = metadata.artist?.toString().orEmpty()
+        val creditNames = metadata.extras?.getStringArrayList("artistCreditNames")
+        val creditIds = metadata.extras?.getStringArrayList("artistCreditIds")
+        val artistCredits = if (!creditNames.isNullOrEmpty() && creditNames.size == creditIds?.size) {
+            creditNames.zip(creditIds).map { (name, id) -> ArtistCredit(name, id.takeIf { it.isNotEmpty() }) }
+        } else if (artistDisplay.isNotBlank()) {
+            // No structured per-artist credits (a local file, or a queue item restored from the
+            // persisted queue - see QueueRepository) - one credit spanning the whole display
+            // string, same single-target behavior this always had.
+            listOf(ArtistCredit(artistDisplay, metadata.extras?.getString("artistId")))
+        } else {
+            emptyList()
+        }
+
         _state.value = NowPlayingState(
             title = metadata.title?.toString().orEmpty(),
-            artist = metadata.artist?.toString().orEmpty(),
-            artistId = metadata.extras?.getString("artistId"),
+            artist = artistDisplay,
+            artistCredits = artistCredits,
             artworkUrl = metadata.artworkUri?.toString(),
             isPlaying = player.isPlaying,
             positionMs = player.currentPosition.coerceAtLeast(0L),
@@ -219,6 +263,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             repeatMode = player.repeatMode,
             hasNext = player.hasNextMediaItem(),
             hasPrevious = player.hasPreviousMediaItem(),
+            // A device media-store track's mediaId is its own content:// URI (see
+            // LocalAudioProvider) - nothing else in the app produces a mediaId with that scheme,
+            // so it's a reliable, self-contained signal with no extra plumbing needed.
+            isLocalDevice = player.currentMediaItem?.mediaId?.startsWith("content://") == true,
             queue = queue,
             speed = player.playbackParameters.speed,
             pitch = player.playbackParameters.pitch,
@@ -244,7 +292,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
             // Without this, Home's "Recently played"/"On repeat" shelves and Library's Top 50
             // would never populate - nothing else in the app writes playback history.
-            historyRepository.recordPlayed(track.toPlayableTrack(track.id.hashCode()))
+            // PlaybackService records actual playback, including automatic queue transitions.
         }
     }
 
@@ -308,9 +356,31 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         if (controller.isPlaying) controller.pause() else controller.play()
     }
 
-    fun next() = controller?.seekToNextMediaItem()
+    /**
+     * Skips to the next item, resuming playback even if paused - a paused skip used to leave the
+     * next track sitting paused too, which reads as broken ("I hit next, why isn't it playing?").
+     *
+     * On the last item, [MediaController.hasNextMediaItem] is false and a plain
+     * `seekToNextMediaItem()` would silently do nothing (this was the "hit next on the last song,
+     * nothing happens" bug). Sends [ACTION_AUTOPLAY_AND_ADVANCE] instead, which reuses the exact
+     * taste-blended continuation a queue ending naturally already gets - the queue should always
+     * have more of the user's own taste to fall into, not just stop.
+     */
+    fun next() {
+        val controller = controller ?: return
+        if (controller.hasNextMediaItem()) {
+            controller.seekToNextMediaItem()
+            controller.play()
+        } else {
+            controller.sendCustomCommand(SessionCommand(ACTION_AUTOPLAY_AND_ADVANCE, Bundle.EMPTY), Bundle.EMPTY)
+        }
+    }
 
-    fun previous() = controller?.seekToPreviousMediaItem()
+    fun previous() {
+        val controller = controller ?: return
+        controller.seekToPreviousMediaItem()
+        controller.play()
+    }
 
     fun seekTo(fraction: Float) {
         val controller = controller ?: return
@@ -422,10 +492,16 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
      * which Uri.fromFile handles.
      */
     private suspend fun TrackResult.toMediaItem(): MediaItem {
-        val downloadedPath = runCatching { downloadRepository.getByKey(downloadKey()) }
-            .getOrNull()
-            ?.filePath
-            ?.takeIf { File(it).exists() }
+        // Skipped entirely for a track already sourced from the device's own media store - it has
+        // its own correct content:// URI in directStreamUrl below, and this lookup matches purely
+        // by title+artist (downloadKey has no other identity to go on), so a same-named track the
+        // app separately downloaded could otherwise shadow it with an unrelated file.
+        val downloadedPath = if (sourceType == MusicSource.LOCAL_DEVICE) null else {
+            runCatching { downloadRepository.getByKey(downloadKey()) }
+                .getOrNull()
+                ?.filePath
+                ?.takeIf { File(it).exists() }
+        }
 
         // A downloaded track's `imageUrl` is still the original *remote* thumbnail URL -
         // DownloadRepository doesn't rewrite it. What it does instead: save a plain sibling image
@@ -455,8 +531,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             .setArtist(artist)
             .setAlbumTitle(source)
             // Carried through extras so Now Playing's artist name can navigate straight to the
-            // artist page - MediaMetadata has no first-class artistId field of its own.
-            .setExtras(android.os.Bundle().apply { artistId?.let { putString("artistId", it) } })
+            // artist page - MediaMetadata has no first-class artistId field of its own. The two
+            // parallel arrays (rather than a single delimited string) are what let a multi-artist
+            // credit survive round-tripping through a Bundle without needing to invent an escaping
+            // scheme for a name that happens to contain the join separator.
+            .setExtras(android.os.Bundle().apply {
+                artistId?.let { putString("artistId", it) }
+                albumId?.let { putString("albumId", it) }
+                if (artistCredits.isNotEmpty()) {
+                    putStringArrayList("artistCreditNames", ArrayList(artistCredits.map { it.name }))
+                    putStringArrayList("artistCreditIds", ArrayList(artistCredits.map { it.id.orEmpty() }))
+                }
+            })
             .apply {
                 when {
                     localCoverUri != null -> setArtworkUri(localCoverUri)

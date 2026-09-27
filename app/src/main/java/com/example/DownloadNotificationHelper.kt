@@ -11,20 +11,25 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 
 /**
- * Posts a real system notification for each in-flight download - a determinate progress bar (via
- * [NotificationCompat.Builder.setProgress]) that fills in step with actual bytes downloaded, so a
- * slow-but-healthy download is visibly distinguishable - from the notification shade, not just
- * in-app - from one that's genuinely stuck. Replaced with a completion notification once the
- * file is fully written. Used only by [DownloadRepository], which owns the actual download.
+ * Posts one real system notification for every download currently in flight, combined - a
+ * determinate progress bar showing the *whole batch's* aggregate progress, not one notification
+ * per track. Downloading several songs at once used to post one of these per track, which read as
+ * cluttered (a 5-song bulk download meant 5 stacked notifications). [DownloadRepository] calls
+ * [updateProgress] with a fresh snapshot of every active track any time any one of them changes
+ * progress, rather than each track owning and posting its own.
+ *
+ * No separate "download complete" notification either: once the last active track finishes, the
+ * caller's snapshot is empty and this just cancels the notification outright, so it disappears on
+ * its own instead of turning into a persistent message the user has to dismiss by hand.
  */
 object DownloadNotificationHelper {
     // Shared with DownloadService, which posts the single foreground-service notification that
     // keeps downloads alive on this same channel rather than a separate one.
     const val CHANNEL_ID = "downloads"
 
-    // Stable per-track notification id derived from downloadKey(), so re-downloading the same
-    // track updates (rather than stacks alongside) its own notification.
-    private fun notificationId(key: String) = 20_000_000 + (key.hashCode() and 0x0FFFFFFF)
+    // One fixed id for the whole batch, not per-track - there is only ever at most one of these
+    // showing at a time now.
+    private const val NOTIFICATION_ID = 20_000_000
 
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -40,44 +45,51 @@ object DownloadNotificationHelper {
         )
     }
 
-    /** [percent] in 0..100 for a determinate bar, or null while the server hasn't reported a
-     * total size yet (an indeterminate bar - still visibly "working", just not quantified). */
-    fun showProgress(context: Context, track: Track, percent: Int?) {
+    /**
+     * [active] is every track currently downloading or waiting for a download slot, keyed by
+     * [Track.downloadKey], each paired with its own percent (0-100, or -1 while the server hasn't
+     * reported a size yet). Called with the full current set on every change - an empty map
+     * cancels the notification rather than posting one with nothing to show.
+     */
+    fun updateProgress(context: Context, active: Map<String, Pair<Track, Int>>) {
+        if (active.isEmpty()) {
+            NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
+            return
+        }
         if (!hasPermission(context)) return
         ensureChannel(context)
+
+        val count = active.size
+        val first = active.values.first().first
+        val title = if (count == 1) "Downloading \"${first.title}\"" else "Downloading $count songs"
+        val text = if (count == 1) first.artist else "${first.title} and ${count - 1} more"
+
+        // Unknown-size tracks (-1) count as 0 progress toward the batch average rather than being
+        // excluded outright - one huge unstarted download shouldn't let the bar read "almost done"
+        // just because the others happen to be nearly finished.
+        val percents = active.values.map { (_, percent) -> percent.coerceAtLeast(0) }
+        val allUnknown = active.values.all { (_, percent) -> percent < 0 }
+        val overallPercent = percents.sum() / count
+
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Downloading \"${track.title}\"")
-            .setContentText(track.artist)
+            .setContentTitle(title)
+            .setContentText(text)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-        if (percent != null) {
-            builder.setProgress(100, percent, false)
-        } else {
+        if (allUnknown) {
             builder.setProgress(0, 0, true)
+        } else {
+            builder.setProgress(100, overallPercent, false)
         }
-        NotificationManagerCompat.from(context).notify(notificationId(track.downloadKey()), builder.build())
+        NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, builder.build())
     }
 
-    fun showCompleted(context: Context, track: Track) {
-        if (!hasPermission(context)) return
-        ensureChannel(context)
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Download complete")
-            .setContentText("\"${track.title}\" is ready to play offline")
-            .setOngoing(false)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-        NotificationManagerCompat.from(context).notify(notificationId(track.downloadKey()), notification)
-    }
-
-    /** Called on cancel/failure - otherwise a stuck "Downloading..." notification (which
-     * [showProgress] marks ongoing) would sit in the shade forever with nothing to resolve it. */
-    fun clear(context: Context, key: String) {
-        NotificationManagerCompat.from(context).cancel(notificationId(key))
+    /** Cancels the batch notification outright - used on a full-stop (e.g. every download
+     * cancelled at once) where there's no updated [updateProgress] snapshot coming right after. */
+    fun clear(context: Context) {
+        NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
     }
 
     private fun hasPermission(context: Context): Boolean =

@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Semaphore
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -41,10 +43,25 @@ class DownloadRepository private constructor(context: Context) {
         .build()
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeJobs = ConcurrentHashMap<String, Job>()
+    private val downloadSlots = Semaphore(3)
+
+    // Mirrors activeJobs' keys, holding the Track each one needs for the combined notification
+    // (title/artist) - activeJobs itself only has the Job, not what it's a Job for.
+    private val activeTracks = ConcurrentHashMap<String, Track>()
 
     private val _inProgress = MutableStateFlow<Map<String, Int>>(emptyMap())
     /** Key -> percent complete (0..100), or -1 if the server didn't report a content length. */
     val inProgress: StateFlow<Map<String, Int>> = _inProgress
+
+    /** Recomputes and posts the one combined download notification from the current snapshot of
+     * [activeTracks]/[_inProgress] - called after every state change that used to post its own
+     * per-track notification. An empty snapshot cancels it. */
+    private fun refreshNotification() {
+        val active = _inProgress.value.mapNotNull { (key, percent) ->
+            activeTracks[key]?.let { track -> key to (track to percent) }
+        }.toMap()
+        DownloadNotificationHelper.updateProgress(appContext, active)
+    }
 
     private val _failures = MutableStateFlow<Map<String, String>>(emptyMap())
     /** Key -> error message for the most recent failed download attempt, so the UI can tell the
@@ -81,11 +98,12 @@ class DownloadRepository private constructor(context: Context) {
             val url = entity.imageUrl ?: continue
             runCatching {
                 val bytes = fetchBytes(upgradeThumbnailUrl(url)) ?: return@runCatching
-                File(downloadsDir(appContext), "${entity.key}.cover").writeBytes(bytes)
+                downloadFile(appContext, entity.key, "cover").writeBytes(bytes)
             }
         }
     }
 
+    @Synchronized
     fun startDownload(track: Track) {
         val key = track.downloadKey()
         if (activeJobs.containsKey(key)) return
@@ -93,24 +111,39 @@ class DownloadRepository private constructor(context: Context) {
         // Real foreground-service priority for as long as anything's downloading, so the OS
         // doesn't kill this coroutine mid-transfer once the screen turns off - see DownloadService.
         DownloadService.start(appContext)
-        activeJobs[key] = repositoryScope.launch {
+        val job = repositoryScope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            var acquired = false
             // -1: no percent known yet (server hasn't reported a size, or the request hasn't
             // opened yet) - both the in-app button and the system notification show an
             // indeterminate spinner for this, distinct from an actual 0-99% in progress.
+            activeTracks[key] = track
             _inProgress.update { it + (key to -1) }
-            DownloadNotificationHelper.showProgress(appContext, track, percent = null)
+            refreshNotification()
             try {
+                downloadSlots.acquire()
+                acquired = true
+                val existing = getByKey(key)
+                if (existing != null && File(existing.filePath).let { it.isFile && it.length() > 0 }) {
+                    return@launch
+                }
+                if (!isOnline(appContext)) {
+                    error("You're offline. Connect to download \"${track.title}\".")
+                }
                 val stream = track.streamUrl?.let { StreamResolution(url = it) }
                     ?: resolveStreamUrl(track)
                     ?: error("No playable stream found for \"${track.title}\"")
-                val targetFile = File(downloadsDir(appContext), "$key.audio")
-                val contentType = downloadToFile(stream.url, targetFile, stream.userAgent) { percent ->
+                val targetFile = downloadFile(appContext, key, "part")
+                val jobContext = kotlinx.coroutines.currentCoroutineContext()
+                val contentType = downloadToFile(stream.url, targetFile, stream.userAgent, { jobContext.ensureActive() }) { percent ->
                     _inProgress.update { it + (key to percent) }
-                    DownloadNotificationHelper.showProgress(appContext, track, percent)
+                    refreshNotification()
                 }
                 // Best-effort, never blocks/fails the download itself - see AudioTagger's doc.
                 val coverArtBytes = runCatching { track.imageUrl?.let { fetchBytes(upgradeThumbnailUrl(it)) } }.getOrNull()
                 runCatching { AudioTagger.embedIfSupported(targetFile, contentType, track, coverArtBytes) }
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                val completedFile = downloadFile(appContext, key, "audio")
+                check(targetFile.length() > 0 && targetFile.renameTo(completedFile)) { "Could not save download" }
                 // AudioTagger only embeds into MP3/M4A containers it can actually parse - but
                 // YouTube's audio-only streams are itag 251/250/249 (Opus-in-WebM) *first* (see
                 // InnerTubeStreamResolver's own comment on try order), which jaudiotagger doesn't
@@ -120,7 +153,7 @@ class DownloadRepository private constructor(context: Context) {
                 // depending on the tag ever having been written.
                 if (coverArtBytes != null) {
                     runCatching {
-                        File(downloadsDir(appContext), "$key.cover").writeBytes(coverArtBytes)
+                        downloadFile(appContext, key, "cover").writeBytes(coverArtBytes)
                     }
                 }
                 dao.upsert(
@@ -132,7 +165,7 @@ class DownloadRepository private constructor(context: Context) {
                         duration = track.duration,
                         gradientIndex = track.gradientIndex,
                         imageUrl = track.imageUrl,
-                        filePath = targetFile.absolutePath,
+                        filePath = completedFile.absolutePath,
                         status = DownloadStatus.COMPLETED.name,
                         updatedAt = System.currentTimeMillis(),
                         sourceId = track.sourceId,
@@ -141,37 +174,40 @@ class DownloadRepository private constructor(context: Context) {
                         artistId = track.artistId,
                     )
                 )
-                DownloadNotificationHelper.showCompleted(appContext, track)
             } catch (e: CancellationException) {
                 // A user-initiated cancel (see cancelDownload) - not a failure, just clean up
                 // the partial file below and let the cancellation propagate as normal.
-                File(downloadsDir(appContext), "$key.audio").delete()
-                File(downloadsDir(appContext), "$key.cover").delete()
-                DownloadNotificationHelper.clear(appContext, key)
+                downloadFile(appContext, key, "part").delete()
                 throw e
             } catch (e: Exception) {
                 // Don't leave a stale/broken row around - a partial file is useless, and the user
                 // can just tap download again.
-                File(downloadsDir(appContext), "$key.audio").delete()
-                File(downloadsDir(appContext), "$key.cover").delete()
+                downloadFile(appContext, key, "part").delete()
                 _failures.update { it + (key to (e.message ?: "Download failed")) }
-                DownloadNotificationHelper.clear(appContext, key)
             } finally {
+                if (acquired) downloadSlots.release()
                 _inProgress.update { it - key }
+                activeTracks.remove(key)
                 activeJobs.remove(key)
+                // No separate "download complete" notification - once this was the last active
+                // track, this call sees an empty snapshot and cancels the notification outright
+                // rather than replacing it with something the user has to dismiss by hand.
+                refreshNotification()
             }
         }
+        activeJobs[key] = job
+        job.start()
     }
 
     fun cancelDownload(track: Track) {
-        activeJobs.remove(track.downloadKey())?.cancel()
+        activeJobs[track.downloadKey()]?.cancel()
     }
 
     suspend fun deleteDownload(track: Track) {
         val key = track.downloadKey()
-        cancelDownload(track)
+        activeJobs[key]?.let { it.cancel(); it.join() }
         dao.getByKey(key)?.let { File(it.filePath).delete() }
-        File(downloadsDir(appContext), "$key.cover").delete()
+        localCoverFile(appContext, key)?.delete()
         dao.deleteByKey(key)
     }
 
@@ -179,7 +215,9 @@ class DownloadRepository private constructor(context: Context) {
      * under [downloadsDir] (both `.audio` and `.cover` siblings), and clears the Room table so
      * nothing downloaded is left half-referencing a file that no longer exists. */
     suspend fun deleteAllDownloads() {
-        activeJobs.keys.toList().forEach { key -> activeJobs.remove(key)?.cancel() }
+        val jobs = activeJobs.values.toList()
+        jobs.forEach { it.cancel() }
+        jobs.forEach { it.join() }
         _inProgress.update { emptyMap() }
         dao.clearAll()
         downloadsDir(appContext).listFiles()?.forEach { it.delete() }
@@ -222,15 +260,31 @@ class DownloadRepository private constructor(context: Context) {
         url: String,
         targetFile: File,
         userAgent: String? = null,
+        checkActive: () -> Unit,
         onProgress: (Int) -> Unit,
     ): String? {
         // Same 403 rule as playback: YouTube ties a resolved URL to the User-Agent that resolved
         // it, so the download request has to carry the same one.
-        val request = Request.Builder().url(url)
+        val request = Request.Builder().url(url).header("Range", "bytes=0-")
             .apply { userAgent?.let { header("User-Agent", it) } }
             .build()
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("Download failed: HTTP ${response.code}")
+            if (response.code == 206) {
+                // Some CDNs cap an open-ended Range request to one chunk. Its Content-Length
+                // matches the chunk, so checking only bytes read would wrongly mark a truncated
+                // song as downloaded. Require the returned range to reach the full file end.
+                val range = response.header("Content-Range")
+                val match = range?.let { Regex("bytes\\s+(\\d+)-(\\d+)/(\\d+|\\*)").matchEntire(it) }
+                if (match != null) {
+                    val start = match.groupValues[1].toLong()
+                    val end = match.groupValues[2].toLong()
+                    val total = match.groupValues[3].toLongOrNull()
+                    check(start == 0L && (total == null || end + 1 == total)) {
+                        "The server returned only part of this song. Please retry."
+                    }
+                }
+            }
             val body = response.body ?: error("Empty download response")
             val contentLength = body.contentLength()
             targetFile.parentFile?.mkdirs()
@@ -240,6 +294,7 @@ class DownloadRepository private constructor(context: Context) {
                     var totalRead = 0L
                     var lastReportedPercent = -1
                     while (true) {
+                        checkActive()
                         val read = input.read(buffer)
                         if (read == -1) break
                         output.write(buffer, 0, read)
@@ -252,6 +307,7 @@ class DownloadRepository private constructor(context: Context) {
                             }
                         }
                     }
+                    check(totalRead > 0 && (contentLength < 0 || totalRead == contentLength)) { "Incomplete download. Please retry." }
                 }
             }
             return response.header("Content-Type")
@@ -278,6 +334,11 @@ class DownloadRepository private constructor(context: Context) {
     }
 
     companion object {
+        private fun downloadFile(context: Context, key: String, extension: String): File {
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.UTF_8))
+            val safeName = digest.joinToString("") { "%02x".format(it) }
+            return File(downloadsDir(context), "$safeName.$extension")
+        }
         fun downloadsDir(context: Context): File = File(context.filesDir, "downloads")
 
         /** The locally-saved cover for a downloaded track, if one was fetched at download time -
@@ -285,7 +346,8 @@ class DownloadRepository private constructor(context: Context) {
          * file's embedded tag. Null when there's no file (nothing to fetch a cover from, the fetch
          * failed, or this download predates this app version). */
         fun localCoverFile(context: Context, key: String): File? =
-            File(downloadsDir(context), "$key.cover").takeIf { it.exists() }
+            downloadFile(context, key, "cover").takeIf { it.isFile }
+                ?: File(downloadsDir(context), "$key.cover").takeIf { it.isFile && it.canonicalPath.startsWith(downloadsDir(context).canonicalPath + File.separator) }
 
         @Volatile private var instance: DownloadRepository? = null
 

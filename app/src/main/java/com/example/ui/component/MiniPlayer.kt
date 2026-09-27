@@ -12,6 +12,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import com.example.ui.utils.bounceClick
+import com.example.ui.utils.slowMarquee
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -88,8 +89,8 @@ fun MiniPlayer(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .clip(RoundedCornerShape(20.dp))
+                .padding(horizontal = 32.dp)
+                .liquidSurface(50.dp)
                 .bounceClick(onClick = onClick)
                 .testTag("mini_player"),
             color = Color.Transparent,
@@ -133,7 +134,7 @@ fun MiniPlayer(
                         Box(
                             modifier = Modifier
                                 .size(44.dp)
-                                .clip(RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(50))
                                 .background(MaterialTheme.colorScheme.surfaceContainer),
                             contentAlignment = Alignment.Center,
                         ) {
@@ -177,6 +178,7 @@ fun MiniPlayer(
                                 color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.slowMarquee(),
                             )
                             Text(
                                 text = artist,
@@ -184,6 +186,7 @@ fun MiniPlayer(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.slowMarquee(),
                             )
                         }
                     }
@@ -339,4 +342,3 @@ private fun MiniPlayerBackground(
         else -> Box(modifier = modifier.background(base))
     }
 }
-

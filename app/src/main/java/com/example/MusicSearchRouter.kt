@@ -12,10 +12,14 @@ import android.content.Context
  */
 class MusicSearchRouter(private val context: Context) {
 
+    /** Regular YouTube uploads, including videos outside YouTube Music's catalog. */
+    suspend fun searchGeneralVideos(query: String): List<TrackResult> =
+        InnerTubeMusicProvider(context).searchGeneralVideos(query)
+
     suspend fun searchTracks(query: String): List<TrackResult> =
         when (StreamResolverRouter.activeBackend(context)) {
             ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).search(query)
-            ExtractorBackend.LEGACY -> YouTubeMusicProvider(context).search(query)
+            ExtractorBackend.LEGACY -> searchTracksPage(query).items
         }
 
     suspend fun searchAlbums(query: String): List<AlbumResult> =
@@ -88,7 +92,12 @@ class MusicSearchRouter(private val context: Context) {
     suspend fun searchTracksPage(query: String): TrackPage =
         when (StreamResolverRouter.activeBackend(context)) {
             ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).searchTracksPage(query)
-            ExtractorBackend.LEGACY -> TrackPage(YouTubeMusicProvider(context).search(query), continuation = null)
+            ExtractorBackend.LEGACY -> {
+                val music = runCatching { YouTubeMusicProvider(context).search(query) }
+                val videos = runCatching { InnerTubeMusicProvider(context).searchGeneralVideos(query) }
+                if (music.isFailure && videos.isFailure) music.getOrThrow()
+                TrackPage(interleaveTrackResults(music.getOrNull().orEmpty(), videos.getOrNull().orEmpty()), continuation = null)
+            }
         }
 
     suspend fun searchTracksContinuation(continuation: String): TrackPage =
@@ -146,6 +155,15 @@ class MusicSearchRouter(private val context: Context) {
     suspend fun getMoodAndGenres(): List<MoodGenreCategory> =
         when (StreamResolverRouter.activeBackend(context)) {
             ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).getMoodAndGenres()
+            ExtractorBackend.LEGACY -> emptyList()
+        }
+
+    /** The "everything" search results page - see [SearchShelf]'s own doc. Only InnerTube exposes
+     * this (it needs the raw unfiltered search response, which the legacy provider's per-type-only
+     * endpoints don't have an equivalent of). */
+    suspend fun searchSummary(query: String): List<SearchShelf> =
+        when (StreamResolverRouter.activeBackend(context)) {
+            ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).searchSummary(query)
             ExtractorBackend.LEGACY -> emptyList()
         }
 }

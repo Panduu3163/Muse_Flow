@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.museflow.kqfzyw"
     minSdk = 24
     targetSdk = 37
-    versionCode = 15
-    versionName = "1.1.4"
+    versionCode = 21
+    versionName = "1.4.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -97,6 +97,9 @@ googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.W
 // Point just the unit-test JVM at a toolchain-provisioned JDK 21 instead of the daemon JVM.
 tasks.withType<Test>().configureEach {
   javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+  // Robolectric's Android jar URL handling on Windows can misread spaces in the user profile.
+  // A short-path override affects only the test JVM; normal builds and app storage are unchanged.
+  System.getenv("MUSEFLOW_TEST_HOME")?.let { systemProperty("user.home", it) }
 }
 
 // Some unused dependencies are commented out below instead of being removed.

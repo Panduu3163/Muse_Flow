@@ -21,6 +21,9 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Downloading
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -73,6 +76,11 @@ fun TrackActionsSheet(
      * ever read when [onGoToAlbum] is non-null. */
     albumLabel: String? = null,
     isLiked: Boolean,
+    /** False for a track already on the device - liking it left it stuck in Liked with no
+     * reliable way back to playing it from there (see LibraryScreen's own note on that gap), so
+     * the action is removed rather than offered and broken. Hides both the header's quick-toggle
+     * and the "Add to Liked" row below, not just one. */
+    likeAvailable: Boolean = true,
     isDownloaded: Boolean,
     downloadProgress: Int?,
     onPlayNext: () -> Unit,
@@ -114,6 +122,9 @@ fun TrackActionsSheet(
      * screen. Null (and hidden) everywhere else. */
     onCopyLyrics: (() -> Unit)? = null,
     onSearchLyricsOnline: (() -> Unit)? = null,
+    onSleepTimer: (() -> Unit)? = null,
+    onEqualizer: (() -> Unit)? = null,
+    onAmbient: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -182,8 +193,10 @@ fun TrackActionsSheet(
 
                 // Same duplicate-entry-point pattern as the playlist sheet's header pin: this
                 // toggles the exact flag the "Add to Liked"/"Remove from Liked" row below does,
-                // just reachable without scrolling past queue actions first.
-                IconButton(
+                // just reachable without scrolling past queue actions first. Absent entirely (not
+                // just disabled) when likeAvailable is false, same as any other inapplicable action
+                // in this sheet.
+                if (likeAvailable) IconButton(
                     onClick = onToggleLike,
                     modifier = Modifier.testTag("action_header_like"),
                 ) {
@@ -244,7 +257,11 @@ fun TrackActionsSheet(
                 )
             }
 
-            if (showLikeAction) {
+            onSleepTimer?.let { action -> SheetAction(Icons.Default.Timer, "Sleep timer", { action(); onDismiss() }, "action_sleep_timer") }
+            onEqualizer?.let { action -> SheetAction(Icons.Default.GraphicEq, "Audio quality / EQ", { action(); onDismiss() }, "action_equalizer") }
+            onAmbient?.let { action -> SheetAction(Icons.Default.AutoAwesome, "Ambient mode", { action(); onDismiss() }, "action_ambient") }
+
+            if (showLikeAction && likeAvailable) {
                 SheetAction(
                     icon = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                     label = if (isLiked) "Remove from Liked" else "Add to Liked",
@@ -379,6 +396,8 @@ private fun SheetAction(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp)
+            .liquidSurface(20.dp)
             .clickable(onClick = onClick)
             .padding(horizontal = 24.dp, vertical = 14.dp)
             .testTag(testTag),

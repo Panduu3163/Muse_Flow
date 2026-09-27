@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exposes only the one subfolder InAppUpdater downloads a release APK into, via FileProvider -
+     the system package installer needs a content:// URI, not this app's own file:// cache path,
+     to be handed the file at all. -->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>

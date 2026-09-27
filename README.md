@@ -39,7 +39,7 @@ It also relies on unofficial/reverse-engineered access to YouTube Music's intern
 - Automatic fallback across YouTube Music client types and stream extraction paths if one is rejected or blocked
 
 ### 🔍 Discovery
-- Search across **Songs, Albums, Artists, and Playlists**, with state that survives navigating away and back (no lost query/results/scroll position)
+- Search across **Songs, Videos, Albums, Artists, and Playlists**, including regular YouTube uploads absent from YouTube Music, with state that survives navigating away and back
 - Find a song from a remembered lyric line, not just its title — YouTube Music's own search backend (the same one its official app uses) handles the matching
 - Recent search history (capped, shown only while the search field is focused)
 - Real artist pages, including monthly listener counts, with clickable artist names throughout the app — from Search, Now Playing, restored queues, Liked Songs, and playlists alike
@@ -84,7 +84,7 @@ It also relies on unofficial/reverse-engineered access to YouTube Music's intern
 
 ### How music sourcing works
 
-MuseFlow doesn't host or own any music. All streaming audio comes from **YouTube Music**, resolved through a vendored `:innertube` module (a Kotlin port of YouTube Music's internal API) rather than any official, authorized API:
+MuseFlow doesn't host or own any music. Streaming audio comes from **YouTube Music and regular YouTube videos**. Search uses a vendored `:innertube` module and NewPipeExtractor; playback resolves a video ID to an audio stream rather than using an official, authorized API:
 
 - A chain of YouTube client identities (Android VR, TV-embedded, iOS, and others) is tried in an order tuned by real-world testing, since which client is accepted varies by video, region, and over time
 - [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor) handles signature/cipher deobfuscation for clients that need it
@@ -104,7 +104,7 @@ MuseFlow wouldn't exist without the open-source music-client community. Signific
 - [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor) — YouTube signature/cipher deobfuscation
 - [zemer-cipher](https://github.com/ZemerTeam/zemer-cipher) — YouTube cipher deobfuscation and PoToken generation
 - [SimpMusic](https://github.com/maxrave-dev/SimpMusic) — cross-reference for YouTube Music streaming
-- [Echo Music](https://github.com/EchoMusicApp/Echo-Music) — architectural inspiration and direct component ports (Live Mesh background, transport button shapes, Now Playing layout, lyrics animation styles)
+- [Echo Music](https://github.com/EchoMusicApp/Echo-Music) — architectural inspiration and direct component ports (Live Mesh background, transport button shapes, Now Playing layout, lyrics animation styles); the GPL-3.0 Listen Together JSON message types and ranged stream validation approach informed this update
 - [LRCLib](https://lrclib.net), Better Lyrics, YouLyPlus, PaxSenix, SimpMusic, Kugou — synced lyrics sources
 
 Genuine thanks to the maintainers of these projects for their work being open enough to learn from.

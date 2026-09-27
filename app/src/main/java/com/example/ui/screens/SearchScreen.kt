@@ -100,12 +100,15 @@ fun SearchScreen(
     onOpenCharts: () -> Unit = {},
     onOpenNewReleases: () -> Unit = {},
     onOpenExplore: () -> Unit = {},
+    onOpenBrowse: (String, String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val viewModel: SearchViewModel = viewModel()
     val query by viewModel.query.collectAsState()
     val filter by viewModel.filter.collectAsState()
+    val summary by viewModel.summary.collectAsState()
     val results by viewModel.results.collectAsState()
+    val videos by viewModel.videos.collectAsState()
     val albums by viewModel.albums.collectAsState()
     val artists by viewModel.artists.collectAsState()
     val searchedPlaylists by viewModel.playlists.collectAsState()
@@ -123,17 +126,18 @@ fun SearchScreen(
 
     val selection = rememberTrackSelection()
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
+    var showRecents by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
 
-    // Only the Songs tab holds selectable rows, and only for the query that produced them - a new
+    // Songs and Videos hold selectable rows, and only for the query that produced them - a new
     // search or a switch to Albums renumbers everything underneath a positional selection.
-    val songResults = (results as? UiState.Success)?.data.orEmpty()
-    LaunchedEffect(filter, songResults) { selection.clear() }
+    val selectedResults = ((if (filter == SearchFilter.Videos) videos else results) as? UiState.Success)?.data.orEmpty()
+    LaunchedEffect(filter, selectedResults) { selection.clear() }
 
     Column(modifier = modifier.fillMaxSize().statusBarsPadding()) {
         OutlinedTextField(
             value = query,
             onValueChange = viewModel::onQueryChange,
-            placeholder = { Text("Songs, artists, or a lyric you remember") },
+            placeholder = { Text("What do you want to hear?") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
                 if (query.isNotEmpty()) {
@@ -143,7 +147,7 @@ fun SearchScreen(
                 }
             },
             singleLine = true,
-            shape = RoundedCornerShape(16.dp),
+            shape = CircleShape,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(
                 onSearch = {
@@ -164,79 +168,17 @@ fun SearchScreen(
         // inside that `when` below) so they're visible regardless of whether either has anything
         // to show, the same way a real charts page is reachable independent of history.
         if (query.isBlank()) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                    .bounceClick(onClick = onOpenExplore)
-                    .testTag("search_open_explore"),
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .background(MaterialTheme.colorScheme.primary, CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Explore,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(22.dp),
-                        )
-                    }
-                    Column(modifier = Modifier.weight(1f).padding(start = 16.dp)) {
-                        Text(
-                            text = "Explore",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = androidx.compose.ui.graphics.Color.White,
-                        )
-                        Text(
-                            text = "Moods, genres, and browse picks",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f),
-                        )
-                    }
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = null,
-                        tint = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f),
-                    )
-                }
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                BrowseTile(
-                    icon = Icons.AutoMirrored.Filled.TrendingUp,
-                    label = "Charts",
-                    onClick = onOpenCharts,
-                    testTag = "search_open_charts",
-                    modifier = Modifier.weight(1f),
-                )
-                BrowseTile(
-                    icon = Icons.Default.NewReleases,
-                    label = "New releases",
-                    onClick = onOpenNewReleases,
-                    testTag = "search_open_new_releases",
-                    modifier = Modifier.weight(1f),
-                )
+            LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { FilterChip(!showRecents, { showRecents = false }, { Text("Explore") }, shape = CircleShape) }
+                item { FilterChip(false, onOpenCharts, { Text("Musechart") }, shape = CircleShape) }
+                item { FilterChip(false, onOpenNewReleases, { Text("Fresh drops") }, shape = CircleShape) }
+                item { FilterChip(showRecents, { showRecents = true }, { Text("Recent searches") }, shape = CircleShape) }
             }
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
             when {
+                query.isBlank() && !showRecents -> ExplorePreview(onOpenBrowse = onOpenBrowse, onBrowseAll = onOpenExplore)
                 suggestions.isNotEmpty() && query.isNotBlank() -> SuggestionList(
                     suggestions = suggestions,
                     onPick = {
@@ -262,7 +204,7 @@ fun SearchScreen(
                         // pointing at rows that are no longer on screen.
                         TrackSelectionHost(
                             selection = selection,
-                            tracks = songResults,
+                            tracks = selectedResults,
                             playerViewModel = playerViewModel,
                             actionsViewModel = actionsViewModel,
                         )
@@ -281,6 +223,19 @@ fun SearchScreen(
                     // screen and overflow past the bottom.
                     Box(modifier = Modifier.weight(1f)) {
                         when (filter) {
+                            SearchFilter.All -> AllResults(
+                                shelves = summary,
+                                emptyMessage = emptyMessage,
+                                onPlayTrack = onPlayTrack,
+                                likedKeys = likedKeys,
+                                downloadedKeys = downloadedKeys,
+                                downloadsInProgress = downloadsInProgress,
+                                onOpenMenu = { track -> selectedTrack = track },
+                                onGoToAlbum = onGoToAlbum,
+                                onGoToArtist = onGoToArtist,
+                                onGoToPlaylist = onGoToPlaylist,
+                            )
+
                             SearchFilter.Songs -> TrackResults(
                                 results = results,
                                 emptyMessage = emptyMessage,
@@ -293,6 +248,20 @@ fun SearchScreen(
                                 recommendationsStartAt = recommendationsStartAt,
                                 isLoadingMore = isLoadingMoreSongs,
                                 onLoadMore = viewModel::loadMoreSongs,
+                            )
+
+                            SearchFilter.Videos -> TrackResults(
+                                results = videos,
+                                emptyMessage = emptyMessage,
+                                onPlayTrack = onPlayTrack,
+                                likedKeys = likedKeys,
+                                downloadedKeys = downloadedKeys,
+                                downloadsInProgress = downloadsInProgress,
+                                onOpenMenu = { track -> selectedTrack = track },
+                                selection = selection,
+                                recommendationsStartAt = null,
+                                isLoadingMore = false,
+                                onLoadMore = {},
                             )
 
                             SearchFilter.Albums -> CollectionResults(
@@ -405,6 +374,102 @@ private fun FilterChips(selected: SearchFilter, onSelect: (SearchFilter) -> Unit
                 label = { Text(entry.label) },
                 modifier = Modifier.testTag("search_filter_${entry.name.lowercase()}"),
             )
+        }
+    }
+}
+
+/**
+ * The "All" tab - YouTube Music's own mixed results page: Top result, Songs, Videos, Albums,
+ * Artists, Playlists shelves, in whichever titles/order/counts that response actually returned
+ * (see [com.example.SearchShelf]'s own doc - nothing here re-orders or re-groups them). Tapping a
+ * song/video queues the rest of *that shelf's* songs behind it, not the whole page, since a shelf
+ * is the only grouping with real relatedness to autoplay into.
+ */
+@Composable
+private fun AllResults(
+    shelves: UiState<List<com.example.SearchShelf>>,
+    emptyMessage: String,
+    onPlayTrack: (TrackResult, List<TrackResult>) -> Unit,
+    likedKeys: Set<String>,
+    downloadedKeys: Set<String>,
+    downloadsInProgress: Map<String, Int>,
+    onOpenMenu: (TrackResult) -> Unit,
+    onGoToAlbum: (String) -> Unit,
+    onGoToArtist: (String) -> Unit,
+    onGoToPlaylist: (String, String, String, String?) -> Unit,
+) {
+    ResultsFrame(shelves, emptyMessage) { shelfList ->
+        LazyColumn(contentPadding = PaddingValues(bottom = 200.dp)) {
+            shelfList.forEachIndexed { shelfIndex, shelf ->
+                item(key = "shelf_header_$shelfIndex") {
+                    Text(
+                        text = shelf.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 8.dp),
+                    )
+                }
+                // Queue for a tap in this shelf: just this shelf's own songs, in the order shown -
+                // a shelf mixing a song with an artist/playlist card has nothing else to queue.
+                val shelfSongs = shelf.items.filterIsInstance<com.example.SearchResultItem.Song>().map { it.track }
+                itemsIndexed(shelf.items, key = { itemIndex, _ -> "shelf_${shelfIndex}_item_$itemIndex" }) { _, resultItem ->
+                    when (resultItem) {
+                        is com.example.SearchResultItem.Song -> {
+                            val key = resultItem.track.downloadKey()
+                            TrackRow(
+                                title = resultItem.track.title,
+                                artist = resultItem.track.artist,
+                                imageUrl = resultItem.track.imageUrl,
+                                duration = resultItem.track.duration,
+                                onClick = { onPlayTrack(resultItem.track, shelfSongs) },
+                                isLiked = key in likedKeys,
+                                isDownloaded = key in downloadedKeys,
+                                downloadProgress = downloadsInProgress[key],
+                                onOpenMenu = { onOpenMenu(resultItem.track) },
+                                modifier = Modifier.animateItem(),
+                            )
+                        }
+
+                        is com.example.SearchResultItem.AlbumRow -> CollectionRow(
+                            title = resultItem.album.title,
+                            subtitle = listOfNotNull(
+                                resultItem.album.artist.takeIf { it.isNotBlank() },
+                                resultItem.album.songCount?.let { "$it songs" },
+                            ).joinToString(" · "),
+                            imageUrl = resultItem.album.imageUrl,
+                            kind = CollectionKind.Album,
+                            onClick = { onGoToAlbum(resultItem.album.id) },
+                            modifier = Modifier.animateItem(),
+                        )
+
+                        is com.example.SearchResultItem.ArtistRow -> CollectionRow(
+                            title = resultItem.artist.name,
+                            subtitle = resultItem.artist.listenerCount ?: "Artist",
+                            imageUrl = resultItem.artist.imageUrl,
+                            kind = CollectionKind.Artist,
+                            onClick = { onGoToArtist(resultItem.artist.id) },
+                            modifier = Modifier.animateItem(),
+                        )
+
+                        is com.example.SearchResultItem.PlaylistRow -> CollectionRow(
+                            title = resultItem.playlist.title,
+                            subtitle = resultItem.playlist.subtitle,
+                            imageUrl = resultItem.playlist.imageUrl,
+                            kind = CollectionKind.Playlist,
+                            onClick = {
+                                onGoToPlaylist(
+                                    resultItem.playlist.id,
+                                    resultItem.playlist.title,
+                                    resultItem.playlist.subtitle,
+                                    resultItem.playlist.imageUrl,
+                                )
+                            },
+                            modifier = Modifier.animateItem(),
+                        )
+                    }
+                }
+            }
         }
     }
 }

@@ -7,6 +7,30 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+
+enum class StatsPeriod(val label: String, val days: Int?) {
+    AllTime("All time", null), Week("1 week", 7), Month("1 month", 30), Quarter("3 months", 90)
+}
+
+enum class StatsMode { Continuous, Calendar }
+
+internal fun historyForPeriod(history: List<PlaybackHistoryEntity>, events: List<PlaybackEventEntity>, period: StatsPeriod, now: Long, mode: StatsMode = StatsMode.Continuous): List<PlaybackHistoryEntity> {
+    val days = period.days ?: return history
+    val start = if (mode == StatsMode.Continuous) now - days * 86_400_000L else {
+        val date = java.time.Instant.ofEpochMilli(now).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+        val first = when (period) {
+            StatsPeriod.Week -> date.with(java.time.DayOfWeek.MONDAY)
+            StatsPeriod.Month -> date.withDayOfMonth(1)
+            StatsPeriod.Quarter -> date.withDayOfMonth(1).withMonth(((date.monthValue - 1) / 3) * 3 + 1)
+            StatsPeriod.AllTime -> date
+        }
+        first.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+    }
+    val counts = events.filter { it.playedAt in start..now }.groupingBy { it.trackKey }.eachCount()
+    return history.mapNotNull { entry -> counts[entry.key]?.let { entry.copy(playCount = it) } }
+}
 
 /** One artist's aggregate listening stats, ranked by total plays across every track of theirs
  * with history - [PlaybackHistoryEntity] only tracks per-track play counts, so this is a rollup
@@ -14,20 +38,22 @@ import kotlinx.coroutines.flow.stateIn
 data class ArtistStat(val name: String, val plays: Int, val imageUrl: String?, val artistId: String?)
 
 /**
- * Listening insights, entirely derived from [PlaybackHistoryRepository] - no new data collection.
- *
- * Deliberately all-time only, not broken down by day/week/month: [PlaybackHistoryEntity] stores one
- * row per track with a running [PlaybackHistoryEntity.playCount] and its *most recent* [PlaybackHistoryEntity.playedAt],
- * not a timestamped event per play - there's no record of *when* each of those plays happened, so a
- * "this week vs last week" breakdown would have to be invented rather than computed. Echo's own
- * `StatPeriod` needs a per-play event log this app doesn't keep; adding one just for a period filter
- * would be a real schema change for a nice-to-have, not a bug fix.
+ * Listening insights derived from aggregate history and the per-play event log. Older plays remain
+ * visible in All time because their original timestamps cannot be recovered; rolling/calendar
+ * periods count only plays recorded since the event log was introduced.
  */
 class StatsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val historyRepository = PlaybackHistoryRepository.getInstance(application)
 
-    private val history: StateFlow<List<PlaybackHistoryEntity>> = historyRepository.observeAll()
+    val period = MutableStateFlow(StatsPeriod.AllTime)
+    val mode = MutableStateFlow(StatsMode.Continuous)
+    fun selectPeriod(value: StatsPeriod) { period.value = value }
+    fun selectMode(value: StatsMode) { mode.value = value }
+
+    private val history: StateFlow<List<PlaybackHistoryEntity>> = combine(
+        historyRepository.observeAll(), historyRepository.observeEvents(), period, mode
+    ) { history, events, period, mode -> historyForPeriod(history, events, period, System.currentTimeMillis(), mode) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val totalPlays: StateFlow<Int> = history
@@ -46,9 +72,8 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
         .map { entries -> entries.map { it.album }.filter(String::isNotBlank).distinct().size }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
-    /** Total minutes across every recorded play, estimated from each track's own duration times how
-     * many times it's played - the only honest "listening time" this data supports, since it isn't
-     * timestamped per play (see the class doc). */
+    /** Estimated minutes from each track's duration times its counted starts. This is not actual
+     * listened time because a play may be skipped before the track ends. */
     val totalListeningMinutes: StateFlow<Long> = history
         .map { entries -> entries.sumOf { it.durationSeconds() * it.playCount } / 60L }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)

@@ -99,6 +99,17 @@ data class PlaybackHistoryEntity(
 
 @Dao
 interface PlaybackHistoryDao {
+    @Insert
+    suspend fun insertEvent(event: PlaybackEventEntity)
+
+    @Query("SELECT * FROM playback_events ORDER BY playedAt DESC")
+    fun observeEvents(): Flow<List<PlaybackEventEntity>>
+
+    @Query("DELETE FROM playback_events WHERE trackKey = :key")
+    suspend fun deleteEvents(key: String)
+
+    @Query("DELETE FROM playback_events")
+    suspend fun clearEvents()
     @Query("SELECT * FROM playback_history ORDER BY playedAt DESC LIMIT :limit")
     fun observeRecent(limit: Int): Flow<List<PlaybackHistoryEntity>>
 
@@ -193,15 +204,29 @@ data class PlaylistEntity(
     /** Added in [MIGRATION_13_14]. A `content://` URI from the system picker, persisted with a
      * read permission grant (see `PlaylistDetailScreen`'s cover picker) so it survives reboot. */
     val customCoverUri: String? = null,
+    val remoteId: String? = null,
 )
 
 @Dao
 interface PlaylistDao {
+    @Query("SELECT * FROM playlists WHERE remoteId = :remoteId LIMIT 1")
+    suspend fun findRemote(remoteId: String): PlaylistEntity?
     // Pinned first, then whatever the table's own creation order already gave: pin is an override
     // on top of sort, not a sort option of its own, so it applies before every other ordering this
     // query feeds into.
     @Query("SELECT * FROM playlists ORDER BY isPinned DESC, createdAt DESC")
     fun observeAll(): Flow<List<PlaylistEntity>>
+
+    /** Playlists with at least one downloaded track. Derived from the existing
+     * playlist/download tables, so older installs gain downloaded-playlist grouping immediately
+     * without a second source of truth or a destructive migration. */
+    @Query(
+        "SELECT p.* FROM playlists p " +
+            "WHERE EXISTS (SELECT 1 FROM playlist_tracks pt JOIN downloaded_tracks d ON d.key = pt.key " +
+            "WHERE pt.playlistId = p.id AND d.status = 'COMPLETED') " +
+            "ORDER BY p.isPinned DESC, p.createdAt DESC"
+    )
+    fun observeWithDownloads(): Flow<List<PlaylistEntity>>
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(entity: PlaylistEntity): Long
@@ -450,10 +475,28 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
     }
 }
 
+@Entity(tableName = "playback_events", indices = [androidx.room.Index("playedAt"), androidx.room.Index("trackKey")])
+data class PlaybackEventEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val trackKey: String,
+    val playedAt: Long,
+)
+
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE playlists ADD COLUMN remoteId TEXT")
+        db.execSQL("CREATE TABLE IF NOT EXISTS playback_events (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, trackKey TEXT NOT NULL, playedAt INTEGER NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_playback_events_playedAt ON playback_events(playedAt)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_playback_events_trackKey ON playback_events(trackKey)")
+        // Historical lifetime counts cannot be assigned invented timestamps.
+    }
+}
+
 @Database(
     entities = [
         DownloadedTrackEntity::class,
         PlaybackHistoryEntity::class,
+        PlaybackEventEntity::class,
         LikedSongEntity::class,
         PlaylistEntity::class,
         PlaylistTrackEntity::class,
@@ -463,7 +506,7 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
         ArtistPageCacheEntity::class,
         AlbumPageCacheEntity::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = false
 )
 abstract class MuseFlowDatabase : RoomDatabase() {
@@ -491,7 +534,7 @@ abstract class MuseFlowDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
                         MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
-                        MIGRATION_12_13, MIGRATION_13_14
+                        MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15
                     )
                     .build().also { instance = it }
             }

@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,6 +52,11 @@ fun TrackRow(
     onLongClick: (() -> Unit)? = null,
     isLiked: Boolean = false,
     isDownloaded: Boolean = false,
+    /** A file already on the device (On Device section, or an on-device track that's since been
+     * liked/added to a playlist) - shown with its own glyph rather than [isDownloaded]'s, since
+     * "Download" is a meaningless action/status for something that was never fetched through the
+     * app's own download feature in the first place. Takes priority when both are somehow true. */
+    isLocalDevice: Boolean = false,
     /** 0-100 while downloading, -1 for "started, no percentage yet", null when not downloading. */
     downloadProgress: Int? = null,
     /** Ticked in multi-select mode. Tints the row and replaces the artwork with a checkmark. */
@@ -133,7 +139,16 @@ fun TrackRow(
                 modifier = Modifier.size(16.dp),
             )
         }
-        if (isDownloaded) {
+        if (isLocalDevice) {
+            Icon(
+                imageVector = Icons.Default.Storage,
+                contentDescription = "On this device",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(start = 6.dp)
+                    .size(16.dp),
+            )
+        } else if (isDownloaded) {
             Icon(
                 imageVector = Icons.Default.DownloadDone,
                 contentDescription = "Downloaded",

@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.MaterialTheme
@@ -49,6 +50,7 @@ fun SettingsScreen(
     onOpenStorage: () -> Unit = {},
     onOpenCrashLogs: () -> Unit = {},
     onOpenAbout: () -> Unit = {},
+    onOpenUpdates: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -162,6 +164,12 @@ fun SettingsScreen(
                     subtitle = "Version and app info.",
                     icon = Icons.Default.Info,
                     onClick = onOpenAbout,
+                )
+                NavigationPreference(
+                    title = "Check for updates",
+                    subtitle = "See what's new, or download the latest version.",
+                    icon = Icons.Default.SystemUpdate,
+                    onClick = onOpenUpdates,
                 )
             }
         }

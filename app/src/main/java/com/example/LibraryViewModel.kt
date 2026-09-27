@@ -125,6 +125,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     val followedArtists: StateFlow<List<FollowedArtistEntity>> = followedArtistsRepository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** Local playlists whose every track has a completed offline file. */
+    val downloadedPlaylists: StateFlow<List<PlaylistEntity>> = playlistRepository.observeWithDownloads()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     fun unfollowArtist(artistId: String) = followedArtistsRepository.unfollow(artistId)
 
     /**

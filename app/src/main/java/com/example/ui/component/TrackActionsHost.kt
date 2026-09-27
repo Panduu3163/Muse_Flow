@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import com.example.MusicSource
 import com.example.PlayerViewModel
 import com.example.Track
 import com.example.TrackActionsViewModel
@@ -60,6 +61,7 @@ fun TrackActionsHost(
      * one - see [TrackActionsSheet]. */
     onCopyLyrics: (() -> Unit)? = null,
     onSearchLyricsOnline: (() -> Unit)? = null,
+    onEqualizer: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val likedKeys by actionsViewModel.likedKeys.collectAsState()
@@ -72,6 +74,21 @@ fun TrackActionsHost(
     var pendingPlaylistTrack by remember { mutableStateOf<Track?>(null) }
     // Same reasoning: Details opens after the sheet dismisses, not inside it.
     var detailsTrack by remember { mutableStateOf<TrackResult?>(null) }
+    var sleepDialog by remember { mutableStateOf(false) }
+    var ambient by remember { mutableStateOf(false) }
+    if (sleepDialog) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { sleepDialog = false }, title = { androidx.compose.material3.Text("Sleep timer") },
+        text = { androidx.compose.foundation.layout.Column {
+            listOf(15, 30, 45, 60).forEach { minutes ->
+                androidx.compose.material3.TextButton(onClick = { playerViewModel.startSleepTimer(minutes); sleepDialog = false }) {
+                    androidx.compose.material3.Text("$minutes minutes")
+                }
+            }
+        } },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { playerViewModel.cancelSleepTimer(); sleepDialog = false }) { androidx.compose.material3.Text("Turn off timer") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { sleepDialog = false }) { androidx.compose.material3.Text("Close") } },
+    )
+    if (ambient) AmbientPlayer(playerViewModel, onDismiss = { ambient = false })
 
     track?.let { selected ->
         val asTrack = selected.toPlayableTrack(selected.id.hashCode())
@@ -86,6 +103,11 @@ fun TrackActionsHost(
             imageUrl = selected.imageUrl,
             albumLabel = selected.source,
             isLiked = likedKeys.contains(key),
+            // A local file already on the device - see TrackActionsSheet's own doc for why liking
+            // one is disabled rather than offered and broken. Still available if it's already
+            // liked from before this existed, though, so that can be undone - permanently hiding
+            // this would leave an already-liked local file stuck in Liked with no way back out.
+            likeAvailable = selected.sourceType != MusicSource.LOCAL_DEVICE || likedKeys.contains(key),
             isDownloaded = downloadedKeys.contains(key),
             downloadProgress = downloadsInProgress[key],
             onPlayNext = { playerViewModel.playNext(selected) },
@@ -120,6 +142,9 @@ fun TrackActionsHost(
             showDownloadAction = showDownloadAction,
             onCopyLyrics = onCopyLyrics,
             onSearchLyricsOnline = onSearchLyricsOnline,
+            onSleepTimer = if (onEqualizer != null) ({ sleepDialog = true }) else null,
+            onEqualizer = onEqualizer,
+            onAmbient = if (onEqualizer != null) ({ ambient = true }) else null,
         )
     }
 

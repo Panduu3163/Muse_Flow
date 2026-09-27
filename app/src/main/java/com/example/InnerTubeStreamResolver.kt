@@ -31,15 +31,15 @@ object InnerTubeStreamResolver {
      * are deliberately excluded - minting one is exactly the MuseFlow machinery this path exists
      * to avoid depending on. */
     private val CLIENT_CHAIN: List<YouTubeClient> = listOf(
+        YouTubeClient.VISIONOS,
+        YouTubeClient.TVHTML5,
         YouTubeClient.ANDROID_VR_1_43_32,
         YouTubeClient.ANDROID_VR_1_61_48,
         YouTubeClient.ANDROID_VR_NO_AUTH,
-        YouTubeClient.TVHTML5_SIMPLY_EMBEDDED_PLAYER,
         YouTubeClient.ANDROID_CREATOR,
         YouTubeClient.IPADOS,
         YouTubeClient.IOS,
         YouTubeClient.MOBILE,
-        YouTubeClient.VISIONOS,
         YouTubeClient.ANDROID_NO_SDK,
     )
 
@@ -77,7 +77,9 @@ object InnerTubeStreamResolver {
                 continue
             }
 
-            response.bestAudioUrl()?.let { url ->
+            response.bestAudioFormat()?.let { format ->
+                val url = format.url!!
+                if (!validateStream(url, client.userAgent, format.contentLength)) return@let
                 Log.i(TAG, "$videoId resolved via ${client.clientName}")
                 return StreamResolution(url = url, userAgent = client.userAgent)
             }
@@ -85,8 +87,10 @@ object InnerTubeStreamResolver {
             // Playable, but the URLs are signature-obfuscated - let NewPipe decipher them.
             runCatching { YouTube.newPipePlayer(videoId, response) }
                 .getOrNull()
-                ?.bestAudioUrl()
-                ?.let { url ->
+                ?.bestAudioFormat()
+                ?.let { format ->
+                    val url = format.url!!
+                    if (!validateStream(url, client.userAgent, format.contentLength)) return@let
                     Log.i(TAG, "$videoId resolved via ${client.clientName} + NewPipe deobfuscation")
                     return StreamResolution(url = url, userAgent = client.userAgent)
                 }
@@ -94,6 +98,21 @@ object InnerTubeStreamResolver {
 
         Log.w(TAG, "no client and no NewPipe extraction produced a stream for $videoId")
         return null
+    }
+
+    private val probeClient = okhttp3.OkHttpClient.Builder()
+        .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
+
+    /** Echo Music reference: range probes reject preview-only URLs before playback starts.
+     * Match the playback user agent; never forward account cookies to CDN probes. */
+    private suspend fun validateStream(url: String, userAgent: String?, length: Long?): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val range = if (length != null && length > 0) "bytes=${length - 1}-${length - 1}" else "bytes=0-0"
+            val request = okhttp3.Request.Builder().url(url).head().header("Range", range)
+                .apply { userAgent?.let { header("User-Agent", it) } }.build()
+            probeClient.newCall(request).execute().use { it.isSuccessful || it.code == 405 }
+        } catch (_: java.io.IOException) { true }
     }
 
     /** NewPipe URLs aren't tied to one of our client User-Agents, so none is attached here. */
@@ -108,9 +127,11 @@ object InnerTubeStreamResolver {
             return@withContext null
         }
 
-        val byItag = streams.toMap()
-        val url = AUDIO_ITAG_PREFERENCE.firstNotNullOfOrNull { byItag[it] }
-            ?: streams.first().second // Any stream beats none.
+        val ordered = streams.distinctBy { it.second }.sortedBy { (itag, _) ->
+            AUDIO_ITAG_PREFERENCE.indexOf(itag).takeIf { it >= 0 } ?: Int.MAX_VALUE
+        }
+        val url = ordered.firstOrNull { (_, candidate) -> validateStream(candidate, null, null) }?.second
+            ?: return@withContext null
 
         Log.i(TAG, "$videoId resolved via NewPipe standalone extraction")
         StreamResolution(url = url)
@@ -122,12 +143,11 @@ object InnerTubeStreamResolver {
  * and ranked by bitrate; the muxed [PlayerResponse.StreamingData.formats] list is used only if no
  * adaptive audio format carries a URL - those carry video too, but a playable stream beats none.
  */
-private fun PlayerResponse.bestAudioUrl(): String? {
+private fun PlayerResponse.bestAudioFormat(): PlayerResponse.StreamingData.Format? {
     val streaming = streamingData ?: return null
 
     return streaming.adaptiveFormats
-        .filter { it.isAudio && it.url != null }
+        .filter { it.isAudio && it.isOriginal && it.url != null }
         .maxByOrNull { it.bitrate }
-        ?.url
-        ?: streaming.formats?.firstOrNull { it.url != null }?.url
+        ?: streaming.formats?.firstOrNull { it.url != null }
 }

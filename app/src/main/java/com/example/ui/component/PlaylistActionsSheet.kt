@@ -14,8 +14,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.ImageNotSupported
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -71,6 +74,7 @@ fun PlaylistActionsSheet(
     onPlayNext: () -> Unit,
     onAddToQueue: () -> Unit,
     onDownload: () -> Unit,
+    onShare: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
     /** Opens the system image picker - absent from the row entirely (rather than calling with a
@@ -214,6 +218,13 @@ fun PlaylistActionsSheet(
                 testTag = "playlist_action_download",
             )
             PlaylistSheetAction(
+                icon = Icons.Default.Share,
+                label = "Share",
+                supporting = "Send this playlist to another MuseFlow user",
+                onClick = { onShare(); onDismiss() },
+                testTag = "playlist_action_share",
+            )
+            PlaylistSheetAction(
                 icon = Icons.Default.Image,
                 label = "Change cover",
                 supporting = "Pick a photo instead of the auto-generated one",
@@ -258,6 +269,118 @@ fun PlaylistActionsSheet(
                 TextButton(onClick = { confirmingDelete = false }) { Text("Cancel") }
             },
         )
+    }
+}
+
+/**
+ * The "⋮" menu opened from a *remote* (not-yet-saved, or already-saved-from-online) playlist's own
+ * screen - the counterpart to [PlaylistActionsSheet] for a playlist that isn't necessarily a real
+ * Library entry yet, so it has none of that one's pin/delete/change-cover/queue concepts.
+ *
+ * Replaces what used to be five circle buttons (Shuffle, Play, Save, Download, Share) crowded into
+ * one row on [com.example.ui.screens.RemotePlaylistScreen] - Shuffle and Play stay as their own
+ * one-tap buttons there, and this collects the other three behind a single "⋮" instead.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RemotePlaylistActionsSheet(
+    title: String,
+    songCount: Int,
+    imageUrl: String?,
+    addedToLibrary: Boolean,
+    onSaveToLibrary: () -> Unit,
+    onDownload: () -> Unit,
+    onShare: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
+                .padding(bottom = 12.dp)
+                .testTag("remote_playlist_actions_sheet"),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (imageUrl != null) {
+                        AsyncImage(
+                            model = imageUrl,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(52.dp),
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 14.dp),
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "$songCount ${if (songCount == 1) "song" else "songs"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            SheetDivider()
+
+            PlaylistSheetAction(
+                icon = if (addedToLibrary) Icons.Default.Check else Icons.AutoMirrored.Filled.PlaylistAdd,
+                label = if (addedToLibrary) "Added to Library" else "Add to Library",
+                supporting = if (addedToLibrary) null else "Save this playlist to your own library",
+                onClick = { onSaveToLibrary(); onDismiss() },
+                testTag = "remote_playlist_action_save",
+            )
+            PlaylistSheetAction(
+                icon = Icons.Default.Download,
+                label = "Download",
+                supporting = "Make every song available offline",
+                onClick = { onDownload(); onDismiss() },
+                testTag = "remote_playlist_action_download",
+            )
+            PlaylistSheetAction(
+                icon = Icons.Default.Share,
+                label = "Share",
+                supporting = "Send this playlist's link to another MuseFlow user",
+                onClick = { onShare(); onDismiss() },
+                testTag = "remote_playlist_action_share",
+            )
+        }
     }
 }
 

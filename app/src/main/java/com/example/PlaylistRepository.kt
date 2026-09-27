@@ -1,4 +1,5 @@
 package com.example
+import androidx.room.withTransaction
 
 import android.content.Context
 import com.music.innertube.models.upgradeThumbnailSize
@@ -12,13 +13,18 @@ import kotlinx.coroutines.flow.map
  */
 class PlaylistRepository private constructor(context: Context) {
 
-    private val dao = MuseFlowDatabase.getInstance(context.applicationContext).playlistDao()
+    private val database = MuseFlowDatabase.getInstance(context.applicationContext)
+    private val dao = database.playlistDao()
     private val trackDao = MuseFlowDatabase.getInstance(context.applicationContext).playlistTrackDao()
 
     // coverImageUrl is only set for an imported online playlist and only ever read (Library's row,
     // the mosaic cover's fallback) - upgraded here at read time for the same reason every other
     // stored thumbnail is, rather than in the entity itself.
     fun observeAll(): Flow<List<PlaylistEntity>> = dao.observeAll().map { playlists ->
+        playlists.map { it.copy(coverImageUrl = it.coverImageUrl?.let(::upgradeThumbnailSize)) }
+    }
+
+    fun observeWithDownloads(): Flow<List<PlaylistEntity>> = dao.observeWithDownloads().map { playlists ->
         playlists.map { it.copy(coverImageUrl = it.coverImageUrl?.let(::upgradeThumbnailSize)) }
     }
 
@@ -102,10 +108,12 @@ class PlaylistRepository private constructor(context: Context) {
 
     /** Creates a new playlist pre-populated with [tracks] and a real [coverImageUrl] in one shot -
      * used by "Add to my library" on an online playlist's detail screen. */
-    suspend fun importOnlinePlaylist(name: String, coverImageUrl: String?, tracks: List<Track>): Long {
-        val id = create(name, coverImageUrl)
+    suspend fun importOnlinePlaylist(name: String, coverImageUrl: String?, tracks: List<Track>, remoteId: String? = null): Long = database.withTransaction {
+        val id = remoteId?.let { dao.findRemote(it)?.id } ?: dao.insert(
+            PlaylistEntity(name = name, coverImageUrl = coverImageUrl, createdAt = System.currentTimeMillis(), remoteId = remoteId)
+        )
         addTracks(id, tracks)
-        return id
+        id
     }
 
     companion object {

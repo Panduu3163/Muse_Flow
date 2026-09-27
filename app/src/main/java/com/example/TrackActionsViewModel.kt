@@ -33,6 +33,7 @@ class TrackActionsViewModel(application: Application) : AndroidViewModel(applica
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
     val downloadsInProgress: StateFlow<Map<String, Int>> = downloadRepository.inProgress
+    val downloadFailures = downloadRepository.failures
 
     val playlists: StateFlow<List<PlaylistEntity>> = playlistRepository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -67,10 +68,18 @@ class TrackActionsViewModel(application: Application) : AndroidViewModel(applica
     /**
      * Queues a download for each of [tracks].
      *
-     * Already-downloaded tracks are the caller's to filter - the repository treats a repeat as a
-     * fresh download, so the bar drops them before calling.
+     * The repository skips completed tracks and deduplicates concurrent requests, so this is safe
+     * for a playlist that is only partly downloaded.
      */
     fun downloadAll(tracks: List<Track>) = tracks.forEach(downloadRepository::startDownload)
+
+    /** Makes an online playlist a real Library item and downloads all of its tracks. */
+    fun saveAndDownloadPlaylist(name: String, coverImageUrl: String?, tracks: List<Track>, remoteId: String? = null) {
+        viewModelScope.launch {
+            playlistRepository.importOnlinePlaylist(name, coverImageUrl, tracks, remoteId)
+            tracks.forEach(downloadRepository::startDownload)
+        }
+    }
 
     fun cancelDownload(track: Track) = downloadRepository.cancelDownload(track)
 
@@ -109,7 +118,7 @@ class TrackActionsViewModel(application: Application) : AndroidViewModel(applica
      * under its own name and cover, no naming prompt. Unlike [createPlaylistWith], the name and
      * artwork are already known (they came from the source playlist itself), so there is nothing
      * for the user to decide here. */
-    fun addRemotePlaylistToLibrary(name: String, coverImageUrl: String?, tracks: List<Track>) {
-        viewModelScope.launch { playlistRepository.importOnlinePlaylist(name, coverImageUrl, tracks) }
+    fun addRemotePlaylistToLibrary(name: String, coverImageUrl: String?, tracks: List<Track>, remoteId: String? = null) {
+        viewModelScope.launch { playlistRepository.importOnlinePlaylist(name, coverImageUrl, tracks, remoteId) }
     }
 }

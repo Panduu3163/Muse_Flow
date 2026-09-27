@@ -14,6 +14,10 @@
     <!-- For Search's "On device" mode (LocalAudioProvider) - scans local audio via MediaStore. -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- For InAppUpdater - this app has no Play Store distribution to self-update through, so a
+         newer release downloaded from GitHub is installed by handing it to the system package
+         installer directly, which needs this permission on API 26+. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".MuseFlowApplication"
@@ -53,6 +57,19 @@
             android:name=".DownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Hands a downloaded update APK (in cacheDir/updates, see file_paths.xml) to the system
+             package installer as a content:// URI - it can't be given this app's own file:// path
+             directly. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

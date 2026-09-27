@@ -24,6 +24,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.example.ui.utils.slowMarquee
 
 /**
  * One card for an album/artist/playlist/track (image, title, optional subtitle) in a horizontal
@@ -50,12 +51,14 @@ fun MediaCard(
     Column(
         modifier = modifier
             .width(size)
-            .clickable(onClick = onClick),
+            .liquidSurface(20.dp)
+            .clickable(onClick = onClick)
+            .padding(8.dp),
     ) {
         if (artwork != null) {
-            artwork(Modifier.size(size).clip(shape))
+            artwork(Modifier.fillMaxWidth().aspectRatio(1f).clip(shape))
         } else {
-            CardArtwork(imageUrl = imageUrl, placeholder = placeholder, shape = shape, modifier = Modifier.size(size), iconSize = 24.dp)
+            CardArtwork(imageUrl = imageUrl, placeholder = placeholder, shape = shape, modifier = Modifier.fillMaxWidth().aspectRatio(1f), iconSize = 24.dp)
         }
         Text(
             text = title,
@@ -63,7 +66,7 @@ fun MediaCard(
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp).slowMarquee(),
         )
         if (!subtitle.isNullOrBlank()) {
             Text(
@@ -72,6 +75,7 @@ fun MediaCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().slowMarquee(),
             )
         }
     }
@@ -90,7 +94,7 @@ fun MediaGridCard(
     modifier: Modifier = Modifier,
     shape: Shape = RoundedCornerShape(14.dp),
 ) {
-    Column(modifier = modifier.fillMaxWidth().clickable(onClick = onClick)) {
+    Column(modifier = modifier.fillMaxWidth().liquidSurface().clickable(onClick = onClick).padding(8.dp)) {
         CardArtwork(
             imageUrl = imageUrl,
             placeholder = placeholder,
@@ -104,7 +108,7 @@ fun MediaGridCard(
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp).slowMarquee(),
         )
         if (!subtitle.isNullOrBlank()) {
             Text(
@@ -113,6 +117,7 @@ fun MediaGridCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().slowMarquee(),
             )
         }
     }

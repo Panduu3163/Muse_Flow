@@ -3,13 +3,16 @@ package com.example.ui.screens
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -69,6 +72,7 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Surface
@@ -81,6 +85,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -128,6 +133,7 @@ import com.example.asPlaybackTime
 import androidx.compose.foundation.clickable
 import com.example.ui.component.SquigglySlider
 import com.example.ui.utils.bounceClick
+import com.example.ui.utils.slowMarquee
 
 /**
  * The full-screen player: large artwork, a seekable progress bar, transport controls, and a
@@ -204,6 +210,7 @@ fun NowPlayingScreen(
             onGoToArtist = onGoToArtist,
             isLiked = isLiked,
             isDownloaded = isDownloaded,
+            isLocalDevice = state.isLocalDevice,
             downloadProgress = downloadProgress,
             onToggleLike = onToggleLike,
             onDownload = onDownload,
@@ -496,6 +503,7 @@ private fun PlayerContent(
     onCollapse: () -> Unit,
     isLiked: Boolean,
     isDownloaded: Boolean,
+    isLocalDevice: Boolean = false,
     downloadProgress: Int?,
     onToggleLike: () -> Unit,
     onDownload: () -> Unit,
@@ -625,29 +633,45 @@ private fun PlayerContent(
                     text = state.title.ifBlank { "Nothing playing" },
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Start,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(
-                    text = state.artist,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Start,
+                    modifier = Modifier.fillMaxWidth().slowMarquee(),
+                )
+                // One Text per credited artist (rather than a single Text for the whole joined
+                // string) so a multi-artist song's byline sends a tap on one name to *that*
+                // artist's page - a single shared clickable used to always open the first artist
+                // regardless of which name was actually tapped.
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 4.dp)
-                        .then(
-                            state.artistId?.let { artistId ->
+                        .slowMarquee(),
+                ) {
+                    state.artistCredits.forEachIndexed { index, credit ->
+                        Text(
+                            text = credit.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = credit.id?.let { artistId ->
                                 Modifier
                                     .clickable { onGoToArtist(artistId) }
                                     .testTag("now_playing_artist_name")
-                            } ?: Modifier
-                        ),
-                )
+                            } ?: Modifier,
+                        )
+                        if (index != state.artistCredits.lastIndex) {
+                            Text(
+                                text = ", ",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
+                    }
+                }
             }
 
             Spacer(Modifier.width(12.dp))
@@ -663,13 +687,20 @@ private fun PlayerContent(
                         .clip(shareShape)
                         .background(pillContainerColor)
                         .clickable(
-                            enabled = state.hasMedia && !isDownloaded && downloadProgress == null,
+                            // "Download" is a meaningless action for a file already on the device -
+                            // never fetched through the app, nothing for this button to do.
+                            enabled = state.hasMedia && !isLocalDevice && !isDownloaded && downloadProgress == null,
                             onClick = onDownload,
                         )
                         .testTag("now_playing_download"),
                     contentAlignment = Alignment.Center,
                 ) {
                     when {
+                        isLocalDevice -> Icon(
+                            imageVector = Icons.Default.Storage,
+                            contentDescription = "On this device",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
                         isDownloaded -> Icon(
                             imageVector = Icons.Default.DownloadDone,
                             contentDescription = "Downloaded",
@@ -694,21 +725,28 @@ private fun PlayerContent(
                         )
                     }
                 }
-                Box(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(favShape)
-                        .background(pillContainerColor)
-                        .clickable(enabled = state.hasMedia, onClick = onToggleLike)
-                        .testTag("now_playing_like"),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        contentDescription = if (isLiked) "Remove from Liked" else "Add to Liked",
-                        tint = if (isLiked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                }
+                LikeButtonWithBurst(
+                    isLiked = isLiked,
+                    // Liking a local file was landing in Liked with no reliable way back to
+                    // playing it from there (see LibraryScreen's own doc on that gap) - disabled
+                    // here rather than trying to make that round trip work everywhere it can be
+                    // reached from. Still tappable to *un*like one already liked from before this
+                    // existed, so that isn't a dead end.
+                    enabled = state.hasMedia && (!isLocalDevice || isLiked),
+                    shape = favShape,
+                    containerColor = pillContainerColor,
+                    tint = when {
+                        isLiked -> MaterialTheme.colorScheme.primary
+                        isLocalDevice -> MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.35f)
+                        else -> MaterialTheme.colorScheme.onPrimaryContainer
+                    },
+                    contentDescription = when {
+                        isLiked -> "Remove from Liked"
+                        isLocalDevice -> "Liking unavailable for on-device files"
+                        else -> "Add to Liked"
+                    },
+                    onClick = onToggleLike,
+                )
             }
         }
 
@@ -772,6 +810,106 @@ private fun PlayerContent(
             pitch = state.pitch,
             onSetSpeed = onSetPlaybackSpeed,
             onDismiss = { showSpeedDialog = false },
+        )
+    }
+}
+
+/**
+ * The Now Playing like button (background pill, tap handling, icon) with a heart-burst and a
+ * bouncy pop the moment a track actually *becomes* liked - not on every tap (unliking shouldn't
+ * burst), and driven by [isLiked] itself rather than the click event, so it also plays if the
+ * track gets liked from somewhere else (e.g. a queue row's own like action) while this screen
+ * happens to be open.
+ *
+ * The burst is a sibling of the clipped pill, not a child of it - the pill itself needs
+ * `Modifier.clip(shape)` to keep its rounded background, but that clip would cut the burst's
+ * hearts off at the pill's own edge the moment they traveled past it, which defeats a burst radius
+ * wider than the button.
+ */
+@Composable
+private fun LikeButtonWithBurst(
+    isLiked: Boolean,
+    enabled: Boolean,
+    shape: Shape,
+    containerColor: Color,
+    tint: Color,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    var wasLiked by remember { mutableStateOf(isLiked) }
+    var showBurst by remember { mutableStateOf(false) }
+    LaunchedEffect(isLiked) {
+        if (isLiked && !wasLiked) showBurst = true
+        wasLiked = isLiked
+    }
+
+    val iconScale = remember { Animatable(1f) }
+    LaunchedEffect(showBurst) {
+        if (!showBurst) return@LaunchedEffect
+        iconScale.snapTo(0.6f)
+        iconScale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioHighBouncy, stiffness = Spring.StiffnessLow))
+    }
+
+    Box(contentAlignment = Alignment.Center) {
+        if (showBurst) {
+            HeartBurstParticles(onFinished = { showBurst = false })
+        }
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(shape)
+                .background(containerColor)
+                .bounceClick(enabled = enabled, onClick = onClick)
+                .testTag("now_playing_like"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                contentDescription = contentDescription,
+                tint = tint,
+                modifier = Modifier.graphicsLayer { scaleX = iconScale.value; scaleY = iconScale.value },
+            )
+        }
+    }
+}
+
+/** Hot pink and baby pink, alternating - fixed regardless of theme/tint, since a "like" burst
+ * reads as a pink heart-burst specifically, not whatever the current accent color happens to be. */
+private val HeartBurstPink = Color(0xFFFF2D78)
+private val HeartBurstBabyPink = Color(0xFFFFB6D5)
+
+/**
+ * A handful of hearts flung out from center and faded - a wide travel radius well past the like
+ * button's own 42dp background circle, so this reads as a real little celebration rather than a
+ * flourish confined to the button. Removes itself (via [onFinished]) once the animation completes,
+ * rather than lingering on invisibly forever after.
+ */
+@Composable
+private fun HeartBurstParticles(onFinished: () -> Unit) {
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        progress.animateTo(1f, animationSpec = tween(durationMillis = 550))
+        onFinished()
+    }
+    val radiusPx = with(LocalDensity.current) { 46.dp.toPx() }
+    val particleCount = 8
+    for (i in 0 until particleCount) {
+        val angle = Math.toRadians((360.0 / particleCount) * i)
+        Icon(
+            imageVector = Icons.Default.Favorite,
+            contentDescription = null,
+            tint = (if (i % 2 == 0) HeartBurstPink else HeartBurstBabyPink)
+                .copy(alpha = (1f - progress.value).coerceIn(0f, 1f)),
+            modifier = Modifier
+                .size(16.dp)
+                .graphicsLayer {
+                    translationX = (cos(angle) * radiusPx * progress.value).toFloat()
+                    translationY = (sin(angle) * radiusPx * progress.value).toFloat()
+                    val particleScale = 1f - progress.value * 0.3f
+                    scaleX = particleScale
+                    scaleY = particleScale
+                    alpha = (1f - progress.value).coerceIn(0f, 1f)
+                },
         )
     }
 }

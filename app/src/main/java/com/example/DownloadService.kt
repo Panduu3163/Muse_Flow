@@ -41,7 +41,21 @@ class DownloadService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        DownloadRepository.getInstance(applicationContext).inProgress
+        val repository = DownloadRepository.getInstance(applicationContext)
+        // The OS requires startForeground() within a short grace window right after
+        // Context.startForegroundService() - it must not wait on repository.inProgress emitting
+        // a non-empty map, since that update happens inside a coroutine dispatched off this
+        // thread and can lag behind badly on throttled devices (seen in production as
+        // ForegroundServiceDidNotStartInTimeException on a Xiaomi/MIUI device). Call it here,
+        // synchronously, unconditionally, using whatever count is already known; the flow below
+        // only keeps the notification's content and the service's lifetime in sync afterward.
+        ServiceCompat.startForeground(
+            this,
+            FOREGROUND_NOTIFICATION_ID,
+            buildNotification(repository.inProgress.value.size.coerceAtLeast(1)),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        )
+        repository.inProgress
             .onEach { inProgress ->
                 if (inProgress.isEmpty()) {
                     releaseWakeLock()

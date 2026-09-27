@@ -20,19 +20,22 @@ object Routes {
     const val LIBRARY = "library"
     const val SETTINGS = "settings"
 
-    // Library stays one screen with a chip row (reverted from a brief tile-grid + sub-screens
-    // split); Stats is its one real sub-screen since it summarizes across every chip section
-    // rather than belonging to any single one.
+    const val LIBRARY_COLLECTION_ARG = "section"
+    const val LIBRARY_COLLECTION = "library/collection/{$LIBRARY_COLLECTION_ARG}"
+    fun libraryCollection(section: LibrarySection) = "library/collection/${section.name}"
     const val LIBRARY_STATS = "library/stats"
 
     const val NOW_PLAYING = "now_playing"
     const val HISTORY = "history"
+    const val LISTEN_TOGETHER = "listen_together"
     const val THEME_SETTINGS = "settings/theme"
     const val EQUALIZER = "settings/equalizer"
     const val BACKUP = "settings/backup"
     const val CRASH_LOGS = "settings/crash_logs"
     const val STORAGE = "settings/storage"
     const val ABOUT = "settings/about"
+    const val UPDATES = "settings/updates"
+    const val IMPORT_SHARED_PLAYLIST = "library/import_shared_playlist"
     const val SETTINGS_APPEARANCE = "settings/appearance"
     const val SETTINGS_MINI_PLAYER = "settings/mini_player"
     const val SETTINGS_PLAYER = "settings/player"

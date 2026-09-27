@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,20 +21,26 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -53,6 +60,146 @@ import com.example.MusicSource
 import com.example.ui.component.MediaCard
 import com.example.ui.component.PlaylistCover
 import com.example.ui.component.ShimmerBlock
+import com.example.ui.utils.bounceClick
+import com.example.ui.utils.slowMarquee
+
+/**
+ * Big-cover-art auto-advancing hero, replacing the old "Moods & genres" / "Fresh drops" pills.
+ * Seeded from [HomeViewModel.dailyDiscover] - radio tracks grown from the user's own liked songs -
+ * so it reads as "your taste" rather than a generic chart. No card/border/elevation behind the
+ * artwork: a vignette brush fades the image into [MaterialTheme.colorScheme.background] at the
+ * edges (same colour the screen itself paints), so the hero reads as part of the page rather than
+ * a tile floating on it.
+ */
+@Composable
+private fun HeroCarousel(tracks: List<Track>, onPlay: (Track, List<Track>) -> Unit) {
+    if (tracks.isEmpty()) return
+    val pagerState = androidx.compose.foundation.pager.rememberPagerState(pageCount = { tracks.size })
+    LaunchedEffect(tracks.size) {
+        while (true) {
+            kotlinx.coroutines.delay(4500)
+            val next = (pagerState.currentPage + 1) % tracks.size
+            pagerState.animateScrollToPage(next)
+        }
+    }
+    Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+        Text(
+            text = "Made for you",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 10.dp),
+        )
+        androidx.compose.foundation.pager.HorizontalPager(
+            state = pagerState,
+            contentPadding = PaddingValues(horizontal = 28.dp),
+            pageSpacing = 12.dp,
+            modifier = Modifier.fillMaxWidth().height(230.dp),
+        ) { page ->
+            val track = tracks[page]
+            HeroCard(track = track, onClick = { onPlay(track, tracks) })
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.Center) {
+            repeat(tracks.size) { i ->
+                val active = pagerState.currentPage == i
+                Box(
+                    Modifier
+                        .padding(horizontal = 3.dp)
+                        .size(if (active) 8.dp else 6.dp)
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(
+                            if (active) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+                        ),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeroCard(track: Track, onClick: () -> Unit) {
+    val background = MaterialTheme.colorScheme.background
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(28.dp))
+            .bounceClick(onClick = onClick),
+    ) {
+        AsyncImage(
+            model = track.imageUrl,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.matchParentSize(),
+        )
+        // Fades into the page's own background colour toward the bottom - the same treatment
+        // NineGridCover/ArtistCover use for their own covers, so this hero reads consistently with
+        // them. A *radial* vignette was here before: on a card this wide, radialGradient's default
+        // radius is the smaller of width/height (the card's own height), so the transparent centre
+        // was a small circle and everything past it - most of a wide card's left/right - was
+        // already clamped to solid background colour. A vertical fade doesn't have that failure
+        // mode regardless of aspect ratio.
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(0f to Color.Transparent, 0.45f to Color.Transparent, 1f to background),
+                    ),
+                ),
+        )
+        // Separate bottom-only scrim so the title/artist stay legible over bright artwork.
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.65f)))),
+        )
+        Column(
+            Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 20.dp, end = 84.dp, bottom = 18.dp),
+        ) {
+            Text(
+                text = "Recommended for you",
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White.copy(alpha = 0.85f),
+            )
+            Text(
+                text = track.title,
+                style = MaterialTheme.typography.headlineSmall,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().slowMarquee(),
+            )
+            Text(
+                text = track.artist,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.75f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().slowMarquee(),
+            )
+        }
+        // Purely visual - no click modifier of its own. It used to carry a second, independent
+        // bounceClick on top of the whole card's own, both calling the same onPlay: two
+        // overlapping pointer-input gesture detectors that could both fire off one tap, racing
+        // two concurrent PlayerViewModel.play() calls against the same MediaController and
+        // occasionally leaving playback in a half-started state. The card's own click already
+        // covers this entire area.
+        Box(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .padding(20.dp)
+                .size(52.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(Color.White),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.Black)
+        }
+    }
+}
 
 /**
  * Home: local sections first (recently played, most played, playlists), then shelves fetched
@@ -63,6 +210,10 @@ fun HomeScreen(
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit = { _, _ -> },
     onOpenPlaylist: (Long) -> Unit = {},
     onOpenRemotePlaylist: (String, String, String, String?) -> Unit = { _, _, _, _ -> },
+    onOpenHistory: () -> Unit,
+    onOpenStats: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenTogether: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val viewModel: HomeViewModel = viewModel()
@@ -77,6 +228,7 @@ fun HomeScreen(
         GridCellSize.Large -> 172.dp
     }
     val recentlyPlayed by viewModel.recentlyPlayed.collectAsState()
+    val likedSongs by viewModel.likedSongs.collectAsState()
     val topPlayed by viewModel.topPlayed.collectAsState()
     val shelves by viewModel.shelves.collectAsState()
     val forgottenFavourites by viewModel.forgottenFavourites.collectAsState()
@@ -99,12 +251,33 @@ fun HomeScreen(
         contentPadding = PaddingValues(top = 24.dp, bottom = 200.dp),
     ) {
         item {
+          Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "MuseFlow",
                 style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(start = 16.dp, bottom = 16.dp),
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
             )
+            val iconBackground = Modifier.size(40.dp)
+            androidx.compose.material3.IconButton(onClick = onOpenHistory, modifier = iconBackground) { Icon(Icons.Default.History, "History", tint = Color.White) }
+            androidx.compose.material3.IconButton(onClick = onOpenTogether, modifier = iconBackground) { Icon(Icons.Default.Group, "Listen together", tint = Color.White) }
+            androidx.compose.material3.IconButton(onClick = onOpenStats, modifier = iconBackground) { Icon(Icons.Default.BarChart, "Stats", tint = Color.White) }
+            androidx.compose.material3.IconButton(onClick = onOpenSettings, modifier = iconBackground) { Icon(Icons.Default.Settings, "Settings", tint = Color.White) }
+          }
+        }
+        // Falls back to locally-available data (no network needed) whenever dailyDiscover has
+        // nothing yet - not just while it's still loading, but genuinely offline too. dailyDiscover
+        // itself needs live radio/search requests, so being offline (or a slow/failed fetch) used
+        // to mean the hero simply never appeared, even though there was perfectly good local data
+        // (liked songs, recently played) to show instead.
+        val heroTracks = ((dailyDiscover as? UiState.Success)?.data?.takeIf { it.isNotEmpty() }
+            ?: likedSongs.takeIf { it.isNotEmpty() }
+            ?: recentlyPlayed).take(6)
+        if (heroTracks.isNotEmpty()) {
+            item(key = "hero") {
+                HeroCarousel(tracks = heroTracks, onPlay = playTracks)
+            }
         }
 
         if (recentlyPlayed.isNotEmpty()) {

@@ -1,5 +1,81 @@
 # Changelog
 
+## MuseFlow Beta v1.4.2
+
+- Added playlist sharing: send any of your own playlists, or any YouTube playlist, to another MuseFlow user, and import one someone sends you from Library > Import shared playlist.
+- A playlist you originally saved from YouTube now shares as a YouTube link, like it should - it was going out as a MuseFlow-only code instead.
+- Import shared playlist now accepts a YouTube/YouTube Music playlist link as well as a MuseFlow code, from the same paste field.
+- Fixed a crash pasting a playlist code or link whose songs included a duplicate title/artist.
+- Fixed the paste-a-code screen: a long paste no longer pushes the Preview button off-screen with no way to reach it.
+- A YouTube playlist's own screen now shows Shuffle, Play, and a single "more" menu instead of five crowded buttons; Save/Download/Share live in that menu.
+- Fixed a missing gap between Settings' changelog text and the mini player when the changelog was expanded.
+
+## MuseFlow Beta v1.4.1
+
+- Fixed a crash that could kill the app while a download was starting, on some devices.
+- The queue now gets a taste-blended continuation queued up in the background *before* the last song ends, instead of only starting to fetch it once playback actually ran out - so there's no gap, whether that's a short Home/Search queue or Liked/Top 50/Downloads running to its last track. Never applies to an on-device queue, which stays local-only.
+- Going offline mid-queue now skips straight to the next downloaded song instead of starting one that's only partly cached and then stalling partway through; if nothing downloaded is left, it stops cleanly and resumes the queue on its own once you're back online.
+- Fixed: tapping a multi-artist song's byline in Now Playing always opened the first artist, no matter which name you tapped - now each artist's name opens their own page.
+- Now Playing's artist line, and truncated titles across Home's cards, now scroll at that same slow, readable pace when they don't fit.
+- Added a little heart-burst and bounce to Now Playing's like button when you like a song.
+- Fixed the update popup still appearing right after installing the very update it was offering.
+- Fixed the update check itself missing a genuinely newer release whenever its GitHub tag had anything other than plain periods between the version numbers.
+- Added Settings > Check for updates: check for a new version and download it on demand, or read this version's own changelog, without a popup.
+
+## MuseFlow Beta v1.4.0
+
+- Home now opens with an auto-sliding "Made for you" hero of big cover art seeded from your own taste, replacing the old Moods & genres/Fresh drops buttons.
+- Redesigned Liked, Downloads, Top 50, and On device: a dynamic cover collage at the top, a floating header that fades as you scroll, Shuffle/Play/More pills, and a details sheet with download-all and add-to-queue actions.
+- Search's default results page now shows YouTube Music's own Top result, Songs, Videos, Albums, Artists, and Playlists sections together on one page, with like/download status on every song and video row.
+- Tapping search now slides the screen up to the search field and restores your position when you close it, across Library, Downloads, Liked, On device, and playlists.
+- Added a distinct "on this device" indicator for local files, kept separate from "downloaded," in Now Playing and every song list.
+- Bulk downloads now show one combined progress notification instead of one per song, and it disappears on its own when the batch finishes instead of leaving a message to dismiss.
+- Added an "Online, enjoy limitless music" notice when your connection comes back, and the offline notice now clears itself after a few seconds instead of staying up.
+- Added this changelog popup, shown once after an update; a first-time install still sees the usual support/about screen instead.
+- Fixed: pressing Enter right after typing in search could show stale suggestions instead of your results; downloading the currently-playing song restarting it from the beginning; skipping to the next/previous song leaving playback paused; skipping past the last song in a queue doing nothing; a playback failure now shows a message instead of failing silently.
+- Now Playing and mini-player titles scroll at a slower, more readable pace when they don't fit.
+
+## MuseFlow Beta v1.3.1
+
+- Follow the device's system font, with stronger title, body, and label weights for readability.
+- Make Home's History, Listen Together, Stats, and Settings icons white and visible at compact widths.
+- Search regular YouTube videos alongside YouTube Music songs and videos, including uploads absent from the Music catalog, while playing their audio through the existing resolver.
+- Open Liked, Downloads, Top 50, and On device in dedicated Library destinations with cover headers and actions suited to each collection.
+
+## MuseFlow Beta v1.3.0
+
+- Adapt the Stitch MuseFlow Liquid Glass colors, library cards, bottom navigation, mini player, search discovery grid, stats controls, history filters, and player actions to native Compose, while following the device font.
+- Add working Listen Together room creation, joining, host approval, and playback synchronization using an Echo-compatible JSON WebSocket server.
+- Search both YouTube Music song and video pages, and open a pasted YouTube video link as an audio track.
+- Track each actual playback event for period stats and reliable history, including automatic queue advances; preserve older lifetime totals.
+- Make offline recovery follow shuffle and repeat order, prefer newly downloaded local files, and stop clearly when no playable track remains.
+- Keep partial downloads from destroying completed files, bound parallel transfers, and show download failures.
+- Preserve imported playlist identity across repeated imports and show playlists in Downloads as soon as one song is available offline.
+- Keep imported playlist identity through library backup and restore.
+
+
+## MuseFlow Beta v1.2.0 🎵
+
+An offline-first reliability and library update.
+
+### Downloads & offline playback
+* Fully downloaded playlists now appear as playlist cards in Downloads, while individual files
+  remain available under **All downloaded songs**.
+* Online playlists now have a direct **Download playlist** action. It saves the playlist to the
+  Library and downloads its tracks as one understandable workflow.
+* MuseFlow now observes Android's validated connectivity state and shows a compact offline status
+  pill instead of waiting for each network request to time out.
+* When an offline queue reaches a network-only track, playback skips ahead to the next downloaded
+  item. If none remains, it stops cleanly and keeps the queue available for retry.
+* Autoplay and new downloads no longer start while the device is offline.
+
+### Search
+* Song search now combines YouTube Music's Songs and Videos result sets, so covers, live sessions,
+  and uploads with no separate audio release can be found and played through the existing audio
+  stream resolver.
+
+---
+
 ## MuseFlow Beta v1.1.4 🎵
 
 A smaller, focused update: a real search-to-recommendation feed, and a fix to make sure streamed

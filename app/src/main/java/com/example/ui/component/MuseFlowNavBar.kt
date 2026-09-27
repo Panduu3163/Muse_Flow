@@ -62,10 +62,10 @@ fun MuseFlowNavBar(
             // MiniPlayer unprotected on every screen where this bar is hidden (a playlist detail,
             // History, ...), so it drew flush against the gesture/navigation bar there.
             .padding(horizontal = 16.dp, vertical = 12.dp)
-            .clip(RoundedCornerShape(28.dp)),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
-        tonalElevation = 3.dp,
-        shadowElevation = 8.dp,
+            .liquidSurface(28.dp),
+        color = Color.Transparent,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
     ) {
         Row(
             modifier = Modifier
@@ -101,7 +101,7 @@ private fun NavBarItem(
     )
     val contentColor by animateColorAsState(
         targetValue = if (selected) {
-            MaterialTheme.colorScheme.onSecondaryContainer
+            MaterialTheme.colorScheme.secondary
         } else {
             MaterialTheme.colorScheme.onSurfaceVariant
         },
@@ -109,7 +109,7 @@ private fun NavBarItem(
     )
     val pillColor by animateColorAsState(
         targetValue = if (selected) {
-            MaterialTheme.colorScheme.secondaryContainer
+            MaterialTheme.colorScheme.secondary.copy(alpha = .12f)
         } else {
             Color.Transparent
         },

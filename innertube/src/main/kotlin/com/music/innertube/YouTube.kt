@@ -182,6 +182,11 @@ object YouTube {
             }
         }
 
+        // `shelfSummaries` above only ever captures the "Top result" card - the rest of the page
+        // (Songs/Videos/Albums/Artists/Playlists) arrives as plain `itemSectionRenderer` content
+        // with no shelf title of its own, so it has to be classified and grouped here instead.
+        // Removing this entirely (a previous version of this did, to chase the bug noted below)
+        // took the whole rest of the page down with it - only "Top result" was left to show.
         val flatItems = contents
             .mapNotNull { it.itemSectionRenderer }
             .flatMap { it.contents.orEmpty() }
@@ -205,6 +210,13 @@ object YouTube {
             groupedSummaries.add(SearchSummary(title = "Albums", items = flatAlbums))
         }
 
+        // A same-name-as-the-song filter lived here briefly to chase a report of a bogus "artist"
+        // appearing - reverted: Echo-Music's own upstream code (which this was ported from) runs
+        // this exact same classification unmodified, and the filter's one clear, reproducible
+        // effect turned out to be hiding a real, correctly-matched artist whenever their own name
+        // happened to coincide with any song title in the same results - a worse failure than the
+        // one it was meant to fix. If the original "wrong-named artist" report reproduces again,
+        // it needs an actual captured response to diagnose, not another guessed heuristic here.
         val flatArtists = flatItems.filterIsInstance<ArtistItem>()
         if (flatArtists.isNotEmpty()) {
             groupedSummaries.add(SearchSummary(title = "Artists", items = flatArtists))

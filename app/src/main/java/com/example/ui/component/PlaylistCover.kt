@@ -17,6 +17,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
@@ -118,4 +120,62 @@ private fun MosaicCell(imageUrl: String, modifier: Modifier) {
         contentScale = ContentScale.Crop,
         modifier = modifier,
     )
+}
+
+/**
+ * A big mosaic hero for a whole section (Liked/Downloads/Top 50/On device) rather than one
+ * playlist - same fallback-thumbnail idea as [PlaylistCover], scaled up to as many as 9 cells.
+ *
+ * Packed by however many *distinct* cover-art thumbnails actually exist, capped at 9 - not padded
+ * out to a fixed 3x3 by repeating them. Rows are `ceil(sqrt(n))` wide (capped at 3), filled in
+ * order with the remainder landing in the last row: 3 thumbnails is 2 across the top and 1
+ * spanning the bottom, 5 is 3 then 2, and so on, up to a genuine 3x3 once there are 9 or more.
+ * A track with no cover art contributes nothing to [tracks] worth drawing here at all - it's
+ * simply absent, not a blank cell.
+ *
+ * Full-bleed under the status bar plus a bottom fade into the page background, the same "the
+ * cover *is* the top of the screen" treatment [ArtistScreen]'s own cover uses - the caller omits
+ * `statusBarsPadding` around this rather than this composable adding its own inset.
+ */
+@Composable
+fun NineGridCover(
+    tracks: List<Track>,
+    modifier: Modifier = Modifier,
+    shape: Shape = RoundedCornerShape(0.dp),
+) {
+    val thumbnails = remember(tracks) { tracks.mapNotNull { it.imageUrl }.distinct().take(9) }
+    val background = MaterialTheme.colorScheme.background
+    Box(modifier = modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
+        if (thumbnails.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxSize(fraction = 0.3f),
+                )
+            }
+        } else {
+            val columns = kotlin.math.ceil(kotlin.math.sqrt(thumbnails.size.toDouble())).toInt().coerceIn(1, 3)
+            Column(modifier = Modifier.fillMaxSize()) {
+                thumbnails.chunked(columns).forEach { row ->
+                    Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        row.forEach { url -> MosaicCell(url, Modifier.weight(1f).fillMaxSize()) }
+                    }
+                }
+            }
+        }
+        // Same fade as ArtistScreen's ArtistCover: transparent until nearly the bottom, then into
+        // the page's own background colour, so the mosaic dissolves into the screen rather than
+        // ending on a hard edge.
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(0f to Color.Transparent, 0.45f to Color.Transparent, 1f to background),
+                    ),
+                ),
+        )
+    }
 }

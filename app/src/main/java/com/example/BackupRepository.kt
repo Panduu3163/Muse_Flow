@@ -86,6 +86,7 @@ class BackupRepository private constructor(context: Context) {
                     put("name", playlist.name)
                     put("createdAt", playlist.createdAt)
                     put("coverImageUrl", playlist.coverImageUrl ?: JSONObject.NULL)
+                    put("remoteId", playlist.remoteId ?: JSONObject.NULL)
                     put("tracks", tracksArray)
                 }
             )
@@ -151,7 +152,8 @@ class BackupRepository private constructor(context: Context) {
                     PlaylistEntity(
                         name = name,
                         createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
-                        coverImageUrl = obj.optNullableString("coverImageUrl")
+                        coverImageUrl = obj.optNullableString("coverImageUrl"),
+                        remoteId = obj.optNullableString("remoteId")
                     )
                 )
                 val trackEntities = obj.optJSONArray("tracks")?.let { tracksArray ->

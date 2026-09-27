@@ -22,10 +22,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.AccessTime
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
@@ -62,8 +61,11 @@ import com.example.PlayerViewModel
 import com.example.TrackActionsViewModel
 import com.example.TrackResult
 import com.example.UiState
+import com.example.downloadKey
 import com.example.loadAsUiState
+import com.example.shareYouTubePlaylistLink
 import com.example.toPlayableTrack
+import com.example.ui.component.RemotePlaylistActionsSheet
 import com.example.ui.component.TrackActionsHost
 import com.example.ui.component.TrackRow
 
@@ -97,9 +99,16 @@ fun RemotePlaylistScreen(
     val router = remember { MusicSearchRouter(context) }
     val actionsViewModel: TrackActionsViewModel = viewModel()
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
+    var menuOpen by remember { mutableStateOf(false) }
     var state by remember { mutableStateOf<UiState<List<TrackResult>>>(UiState.Loading) }
-    var addedToLibrary by remember { mutableStateOf(false) }
+    val savedPlaylists by actionsViewModel.playlists.collectAsState()
+    val addedToLibrary = savedPlaylists.any { it.remoteId == playlistId }
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // Same heart/download glyphs Library's own lists show - a remote playlist previously gave no
+    // way to tell a song you'd already liked or downloaded elsewhere apart from one you hadn't.
+    val likedKeys by actionsViewModel.likedKeys.collectAsState()
+    val downloadedKeys by actionsViewModel.downloadedKeys.collectAsState()
+    val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsState()
 
     LaunchedEffect(playlistId) {
         state = loadAsUiState("Couldn't load this playlist.") { router.getPlaylistTracks(playlistId) }
@@ -215,18 +224,14 @@ fun RemotePlaylistScreen(
                                         prominent = true,
                                         onClick = { tracks.firstOrNull()?.let { onPlayTrack(it, tracks) } },
                                     )
+                                    // Save/Download/Share used to be three more circle buttons
+                                    // here, crowding Shuffle/Play into a five-button row - now
+                                    // collected behind one menu (see RemotePlaylistActionsSheet).
                                     CircleIconButton(
-                                        icon = if (addedToLibrary) Icons.Default.Check else Icons.AutoMirrored.Filled.PlaylistAdd,
-                                        contentDescription = if (addedToLibrary) "Added to Library" else "Add to Library",
-                                        testTag = "remote_playlist_add",
-                                        onClick = {
-                                            if (!addedToLibrary) {
-                                                val asTracks = tracks.map { it.toPlayableTrack(it.id.hashCode()) }
-                                                actionsViewModel.addRemotePlaylistToLibrary(title, imageUrl, asTracks)
-                                                addedToLibrary = true
-                                                Toast.makeText(context, "Added to your library", Toast.LENGTH_SHORT).show()
-                                            }
-                                        },
+                                        icon = Icons.Default.MoreVert,
+                                        contentDescription = "Playlist options",
+                                        testTag = "remote_playlist_menu",
+                                        onClick = { menuOpen = true },
                                     )
                                 }
                             }
@@ -249,12 +254,16 @@ fun RemotePlaylistScreen(
                         }
                     } else {
                         itemsIndexed(tracks, key = { index, _ -> index }) { _, track ->
+                            val key = track.downloadKey()
                             TrackRow(
                                 title = track.title,
                                 artist = track.artist,
                                 imageUrl = track.imageUrl,
                                 duration = track.duration,
                                 onClick = { onPlayTrack(track, tracks) },
+                                isLiked = key in likedKeys,
+                                isDownloaded = key in downloadedKeys,
+                                downloadProgress = downloadsInProgress[key],
                                 onOpenMenu = { selectedTrack = track },
                             )
                         }
@@ -303,6 +312,34 @@ fun RemotePlaylistScreen(
         onGoToArtist = onGoToArtist,
         onGoToAlbum = onGoToAlbum,
     )
+
+    if (menuOpen) {
+        val currentTracks = (state as? UiState.Success)?.data.orEmpty()
+        RemotePlaylistActionsSheet(
+            title = title,
+            songCount = currentTracks.size,
+            imageUrl = imageUrl,
+            addedToLibrary = addedToLibrary,
+            onSaveToLibrary = {
+                if (!addedToLibrary) {
+                    val asTracks = currentTracks.map { it.toPlayableTrack(it.id.hashCode()) }
+                    actionsViewModel.addRemotePlaylistToLibrary(title, imageUrl, asTracks, playlistId)
+                    Toast.makeText(context, "Added to your library", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDownload = {
+                val asTracks = currentTracks.map { it.toPlayableTrack(it.id.hashCode()) }
+                if (addedToLibrary) {
+                    actionsViewModel.downloadAll(asTracks)
+                } else {
+                    actionsViewModel.saveAndDownloadPlaylist(title, imageUrl, asTracks, playlistId)
+                }
+                Toast.makeText(context, "Downloading playlist for offline listening", Toast.LENGTH_SHORT).show()
+            },
+            onShare = { context.shareYouTubePlaylistLink(title, playlistId) },
+            onDismiss = { menuOpen = false },
+        )
+    }
 }
 
 /** A full-bleed 2x2 mosaic of the playlist's first four track covers, fading into the page

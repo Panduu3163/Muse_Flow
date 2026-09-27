@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ui.screens.asTrackResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharingStarted
@@ -117,6 +119,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     val communityPlaylists: StateFlow<UiState<List<PlaylistResult>>> = _communityPlaylists.asStateFlow()
 
     private var dailyDiscoverLoaded = false
+    private var trendingFallbackLoaded = false
     private var communityPlaylistsLoaded = false
 
     init {
@@ -134,7 +137,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.Default) {
             likedSongs.collect { liked ->
                 if (liked.isEmpty()) {
-                    _dailyDiscover.value = UiState.Success(emptyList())
+                    // A brand-new install has nothing liked yet to seed a personalized radio from
+                    // - without this, dailyDiscover (and Home's hero carousel, which reads it)
+                    // would stay an empty Success forever, never showing anything at all. Loaded
+                    // once, same as the real fetch below; replaced by it the moment the user likes
+                    // their first song, since dailyDiscoverLoaded is deliberately left false here.
+                    if (!trendingFallbackLoaded) {
+                        trendingFallbackLoaded = true
+                        loadTrendingFallback()
+                    }
                 } else if (!dailyDiscoverLoaded) {
                     dailyDiscoverLoaded = true
                     loadDailyDiscover(liked)
@@ -156,22 +167,65 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun refresh() {
         loadShelves(shelfSpecs.value, forceRefresh = true)
         dailyDiscoverLoaded = false
+        trendingFallbackLoaded = false
         communityPlaylistsLoaded = false
-        likedSongs.value.takeIf { it.isNotEmpty() }?.let { loadDailyDiscover(it) }
+        val liked = likedSongs.value
+        if (liked.isNotEmpty()) loadDailyDiscover(liked) else loadTrendingFallback()
         topArtists.value.takeIf { it.isNotEmpty() }?.let { loadCommunityPlaylists(it) }
     }
 
     private fun loadDailyDiscover(liked: List<Track>) {
         _dailyDiscover.value = UiState.Loading
         viewModelScope.launch(Dispatchers.Default) {
+            // Home's hero carousel wants at least this many tracks to feel like a real carousel,
+            // not a strict "one per seed" cap - with only 1-2 liked songs, that cap meant the hero
+            // only ever had 1-2 tracks in it, barely a carousel at all.
+            val targetCount = 6
             val seeds = liked.shuffled().take(5)
-            val discovered = seeds.mapNotNull { seed ->
-                val seedResult = seed.asTrackResult()
-                if (!seedResult.hasRealVideoId()) return@mapNotNull null
-                val radio = runCatching { searchRouter.getRadioTracks(seedResult.id) }.getOrDefault(emptyList())
-                radio.firstOrNull { it.id != seedResult.id }?.toPlayableTrack("Daily Discover".hashCode())
+            // Concurrent, not one-seed-at-a-time: five sequential radio fetches could take several
+            // seconds combined, during which Home's hero carousel (reading this same state) had
+            // nothing to show - reads as "doesn't appear until I scroll around a bit", when it was
+            // really just still loading. Running them in parallel cuts that wait to roughly one
+            // request's latency instead of five stacked end to end.
+            val perSeedRadio = seeds.map { seed ->
+                async {
+                    val seedResult = seed.asTrackResult()
+                    if (!seedResult.hasRealVideoId()) return@async emptyList()
+                    runCatching { searchRouter.getRadioTracks(seedResult.id) }.getOrDefault(emptyList())
+                        .filter { it.id != seedResult.id }
+                }
+            }.awaitAll()
+            // Round-robin across each seed's radio list - one track from each seed first (keeps
+            // variety when there are several), then a second pass into the same lists, and so on,
+            // until either the target is reached or every seed's radio is exhausted. A single
+            // liked song still has a full radio list of its own to draw more than one track from.
+            val discovered = mutableListOf<TrackResult>()
+            val seenIds = mutableSetOf<String>()
+            var round = 0
+            while (discovered.size < targetCount && perSeedRadio.any { round < it.size }) {
+                for (radio in perSeedRadio) {
+                    if (discovered.size >= targetCount) break
+                    val candidate = radio.getOrNull(round) ?: continue
+                    if (seenIds.add(candidate.id)) discovered += candidate
+                }
+                round++
             }
-            _dailyDiscover.value = UiState.Success(discovered.distinctBy { it.downloadKey() })
+            val tracks = discovered.map { it.toPlayableTrack("Daily Discover".hashCode()) }
+            _dailyDiscover.value = UiState.Success(tracks.distinctBy { it.downloadKey() })
+        }
+    }
+
+    /** Cold-start stand-in for [loadDailyDiscover] when there are no liked songs yet to seed a
+     * personalized radio from - the same kind of generic query [fallbackShelves] already falls
+     * back to before there's any listening history, so a fresh install's hero carousel shows
+     * something rather than staying empty forever. */
+    private fun loadTrendingFallback() {
+        _dailyDiscover.value = UiState.Loading
+        viewModelScope.launch(Dispatchers.Default) {
+            val fallback = runCatching { searchRouter.searchTracks("New releases") }
+                .getOrDefault(emptyList())
+                .map { it.toPlayableTrack("Daily Discover".hashCode()) }
+            _dailyDiscover.value = UiState.Success(fallback.distinctBy { it.downloadKey() })
         }
     }
 

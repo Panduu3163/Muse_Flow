@@ -3,6 +3,7 @@ package com.example.ui.theme
 import android.graphics.Bitmap
 import android.os.Build
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -54,7 +55,21 @@ fun MuseFlowTheme(
     val useSystemDynamicColor =
         themeColor == DefaultThemeColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
-    val baseColorScheme = if (useSystemDynamicColor) {
+    val baseColorScheme = if (darkTheme && themeColor == DefaultThemeColor) {
+        darkColorScheme(
+            primary = Color(0xFFCABEFF), onPrimary = Color(0xFF31009A),
+            primaryContainer = Color(0xFF947DFF), onPrimaryContainer = Color(0xFF2A0088),
+            secondary = Color(0xFF77DFFF), onSecondary = Color(0xFF003642),
+            secondaryContainer = Color(0xFF004E5F), onSecondaryContainer = Color(0xFFB3EBFF),
+            tertiary = Color(0xFFFFB95F), background = Color(0xFF0E0E11),
+            surface = Color(0xFF131316), onBackground = Color(0xFFE4E1E6),
+            onSurface = Color(0xFFE4E1E6), onSurfaceVariant = Color(0xFFC9C4D7),
+            surfaceContainerLowest = Color(0xFF0E0E11), surfaceContainerLow = Color(0xFF1B1B1E),
+            surfaceContainer = Color(0xFF1F1F22), surfaceContainerHigh = Color(0xFF2A2A2D),
+            surfaceContainerHighest = Color(0xFF353438), outline = Color(0xFF938EA0),
+            outlineVariant = Color(0xFF484554),
+        )
+    } else if (useSystemDynamicColor) {
         if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
     } else {
         rememberDynamicColorScheme(

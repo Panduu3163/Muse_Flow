@@ -65,6 +65,25 @@ import java.io.IOException
  * [PlaybackService.PlaybackServiceCallback.onCustomCommand]. */
 private const val ACTION_TOGGLE_LIKE = "com.example.TOGGLE_LIKE"
 
+/** Sent by [PlayerViewModel.next] when the queue has no next item to seek to - reuses
+ * [PlaybackService.autoplayRelated] (the same taste-blended continuation a queue ending naturally
+ * already gets) so pressing skip on the last track behaves the same as letting it play out,
+ * instead of silently doing nothing. See [PlaybackService.PlaybackServiceCallback.onCustomCommand].
+ * Not `private` - [PlayerViewModel] needs it to build the same command it sends. */
+internal const val ACTION_AUTOPLAY_AND_ADVANCE = "com.example.AUTOPLAY_AND_ADVANCE"
+
+/** Picks the next item after a playback failure. Offline, network-only entries are skipped in one
+ * step so the player never parks on an unresolvable song; online, normal sequential behavior is
+ * preserved. The queue does not wrap here because wrapping a fully unavailable queue would loop. */
+internal fun nextPlayableQueueIndex(
+    currentIndex: Int,
+    itemCount: Int,
+    online: Boolean,
+    schemeAt: (Int) -> String?,
+): Int? = ((currentIndex + 1) until itemCount).firstOrNull { index ->
+    online || schemeAt(index) in setOf("file", "content", "asset")
+}
+
 class PlaybackService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
@@ -83,6 +102,69 @@ class PlaybackService : MediaSessionService() {
     // case, since every mock-catalog track needs a live JioSaavn search to resolve. This counts
     // consecutive failures so playback gives up after one full lap instead of looping silently.
     private var consecutiveErrorCount = 0
+    private var offlineFiles: Map<String, String> = emptyMap()
+    private var historyRecordedForTransition = false
+
+    /** Set when a natural queue advance was blocked because we're offline and nothing downloaded
+     * remained ahead (see the offline guard in [onMediaItemTransition]) - cleared, and playback
+     * resumed from where it stopped, the moment connectivity returns (see the [observeOnline]
+     * collector in [onCreate]). */
+    private var stoppedForOffline = false
+
+    private fun recordCurrentPlayback(player: Player) {
+        if (!player.isPlaying || player.playbackState != Player.STATE_READY || historyRecordedForTransition) return
+        val item = player.currentMediaItem ?: return
+        historyRecordedForTransition = true
+        val metadata = item.mediaMetadata
+        val youtube = item.mediaId.looksLikeYouTubeVideoId()
+        PlaybackHistoryRepository.getInstance(this).recordPlayed(Track(
+            title = metadata.title?.toString().orEmpty(), artist = metadata.artist?.toString().orEmpty(),
+            album = metadata.albumTitle?.toString().orEmpty(), duration = player.duration.coerceAtLeast(0).asPlaybackTime(),
+            plays = "", gradientIndex = 0, imageUrl = metadata.artworkUri?.toString(),
+            streamUrl = if (youtube) null else item.localConfiguration?.uri?.toString(),
+            sourceType = if (youtube) MusicSource.YOUTUBE_MUSIC else MusicSource.LOCAL_DEVICE,
+            sourceId = item.mediaId, artistId = metadata.extras?.getString("artistId"),
+            albumId = metadata.extras?.getString("albumId"),
+        ))
+    }
+
+    private fun offlineItem(item: MediaItem): MediaItem? {
+        val uri = item.localConfiguration?.uri
+        if (uri?.scheme in setOf("content", "asset")) return item
+        if (uri?.scheme == "file" && java.io.File(uri.path.orEmpty()).isFile) return item
+        val title = item.mediaMetadata.title?.toString().orEmpty()
+        val artist = item.mediaMetadata.artist?.toString().orEmpty()
+        val key = "${title.trim().lowercase()}::${artist.trim().lowercase()}"
+        val path = offlineFiles[item.mediaId] ?: offlineFiles[key] ?: return null
+        if (!java.io.File(path).isFile) return null
+        return item.buildUpon().setUri(Uri.fromFile(java.io.File(path))).build()
+    }
+
+    /** A track sourced straight from the device's own media store, keyed by its own content://
+     * URI as mediaId (see [PlayerViewModel.toMediaItem]) - never eligible for an autoplay
+     * continuation, since there's nothing "more like this" to fetch for it and every other item
+     * in an on-device queue is, by construction, also on-device only. */
+    private fun isLocalDeviceItem(item: MediaItem?): Boolean =
+        item?.mediaId?.startsWith("content://") == true
+
+    private fun recoverQueue(player: ExoPlayer): Boolean {
+        val timeline = player.currentTimeline
+        if (timeline.isEmpty) return false
+        val online = isOnline(this)
+        val index = nextRecoverableIndex(player.currentMediaItemIndex,
+            nextIndex = { current -> timeline.getNextWindowIndex(current,
+                if (player.repeatMode == Player.REPEAT_MODE_ONE) Player.REPEAT_MODE_OFF else player.repeatMode,
+                player.shuffleModeEnabled) },
+            playable = { candidate -> online || offlineItem(player.getMediaItemAt(candidate)) != null },
+        ) ?: return false
+        val original = player.getMediaItemAt(index)
+        val local = offlineItem(original)
+        if (local != null && local != original) player.replaceMediaItem(index, local)
+        player.seekTo(index, 0L)
+        player.prepare()
+        player.play()
+        return true
+    }
 
     /** Mirrors the user's preload preference; read on every track transition. */
     private var preloadEnabled = true
@@ -232,10 +314,22 @@ class PlaybackService : MediaSessionService() {
      * Falls back to the old artist-name search only if every radio attempt above returns nothing
      * (e.g. a non-YouTube source, or the requests failed) - some continuation is still better than
      * none.
+     *
+     * [autoAdvance] controls whether a successful fetch also jumps playback onto the new items
+     * right away (the queue-genuinely-ended case, called from [onPlaybackStateChanged]/the
+     * skip-on-last-item custom command) or only appends them behind whatever's still playing
+     * (called proactively from [onMediaItemTransition] the moment we land on what is *currently*
+     * the last item, so the continuation is already queued up by the time that track ends instead
+     * of only starting this multi-second fetch at the exact moment it needs to play - previously a
+     * real audible stall every time a queue ran out).
+     *
+     * Never runs for an on-device queue (see [isLocalDeviceItem]) - there's no "more like this" to
+     * fetch for a local file, and every other item in that queue is on-device only by construction.
      */
-    private fun autoplayRelated(player: ExoPlayer) {
+    private fun autoplayRelated(player: ExoPlayer, autoAdvance: Boolean = true) {
         if (autoplayInFlight) return
         val finished = player.currentMediaItem ?: return
+        if (isLocalDeviceItem(finished)) return
         val mediaId = finished.mediaId
         val existingIds = (0 until player.mediaItemCount)
             .map { player.getMediaItemAt(it).mediaId }
@@ -279,16 +373,24 @@ class PlaybackService : MediaSessionService() {
                                     .setTitle(track.title)
                                     .setArtist(track.artist)
                                     .setAlbumTitle(track.source)
-                                    .setExtras(android.os.Bundle().apply { track.artistId?.let { putString("artistId", it) } })
+                                    .setExtras(android.os.Bundle().apply {
+                                        track.artistId?.let { putString("artistId", it) }
+                                        if (track.artistCredits.isNotEmpty()) {
+                                            putStringArrayList("artistCreditNames", ArrayList(track.artistCredits.map { it.name }))
+                                            putStringArrayList("artistCreditIds", ArrayList(track.artistCredits.map { it.id.orEmpty() }))
+                                        }
+                                    })
                                     .apply { track.imageUrl?.let { setArtworkUri(it.toUri()) } }
                                     .build()
                             )
                             .build()
                     }
                 )
-                player.seekToNextMediaItem()
-                player.prepare()
-                player.play()
+                if (autoAdvance) {
+                    player.seekToNextMediaItem()
+                    player.prepare()
+                    player.play()
+                }
             }
             autoplayInFlight = false
         }
@@ -381,36 +483,111 @@ class PlaybackService : MediaSessionService() {
             // rather than spinning through all ten mock-catalog tracks forever.
             override fun onPlayerError(error: PlaybackException) {
                 consecutiveErrorCount++
-                if (consecutiveErrorCount < player.mediaItemCount.coerceAtLeast(1)) {
-                    player.seekToNextMediaItem()
-                    player.prepare()
+                if (consecutiveErrorCount >= player.mediaItemCount.coerceAtLeast(1) || !recoverQueue(player)) {
+                    // Keep the queue visible for a later retry, but leave the player in a clear,
+                    // non-buffering state instead of appearing permanently stuck on the bad item.
+                    player.playWhenReady = false
+                    player.stop()
                 }
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (isPlaying) consecutiveErrorCount = 0
+                recordCurrentPlayback(player)
             }
 
             // Queue exhausted: keep the music going with tracks related to what just finished,
             // rather than falling silent. Only fires at a real end - with repeat on, ExoPlayer
             // wraps before this is ever reached.
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED) autoplayRelated(player)
+                recordCurrentPlayback(player)
+                if (playbackState == Player.STATE_ENDED && isOnline(this@PlaybackService)) {
+                    autoplayRelated(player)
+                }
             }
 
             // Warm the next track's stream URL while the current one is still playing, so a skip
             // (or a natural track end) doesn't stall on the several-second resolve pipeline.
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                // Queried once and reused below - a live ConnectivityManager lookup, not a field
+                // read, so there's no reason to pay for it twice in the same transition.
+                val online = isOnline(this@PlaybackService)
+                // Offline, and this item isn't actually sitting on disk (on-device, or a
+                // completed download): a network placeholder can still have a *prefix* of bytes
+                // in StreamCache left over from an earlier prefetch, so CacheDataSource would
+                // serve those first and only fail once it runs out mid-track - starting to play a
+                // song that's about to cut out partway through. Jump straight to the next
+                // genuinely downloaded item instead, or stop cleanly (resuming automatically once
+                // back online - see the observeOnline collector below) if none remain, rather than
+                // letting it start at all.
+                if (mediaItem != null && !online && offlineItem(mediaItem) == null) {
+                    if (!recoverQueue(player)) {
+                        player.playWhenReady = false
+                        player.stop()
+                        stoppedForOffline = true
+                    }
+                    return
+                }
+                historyRecordedForTransition = false
+                recordCurrentPlayback(player)
                 preloadNextTrack(player)
                 saveQueue(player)
                 mediaItem?.let(::prefetchFullTrack)
                 observeLikeStateForCurrentTrack(player)
+                // We've just landed on what is, right now, the last item in the queue - top up a
+                // taste-blended continuation in the background while it plays, rather than only
+                // starting that fetch once it actually ends (see autoplayRelated's own doc). Covers
+                // a queue that only ever had one/a few items to begin with (a fresh Home/Search
+                // play) exactly the same way it covers one that's simply run down to its last track.
+                if (!player.hasNextMediaItem() && online) {
+                    autoplayRelated(player, autoAdvance = false)
+                }
             }
 
             override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
                 saveQueue(player)
             }
         })
+
+        // Resumes automatically once connectivity returns, from wherever the offline guard above
+        // left off (the first item in the queue that wasn't actually downloaded) - the user
+        // shouldn't have to go back and manually press play again just because they went offline.
+        serviceScope.launch {
+            observeOnline(this@PlaybackService).collect { online ->
+                if (online && stoppedForOffline) {
+                    stoppedForOffline = false
+                    player.prepare()
+                    player.play()
+                }
+            }
+        }
+
+        serviceScope.launch {
+            DownloadRepository.getInstance(this@PlaybackService).completedDownloads.collect { downloads ->
+                offlineFiles = downloads.flatMap { entry ->
+                    listOfNotNull(entry.key to entry.filePath, entry.sourceId?.let { it to entry.filePath })
+                }.toMap()
+                // Queues assembled before a download finished must also prefer its local file.
+                for (index in 0 until player.mediaItemCount) {
+                    val original = player.getMediaItemAt(index)
+                    val local = offlineItem(original)
+                    if (local == null || local == original) continue
+                    // Swapping the *currently playing* item's source (network placeholder -> a
+                    // real local file:// URI) makes ExoPlayer treat it as different media and
+                    // re-prepare from position 0 - so a download finishing while its own song was
+                    // playing silently restarted it from the beginning. Capture position/playback
+                    // state first and restore them right after the swap for that one item.
+                    val isCurrent = index == player.currentMediaItemIndex
+                    val resumePositionMs = if (isCurrent) player.currentPosition else 0L
+                    val wasPlaying = isCurrent && player.isPlaying
+                    player.replaceMediaItem(index, local)
+                    if (isCurrent) {
+                        player.seekTo(index, resumePositionMs)
+                        if (wasPlaying) player.play()
+                    }
+                }
+            }
+        }
 
         // Which processors are *active* is decided once, by Media3's AudioProcessingPipeline, at
         // the moment it configures itself against the current track's audio format - not
@@ -447,6 +624,7 @@ class PlaybackService : MediaSessionService() {
             }
         }
 
+        ListenTogetherRepository.getInstance(this).attach(player)
         restoreQueueIfEnabled(player)
 
         // Equalizer must be attached to ExoPlayer's actual audio session id, and re-attached if
@@ -548,6 +726,9 @@ class PlaybackService : MediaSessionService() {
         val resolvingHttpFactory = ResolvingDataSource.Factory(httpDataSourceFactory) { dataSpec ->
             val videoId = youTubeVideoIdFromResolvePlaceholder(dataSpec.uri)
                 ?: return@Factory dataSpec
+            if (!isOnline(this@PlaybackService)) {
+                throw IOException("Device is offline and this track has not been downloaded")
+            }
             // Blocks this load's IO thread (not the playback/main thread) for the cold-start
             // BotGuard+cipher round trip - the same runBlocking-at-an-IO-boundary pattern
             // DownloadRepository already uses elsewhere in this app.
@@ -633,6 +814,7 @@ class PlaybackService : MediaSessionService() {
             return MediaSession.ConnectionResult.accept(
                 base.availableSessionCommands.buildUpon()
                     .add(SessionCommand(ACTION_TOGGLE_LIKE, android.os.Bundle.EMPTY))
+                    .add(SessionCommand(ACTION_AUTOPLAY_AND_ADVANCE, android.os.Bundle.EMPTY))
                     .build(),
                 base.availablePlayerCommands,
             )
@@ -652,6 +834,21 @@ class PlaybackService : MediaSessionService() {
                         val repository = LikedSongsRepository.getInstance(this@PlaybackService)
                         val isLiked = repository.observeIsLiked(track).first()
                         if (isLiked) repository.unlike(track) else repository.like(track)
+                    }
+                }
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            if (customCommand.customAction == ACTION_AUTOPLAY_AND_ADVANCE) {
+                val player = mediaSession?.player as? ExoPlayer
+                // A queue can gain a next item between the controller's check and this command
+                // landing (e.g. autoplay already fired from STATE_ENDED); just advance normally
+                // rather than fetching a second batch on top.
+                if (player != null) {
+                    if (player.hasNextMediaItem()) {
+                        player.seekToNextMediaItem()
+                        player.play()
+                    } else if (isOnline(this@PlaybackService)) {
+                        autoplayRelated(player)
                     }
                 }
                 return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -766,6 +963,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        ListenTogetherRepository.getInstance(this).detach()
         equalizerController.release()
         mediaSession?.let { session ->
             session.player.release()

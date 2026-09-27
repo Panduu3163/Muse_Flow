@@ -43,7 +43,7 @@ import com.example.ui.component.TrackSelectionHost
 import com.example.ui.component.rememberTrackSelection
 
 /**
- * Everything played, newest first, grouped by day.
+ * Every recorded play, newest first, grouped by day. Pre-event-log history remains aggregated.
  *
  * Distinct from Library's "Recent" tile, which is a capped, sortable slice of the same table meant
  * for getting back to something quickly. This is the full record, so it's the place that can also
@@ -61,6 +61,8 @@ fun HistoryScreen(
     val viewModel: HistoryViewModel = viewModel()
     val actionsViewModel: TrackActionsViewModel = viewModel()
     val days by viewModel.days.collectAsState()
+    val query by viewModel.query.collectAsState()
+    val source by viewModel.source.collectAsState()
     val selection = rememberTrackSelection()
     var confirmingClear by remember { mutableStateOf(false) }
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
@@ -77,6 +79,20 @@ fun HistoryScreen(
     }
 
     Column(modifier = modifier.fillMaxSize().statusBarsPadding().testTag("history_screen")) {
+        androidx.compose.material3.OutlinedTextField(
+            value = query, onValueChange = { viewModel.query.value = it },
+            placeholder = { Text("Search listening history") }, singleLine = true,
+            shape = androidx.compose.foundation.shape.CircleShape,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+        )
+        Row(Modifier.padding(horizontal = 24.dp)) {
+            listOf("All", "Online", "Local").forEach { label ->
+                androidx.compose.material3.FilterChip(selected = source == label,
+                    onClick = { viewModel.source.value = label; selection.clear() },
+                    label = { Text(label) }, modifier = Modifier.padding(end = 8.dp),
+                    shape = androidx.compose.foundation.shape.CircleShape)
+            }
+        }
         TrackSelectionHost(
             selection = selection,
             tracks = allResults,
@@ -156,7 +172,11 @@ fun HistoryScreen(
                             if (selection.active) {
                                 selection.toggle(flatIndex)
                             } else {
-                                onPlayTrack(track.asTrackResult(), allResults)
+                                // Each history row is a play event. Start with this event's
+                                // track and keep later rows in order, without repeated media IDs
+                                // that would otherwise make PlayerViewModel select the first
+                                // occurrence of a different event.
+                                onPlayTrack(track.asTrackResult(), allResults.drop(flatIndex).distinctBy { it.id })
                             }
                         },
                         onLongClick = {

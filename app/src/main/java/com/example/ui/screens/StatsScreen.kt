@@ -31,6 +31,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -68,9 +69,13 @@ import com.example.ui.component.TrackRow
 fun StatsScreen(
     onBack: () -> Unit,
     onGoToArtist: (String) -> Unit,
+    onPlayTrack: (com.example.TrackResult, List<com.example.TrackResult>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val viewModel: StatsViewModel = viewModel()
+    val period by viewModel.period.collectAsState()
+    val mode by viewModel.mode.collectAsState()
+    var modeMenu by remember { mutableStateOf(false) }
     val totalPlays by viewModel.totalPlays.collectAsState()
     val uniqueTracks by viewModel.uniqueTrackCount.collectAsState()
     val uniqueArtists by viewModel.uniqueArtistCount.collectAsState()
@@ -98,6 +103,46 @@ fun StatsScreen(
             }
         }
 
+        item {
+            // Mode dropdown and period chips now share one horizontally-scrollable row instead of
+            // the dropdown sitting on its own line above the chips - "beside", not "beneath", and
+            // a LazyRow so every period chip stays reachable by swiping even once the dropdown
+            // pill's width eats into the space chips used to have to themselves.
+            androidx.compose.foundation.lazy.LazyRow(
+                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item {
+                    Box {
+                        OutlinedButton(onClick = { modeMenu = true }, shape = CircleShape) { Text(mode.name + " ⌄") }
+                        androidx.compose.material3.DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
+                            com.example.StatsMode.entries.forEach { choice ->
+                                androidx.compose.material3.DropdownMenuItem(text = { Text(choice.name) }, onClick = {
+                                    viewModel.selectMode(choice); modeMenu = false
+                                })
+                            }
+                        }
+                    }
+                }
+                // Extra breathing room between the mode pill and the first period chip, on top of
+                // the row's own 8dp spacedBy - the mode control reads as a separate, standalone
+                // pill this way instead of looking like it's part of the chip group.
+                item { Spacer(Modifier.width(8.dp)) }
+                items(com.example.StatsPeriod.entries) { option ->
+                    androidx.compose.material3.FilterChip(
+                        selected = period == option,
+                        onClick = { viewModel.selectPeriod(option) },
+                        label = { Text(option.label) },
+                        shape = CircleShape,
+                    )
+                }
+            }
+            if (period != com.example.StatsPeriod.AllTime) Text(
+                "Period stats include plays recorded since this update.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+        }
         if (totalPlays == 0) {
             item {
                 Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -139,7 +184,7 @@ fun StatsScreen(
                     artist = track.artist,
                     imageUrl = track.imageUrl,
                     duration = track.duration,
-                    onClick = {},
+                    onClick = { onPlayTrack(track.asTrackResult(), topTracks.map { it.asTrackResult() }) },
                     onLongClick = {},
                 )
             }

@@ -34,7 +34,17 @@ data class TrackResult(
     /** The track's (primary) artist browseId, when the source exposes one - lets "View artist"
      * navigate straight there. Null for local files. */
     val artistId: String? = null,
+    /** Every artist credited on this track, name plus that artist's own browseId (null where the
+     * source doesn't expose one) - [artist] is just these joined by ", " for display. Kept apart
+     * so a multi-artist song's Now Playing byline can send a tap on one name to that specific
+     * artist's page instead of always the first ([artistId]). Empty when the source (or a local
+     * file) never provided structured per-artist credits at all. */
+    val artistCredits: List<ArtistCredit> = emptyList(),
 )
+
+/** One artist byline credit - see [TrackResult.artistCredits]. */
+@Immutable
+data class ArtistCredit(val name: String, val id: String? = null)
 
 /** An album search result, enough to render a row and fetch its tracklist - [id] is a YouTube
  * Music browseId. */
@@ -151,6 +161,25 @@ data class PlaylistResult(
     val songCount: Int?,
     val sourceType: MusicSource = MusicSource.YOUTUBE_MUSIC
 )
+
+/** One item of a [SearchShelf] - kept as one concrete kind per item (not four parallel lists,
+ * like [BrowseSection]) so a shelf like "Top result" that genuinely mixes a song with an artist
+ * or playlist can still render in the exact order the source returned them. */
+sealed class SearchResultItem {
+    /** [isVideo] distinguishes a regular YouTube upload from a proper Music-catalog song within
+     * the same shelf (YouTube represents both as the same underlying item kind). */
+    data class Song(val track: TrackResult, val isVideo: Boolean) : SearchResultItem()
+    data class AlbumRow(val album: AlbumResult) : SearchResultItem()
+    data class ArtistRow(val artist: ArtistResult) : SearchResultItem()
+    data class PlaylistRow(val playlist: PlaylistResult) : SearchResultItem()
+}
+
+/** One named shelf of the "search everything" results page - Top result / Songs / Videos /
+ * Albums / Artists / Community playlists, in whatever titles, order and counts YouTube Music's
+ * own default (unfiltered) search response actually returns, not something this app computes or
+ * re-orders. See [MusicSearchRouter.searchSummary]. */
+@Immutable
+data class SearchShelf(val title: String, val items: List<SearchResultItem>)
 
 /**
  * One page of a paginated track list, with a [continuation] token to fetch the next page - null

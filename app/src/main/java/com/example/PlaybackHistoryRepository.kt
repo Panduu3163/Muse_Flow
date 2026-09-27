@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.music.innertube.models.upgradeThumbnailSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +18,8 @@ import kotlinx.coroutines.launch
  */
 class PlaybackHistoryRepository private constructor(context: Context) {
 
-    private val dao = MuseFlowDatabase.getInstance(context.applicationContext).playbackHistoryDao()
+    private val database = MuseFlowDatabase.getInstance(context.applicationContext)
+    private val dao = database.playbackHistoryDao()
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun observeRecent(limit: Int): Flow<List<PlaybackHistoryEntity>> = dao.observeRecent(limit)
@@ -27,22 +29,29 @@ class PlaybackHistoryRepository private constructor(context: Context) {
 
     /** Everything, for the History screen. */
     fun observeAll(): Flow<List<PlaybackHistoryEntity>> = dao.observeAll()
+    fun observeEvents(): Flow<List<PlaybackEventEntity>> = dao.observeEvents()
 
     /** Forgets one track. Its [Track.downloadKey] is the row's identity, the same key
      * [recordPlayed] writes under. */
     fun forget(track: Track) {
-        repositoryScope.launch { dao.deleteByKey(track.downloadKey()) }
+        repositoryScope.launch { database.withTransaction {
+            dao.deleteEvents(track.downloadKey())
+            dao.deleteByKey(track.downloadKey())
+        } }
     }
 
     /** Forgets everything. Home's shelves and Library's Top 50 empty out with it - they are views
      * onto this one table, not separate records. */
     fun clear() {
-        repositoryScope.launch { dao.clearAll() }
+        repositoryScope.launch { database.withTransaction { dao.clearEvents(); dao.clearAll() } }
     }
 
     fun recordPlayed(track: Track) {
         repositoryScope.launch {
+          database.withTransaction {
             val key = track.downloadKey()
+            val now = System.currentTimeMillis()
+            dao.insertEvent(PlaybackEventEntity(trackKey = key, playedAt = now))
             // Increments the existing row's playCount rather than a plain REPLACE overwrite, so
             // "My Top 50" reflects how often a track has actually been played, not just whether
             // it's ever been played once.
@@ -57,7 +66,7 @@ class PlaybackHistoryRepository private constructor(context: Context) {
                     gradientIndex = track.gradientIndex,
                     imageUrl = track.imageUrl,
                     streamUrl = track.streamUrl,
-                    playedAt = System.currentTimeMillis(),
+                    playedAt = now,
                     sourceId = track.sourceId,
                     sourceType = track.sourceType?.name,
                     playCount = existingCount + 1,
@@ -65,6 +74,7 @@ class PlaybackHistoryRepository private constructor(context: Context) {
                     artistId = track.artistId,
                 )
             )
+          }
         }
     }
 

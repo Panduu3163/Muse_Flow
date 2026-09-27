@@ -16,6 +16,10 @@ import org.schabi.newpipe.extractor.exceptions.ParsingException
 import org.schabi.newpipe.extractor.exceptions.ReCaptchaException
 import org.schabi.newpipe.extractor.services.youtube.YoutubeJavaScriptPlayerManager
 import org.schabi.newpipe.extractor.stream.StreamInfo
+import org.schabi.newpipe.extractor.stream.StreamInfoItem
+import org.schabi.newpipe.extractor.search.SearchInfo
+import org.schabi.newpipe.extractor.ServiceList
+import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeSearchQueryHandlerFactory
 import java.io.IOException
 import java.net.Inet4Address
 import java.net.Inet6Address
@@ -144,7 +148,7 @@ object NewPipeExtractor {
     private var newPipeUtils: NewPipeUtils? = null
     private var isInitialized = false
 
-    fun init() {
+    @Synchronized fun init() {
         if (!isInitialized) {
             newPipeDownloader = NewPipeDownloaderImpl(
                 proxy = YouTube.proxy,
@@ -154,6 +158,34 @@ object NewPipeExtractor {
             isInitialized = true
         }
     }
+
+    /** Regular YouTube search, including videos absent from YouTube Music's catalog. */
+    suspend fun searchGeneralVideos(query: String): List<com.music.innertube.models.SongItem> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            init()
+            val service = ServiceList.YouTube
+            val handler = service.searchQHFactory.fromQuery(
+                query, listOf(YoutubeSearchQueryHandlerFactory.VIDEOS), ""
+            )
+            SearchInfo.getInfo(service, handler).relatedItems
+                .filterIsInstance<StreamInfoItem>()
+                .mapNotNull { item ->
+                    val id = Regex("(?:[?&]v=|/shorts/|/live/)([A-Za-z0-9_-]{11})")
+                        .find(item.url)?.groupValues?.get(1) ?: return@mapNotNull null
+                    if (item.duration <= 0) return@mapNotNull null
+                    com.music.innertube.models.SongItem(
+                        id = id,
+                        title = item.name,
+                        artists = listOf(com.music.innertube.models.Artist(item.uploaderName.orEmpty(), null)),
+                        duration = item.duration.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                        musicVideoType = "GENERAL_YOUTUBE_VIDEO",
+                        thumbnail = item.thumbnails.maxByOrNull { it.width * it.height }?.url
+                            ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg",
+                    )
+                }
+                .distinctBy { it.id }
+                .take(30)
+        }
 
     fun getSignatureTimestamp(videoId: String): Result<Int> {
         init()

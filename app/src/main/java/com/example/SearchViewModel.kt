@@ -11,11 +11,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-/** Which kind of result the Search screen is showing. YouTube Music answers each of these with a
- * different search filter, so they are genuinely separate queries rather than one result set
- * sliced four ways. */
+/** Which kind of result the Search screen is showing. Videos searches regular YouTube; the
+ * collection tabs use separate YouTube Music filters. */
 enum class SearchFilter(val label: String) {
+    /** The default landing tab: YouTube Music's own mixed "everything" results page (Top result,
+     * Songs, Videos, Albums, Artists, Playlists shelves) rather than one type at a time. */
+    All("All"),
     Songs("Songs"),
+    Videos("Videos"),
     Albums("Albums"),
     Artists("Artists"),
     Playlists("Playlists"),
@@ -60,14 +63,20 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
     private val history = SearchHistoryRepository.getInstance(application)
     private val playbackHistory = PlaybackHistoryRepository.getInstance(application)
 
+
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
 
-    private val _filter = MutableStateFlow(SearchFilter.Songs)
+    private val _filter = MutableStateFlow(SearchFilter.All)
     val filter: StateFlow<SearchFilter> = _filter.asStateFlow()
+
+    private val _summary = MutableStateFlow<UiState<List<SearchShelf>>>(UiState.Success(emptyList()))
+    val summary: StateFlow<UiState<List<SearchShelf>>> = _summary.asStateFlow()
 
     private val _results = MutableStateFlow<UiState<List<TrackResult>>>(UiState.Success(emptyList()))
     val results: StateFlow<UiState<List<TrackResult>>> = _results.asStateFlow()
+    private val _videos = MutableStateFlow<UiState<List<TrackResult>>>(UiState.Success(emptyList()))
+    val videos: StateFlow<UiState<List<TrackResult>>> = _videos.asStateFlow()
 
     private val _albums = MutableStateFlow<UiState<List<AlbumResult>>>(UiState.Success(emptyList()))
     val albums: StateFlow<UiState<List<AlbumResult>>> = _albums.asStateFlow()
@@ -118,6 +127,21 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
      * forth doesn't refetch what is already on screen. */
     private val loadedFor = mutableMapOf<SearchFilter, String>()
 
+    init {
+        viewModelScope.launch {
+            var wasOffline = false
+            observeOnline(application).collect { online ->
+                if (online && wasOffline && committedQuery.isNotBlank()) {
+                    // Every tab may have cached an offline failure; refetch the visible tab now
+                    // and let the others refresh when opened.
+                    loadedFor.clear()
+                    runSearch(committedQuery, _filter.value)
+                }
+                wasOffline = !online
+            }
+        }
+    }
+
     // --- Songs-tab pagination / recommendation-blend state ---------------------------------
     // All reset together at the top of [loadSongs], every time a *new* query is committed - never
     // reset by a tab switch, so scrolling away and back to Songs resumes exactly where it left off.
@@ -166,6 +190,11 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return
 
+        // Cancels a debounced suggestion fetch still in flight from the last keystroke - without
+        // this, pressing Enter right after typing let that pending job land *after* search()
+        // cleared _suggestions below, silently repopulating the dropdown over the real results
+        // (had to dismiss the keyboard and search again to see them).
+        suggestJob?.cancel()
         _query.value = trimmed
         _suggestions.value = emptyList()
         committedQuery = trimmed
@@ -197,7 +226,9 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
             _activeBackend.value = StreamResolverRouter.activeBackend(getApplication())
 
             val succeeded = when (filter) {
+                SearchFilter.All -> load(_summary) { router.searchSummary(query) }
                 SearchFilter.Songs -> loadSongs(query)
+                SearchFilter.Videos -> load(_videos) { router.searchGeneralVideos(query) }
                 SearchFilter.Albums -> load(_albums) { router.searchAlbums(query) }
                 SearchFilter.Artists -> load(_artists) { router.searchArtists(query) }
                 SearchFilter.Playlists -> load(_playlists) { router.searchPlaylists(query) }
@@ -225,7 +256,32 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         _isLoadingMore.value = false
 
         _results.value = UiState.Loading
-        return runCatching { router.searchTracksPage(query) }.fold(
+        return runCatching {
+            val videoId = videoIdFromLink(query)
+            if (videoId == null) router.searchTracksPage(query) else {
+                val metadata = runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val url = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json"
+                    val request = okhttp3.Request.Builder().url(url).build()
+                    okhttp3.OkHttpClient().newCall(request).execute().use { response ->
+                        check(response.isSuccessful) { "This video is unavailable or private" }
+                        org.json.JSONObject(response.body.string())
+                    }
+                } }.getOrNull()
+                // oEmbed excludes some ordinary videos. The player response can still supply
+                // metadata for an ID that the existing audio resolver is able to play.
+                val details = if (metadata == null) com.music.innertube.YouTube.player(
+                    videoId, client = com.music.innertube.models.YouTubeClient.VISIONOS
+                ).getOrNull()?.videoDetails else null
+                TrackPage(listOf(TrackResult(id = videoId,
+                    title = metadata?.optString("title")?.takeIf { it.isNotBlank() }
+                        ?: details?.title ?: "YouTube video $videoId",
+                    artist = metadata?.optString("author_name") ?: details?.author.orEmpty(),
+                    duration = null, source = "YouTube video", sourceType = MusicSource.YOUTUBE_MUSIC,
+                    imageUrl = metadata?.optString("thumbnail_url")
+                        ?: details?.thumbnail?.thumbnails?.lastOrNull()?.url
+                        ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg")), null)
+            }
+        }.fold(
             onSuccess = { page ->
                 searchContinuation = page.continuation
                 seenTrackIds += page.items.map { it.id }
@@ -384,6 +440,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         _hasSearched.value = false
         loadedFor.clear()
         _results.value = UiState.Success(emptyList())
+        _videos.value = UiState.Success(emptyList())
         _albums.value = UiState.Success(emptyList())
         _artists.value = UiState.Success(emptyList())
         _playlists.value = UiState.Success(emptyList())

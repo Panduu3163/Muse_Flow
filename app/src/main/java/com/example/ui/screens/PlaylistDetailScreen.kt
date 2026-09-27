@@ -64,6 +64,8 @@ import com.example.PlayerViewModel
 import com.example.Track
 import com.example.TrackActionsViewModel
 import com.example.TrackResult
+import com.example.sharePlaylist
+import com.example.downloadKey
 import com.example.TrackSortOption
 import com.example.sortedByLibraryOption
 import com.example.totalDurationLabel
@@ -101,6 +103,18 @@ fun PlaylistDetailScreen(
     val context = LocalContext.current
     val playlists by viewModel.playlists.collectAsState()
     val tracks by viewModel.tracksForPlaylist(playlistId).collectAsState()
+    val online by remember(context) { com.example.observeOnline(context.applicationContext) }
+        .collectAsState(initial = com.example.isOnline(context))
+    val downloaded by remember(context) { com.example.DownloadRepository.getInstance(context).completedDownloads }
+        .collectAsState(initial = emptyList())
+    val offlineKeys = remember(downloaded) { downloaded.map { it.key }.toSet() }
+    val offlineTracks = remember(tracks, offlineKeys) {
+        tracks.filter { it.sourceType == com.example.MusicSource.LOCAL_DEVICE || it.downloadKey() in offlineKeys }
+    }
+    // Drives each row's heart/download glyphs, same as Library's own track lists - a playlist
+    // previously gave no way to tell which of its songs were already liked/downloaded.
+    val likedKeys by actionsViewModel.likedKeys.collectAsState()
+    val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsState()
     val selection = rememberTrackSelection()
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -120,6 +134,8 @@ fun PlaylistDetailScreen(
     var ascending by remember { mutableStateOf(true) }
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var preSearchScrollIndex by remember { mutableStateOf(0) }
+    var preSearchScrollOffset by remember { mutableStateOf(0) }
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     // Same fade-and-slide-out as the Artist screen's back button, for the same reason - see its
     // comment. "cover" is item 0 here too.
@@ -131,6 +147,26 @@ fun PlaylistDetailScreen(
                 val coverHeight = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == 0 }?.size ?: 1
                 (1f - listState.firstVisibleItemScrollOffset.toFloat() / coverHeight).coerceIn(0f, 1f)
             }
+        }
+    }
+    // Same slide-to-the-search-field behaviour as Library's own detail sections - see
+    // LibraryScreen's toggleSearch/searchFieldIndex doc for the full reasoning. "search_field" is
+    // always item 1 here (right after "cover"), no branching needed since this screen has only
+    // one shape.
+    fun toggleSearch() {
+        if (!searchActive) {
+            preSearchScrollIndex = listState.firstVisibleItemIndex
+            preSearchScrollOffset = listState.firstVisibleItemScrollOffset
+        }
+        searchActive = !searchActive
+        if (!searchActive) searchQuery = ""
+    }
+    androidx.activity.compose.BackHandler(enabled = searchActive) { toggleSearch() }
+    LaunchedEffect(searchActive) {
+        if (searchActive) {
+            listState.animateScrollToItem(1)
+        } else {
+            listState.animateScrollToItem(preSearchScrollIndex, preSearchScrollOffset)
         }
     }
 
@@ -156,7 +192,10 @@ fun PlaylistDetailScreen(
     LaunchedEffect(sort, ascending, searchQuery) { selection.clear() }
 
     val play: (Track, List<Track>) -> Unit = { track, queue ->
-        onPlayTrack(track.asTrackResult(), queue.map { it.asTrackResult() })
+        val playableQueue = if (online) queue else queue.filter { it in offlineTracks }
+        if (track !in playableQueue) {
+            android.widget.Toast.makeText(context, "This song is not downloaded", android.widget.Toast.LENGTH_SHORT).show()
+        } else onPlayTrack(track.asTrackResult(), playableQueue.map { it.asTrackResult() })
     }
 
     Box(
@@ -196,12 +235,17 @@ fun PlaylistDetailScreen(
                         placeholder = { Text("Search this playlist") },
                         singleLine = true,
                         trailingIcon = {
-                            IconButton(onClick = { searchActive = false; searchQuery = "" }) {
+                            IconButton(onClick = ::toggleSearch) {
                                 Icon(imageVector = Icons.Default.Close, contentDescription = "Close search")
                             }
                         },
+                        // statusBarsPadding here, not just on the floating back/search icons -
+                        // this field becomes the LazyColumn's top-most item once toggleSearch
+                        // scrolls to it, so its own top edge needs to clear the status bar itself
+                        // rather than relying on some other item's padding above it.
                         modifier = Modifier
                             .fillMaxWidth()
+                            .statusBarsPadding()
                             .padding(horizontal = 16.dp, vertical = 4.dp)
                             .testTag("playlist_search_field"),
                     )
@@ -265,7 +309,7 @@ fun PlaylistDetailScreen(
                                 contentDescription = "Shuffle",
                                 testTag = "playlist_shuffle",
                                 onClick = {
-                                    val shuffled = tracks.shuffled()
+                                    val shuffled = (if (online) tracks else offlineTracks).shuffled()
                                     shuffled.firstOrNull()?.let { play(it, shuffled) }
                                 },
                             )
@@ -274,7 +318,11 @@ fun PlaylistDetailScreen(
                                 contentDescription = "Play",
                                 testTag = "playlist_play_all",
                                 prominent = true,
-                                onClick = { tracks.firstOrNull()?.let { play(it, tracks) } },
+                                onClick = {
+                                    val queue = if (online) tracks else offlineTracks
+                                    if (queue.isEmpty()) android.widget.Toast.makeText(context, "No downloaded songs in this playlist", android.widget.Toast.LENGTH_SHORT).show()
+                                    else play(queue.first(), queue)
+                                },
                             )
                             CircleIconButton(
                                 icon = Icons.Default.MoreVert,
@@ -349,6 +397,7 @@ fun PlaylistDetailScreen(
                 // selection indexes, and the dedupe in `PlaylistRepository.addTracks` is the only
                 // thing keeping a content key unique here.
                 itemsIndexed(visibleTracks, key = { index, _ -> index }) { index, track ->
+                    val key = track.downloadKey()
                     TrackRow(
                         title = track.title,
                         artist = track.artist,
@@ -361,6 +410,10 @@ fun PlaylistDetailScreen(
                             if (selection.active) selection.toggle(index) else selection.start(index)
                         },
                         selected = selection.isSelected(index),
+                        isLiked = key in likedKeys,
+                        isDownloaded = key in offlineKeys,
+                        isLocalDevice = track.sourceType == com.example.MusicSource.LOCAL_DEVICE,
+                        downloadProgress = downloadsInProgress[key],
                         onOpenMenu = if (selection.active) null else {
                             { selectedTrack = track.asTrackResult() }
                         },
@@ -412,10 +465,7 @@ fun PlaylistDetailScreen(
             // inside the scrolling list, so this floating copy doesn't need to stay reachable.
             if (topBarVisibility > 0.01f) {
                 IconButton(
-                    onClick = {
-                        searchActive = !searchActive
-                        if (!searchActive) searchQuery = ""
-                    },
+                    onClick = ::toggleSearch,
                     modifier = Modifier
                         .graphicsLayer {
                             alpha = topBarVisibility
@@ -456,7 +506,7 @@ fun PlaylistDetailScreen(
             isPinned = playlist.isPinned,
             onTogglePin = { viewModel.togglePin(playlist) },
             onShuffle = {
-                val shuffled = tracks.shuffled()
+                val shuffled = (if (online) tracks else offlineTracks).shuffled()
                 shuffled.firstOrNull()?.let { play(it, shuffled) }
             },
             onStartRadio = {
@@ -473,6 +523,7 @@ fun PlaylistDetailScreen(
             onPlayNext = { playerViewModel.playNext(tracks.map { it.asTrackResult() }) },
             onAddToQueue = { playerViewModel.addToQueue(tracks.map { it.asTrackResult() }) },
             onDownload = { actionsViewModel.downloadAll(tracks) },
+            onShare = { context.sharePlaylist(playlist.name, tracks, playlist.remoteId) },
             // Deleting the playlist we're currently looking at leaves nothing to show here, so
             // this is the one PlaylistActionsSheet call site that also has to navigate back.
             onDelete = {
