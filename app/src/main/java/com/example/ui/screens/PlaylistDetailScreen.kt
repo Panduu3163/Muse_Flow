@@ -115,6 +115,8 @@ fun PlaylistDetailScreen(
     // previously gave no way to tell which of its songs were already liked/downloaded.
     val likedKeys by actionsViewModel.likedKeys.collectAsState()
     val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsState()
+    // Drives the "now playing" equalizer badge on whichever row matches - see TrackRow's own doc.
+    val nowPlayingState by playerViewModel.state.collectAsState()
     val selection = rememberTrackSelection()
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -136,7 +138,13 @@ fun PlaylistDetailScreen(
     var searchQuery by remember { mutableStateOf("") }
     var preSearchScrollIndex by remember { mutableStateOf(0) }
     var preSearchScrollOffset by remember { mutableStateOf(0) }
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // Restores wherever the user last scrolled to in this playlist - tapping a track to open Now
+    // Playing and pressing back used to always land back at the top instead. See
+    // rememberRestoredLazyListState's own doc for the two real gotchas this needs to dodge.
+    val listState = com.example.rememberRestoredLazyListState(
+        key = "playlist:$playlistId",
+        isContentReady = tracks.isNotEmpty(),
+    )
     // Same fade-and-slide-out as the Artist screen's back button, for the same reason - see its
     // comment. "cover" is item 0 here too.
     val topBarVisibility by remember {
@@ -162,7 +170,16 @@ fun PlaylistDetailScreen(
         if (!searchActive) searchQuery = ""
     }
     androidx.activity.compose.BackHandler(enabled = searchActive) { toggleSearch() }
+    // Skips its very first run (the mount right after this composable enters composition, e.g.
+    // returning from Now Playing) - see LibraryScreen's own identical fix for the full reasoning.
+    // Unconditionally acting on that first run unconditionally animated the list back to (0, 0) on
+    // every single return from Now Playing, immediately undoing the just-restored scroll position.
+    var hasHandledInitialSearchState by remember { mutableStateOf(false) }
     LaunchedEffect(searchActive) {
+        if (!hasHandledInitialSearchState) {
+            hasHandledInitialSearchState = true
+            return@LaunchedEffect
+        }
         if (searchActive) {
             listState.animateScrollToItem(1)
         } else {
@@ -404,7 +421,12 @@ fun PlaylistDetailScreen(
                         imageUrl = track.imageUrl,
                         duration = track.duration,
                         onClick = {
-                            if (selection.active) selection.toggle(index) else play(track, visibleTracks)
+                            // Queues the playlist's real order (sortedTracks), not visibleTracks -
+                            // while searching within the playlist, visibleTracks is only the
+                            // handful of on-screen matches, which used to become the *entire*
+                            // queue: tapping a search hit that wasn't the playlist's last track
+                            // still left nothing queued after it.
+                            if (selection.active) selection.toggle(index) else play(track, sortedTracks)
                         },
                         onLongClick = {
                             if (selection.active) selection.toggle(index) else selection.start(index)
@@ -414,6 +436,7 @@ fun PlaylistDetailScreen(
                         isDownloaded = key in offlineKeys,
                         isLocalDevice = track.sourceType == com.example.MusicSource.LOCAL_DEVICE,
                         downloadProgress = downloadsInProgress[key],
+                        isPlaying = key == nowPlayingState.currentTrackKey,
                         onOpenMenu = if (selection.active) null else {
                             { selectedTrack = track.asTrackResult() }
                         },

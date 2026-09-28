@@ -50,6 +50,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,6 +78,7 @@ import com.example.PlayerViewModel
 import com.example.TrackActionsViewModel
 import com.example.TrackResult
 import com.example.UiState
+import com.example.downloadKey
 import com.example.loadAsUiState
 import com.example.parseArtistTracklistJson
 import com.example.toJson
@@ -121,11 +123,26 @@ fun ArtistScreen(
     val pageCacheDao = remember { MuseFlowDatabase.getInstance(context).artistPageCacheDao() }
     val followedIds by followedArtists.observeFollowedIds().collectAsState(initial = emptySet())
     val actionsViewModel: TrackActionsViewModel = viewModel()
+    // Drives the "now playing" equalizer badge on whichever row matches - see TrackRow's own doc.
+    val nowPlayingState by playerViewModel.state.collectAsState()
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
     var state by remember { mutableStateOf<UiState<ArtistTracklist>>(UiState.Loading) }
-    var selectedTab by remember(artistId) { mutableIntStateOf(0) }
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // rememberSaveable (not plain remember) so returning from Now Playing keeps whichever tab was
+    // open, keyed on artistId so navigating to a genuinely different artist still starts fresh at
+    // Overview. Plain remember(artistId) looked equivalent but isn't: LaunchedEffect(artistId)
+    // below used to also force this back to 0 on every mount (including a same-artist remount),
+    // which - combined with the scroll-restore effect reapplying an index that belonged to
+    // whatever tab was actually open - was what made the list look like it "jumped to the top"
+    // after Now Playing: the position was right, but the tab underneath it had silently changed.
+    var selectedTab by rememberSaveable(artistId) { mutableIntStateOf(0) }
+    // Restores wherever the user last scrolled to on this artist - tapping a track to open Now
+    // Playing and pressing back used to always land back at the top instead. See
+    // rememberRestoredLazyListState's own doc for the two real gotchas this needs to dodge.
+    val listState = com.example.rememberRestoredLazyListState(
+        key = "artist:$artistId",
+        isContentReady = state is UiState.Success,
+    )
     // 1f at the very top, fading to 0f by the time the cover ("cover" is item 0) has fully
     // scrolled past - so the button is gone well before the artist name (item 1) reaches the top,
     // rather than permanently floating over whatever tab content ends up underneath it.
@@ -141,7 +158,10 @@ fun ArtistScreen(
     }
 
     LaunchedEffect(artistId) {
-        selectedTab = 0
+        // No longer forces selectedTab back to 0 here - selectedTab is keyed on artistId via
+        // rememberSaveable above, which already starts a genuinely different artist at 0 on its
+        // own; doing it again unconditionally here was what clobbered a same-artist remount's
+        // restored tab (see selectedTab's own doc).
         val cached = runCatching { pageCacheDao.get(artistId) }.getOrNull()
             ?.let { parseArtistTracklistJson(it.tracklistJson) }
         if (cached != null) {
@@ -245,11 +265,13 @@ fun ArtistScreen(
                             onOpenMenu = { selectedTrack = it },
                             onGoToAlbum = onGoToAlbum,
                             onGoToArtist = onGoToArtist,
+                            nowPlayingKey = nowPlayingState.currentTrackKey,
                         )
                         1 -> artistSongsItems(
                             tracks = tracklist.tracks,
                             onPlayTrack = onPlayTrack,
                             onOpenMenu = { selectedTrack = it },
+                            nowPlayingKey = nowPlayingState.currentTrackKey,
                         )
                         2 -> artistAlbumsItems(albums = tracklist.albums, onGoToAlbum = onGoToAlbum)
                         3 -> artistRelatedItems(artists = tracklist.relatedArtists, onGoToArtist = onGoToArtist)
@@ -573,6 +595,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.artistOverviewItems(
     onOpenMenu: (TrackResult) -> Unit,
     onGoToAlbum: (String) -> Unit,
     onGoToArtist: (String) -> Unit,
+    nowPlayingKey: String? = null,
 ) {
     val topTracks = tracklist.tracks.take(5)
     if (topTracks.isEmpty() && tracklist.albums.isEmpty() && tracklist.relatedArtists.isEmpty()) {
@@ -598,6 +621,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.artistOverviewItems(
                 duration = track.duration,
                 onClick = { onPlayTrack(track, tracklist.tracks) },
                 onOpenMenu = { onOpenMenu(track) },
+                isPlaying = track.downloadKey() == nowPlayingKey,
             )
         }
     }
@@ -653,6 +677,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.artistSongsItems(
     tracks: List<TrackResult>,
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit,
     onOpenMenu: (TrackResult) -> Unit,
+    nowPlayingKey: String? = null,
 ) {
     if (tracks.isEmpty()) {
         item(key = "songs_empty") { EmptyTabMessage("No songs found for this artist.") }
@@ -666,6 +691,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.artistSongsItems(
             duration = track.duration,
             onClick = { onPlayTrack(track, tracks) },
             onOpenMenu = { onOpenMenu(track) },
+            isPlaying = track.downloadKey() == nowPlayingKey,
         )
     }
     item(key = "songs_bottom_padding") { Box(modifier = Modifier.padding(bottom = 200.dp)) }

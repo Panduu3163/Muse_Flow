@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -92,6 +91,7 @@ import com.example.LocalMediaPermission
 import com.example.PlayerViewModel
 import com.example.PlaylistEntity
 import com.example.PlaylistSortOption
+import com.example.rememberRestoredLazyListState
 import com.example.sharePlaylist
 import com.example.TrackSortOption
 import com.example.TrackActionsViewModel
@@ -235,6 +235,8 @@ fun LibraryScreen(
     val context = LocalContext.current
     val online by remember(context) { com.example.observeOnline(context.applicationContext) }
         .collectAsState(initial = com.example.isOnline(context))
+    // Drives the "now playing" equalizer badge on whichever row matches - see TrackRow's own doc.
+    val nowPlayingState by playerViewModel.state.collectAsState()
     var hasLocalPermission by remember { mutableStateOf(LocalMediaPermission.isGranted(context)) }
     LifecycleResumeEffect(Unit) {
         hasLocalPermission = LocalMediaPermission.isGranted(context)
@@ -312,6 +314,18 @@ fun LibraryScreen(
             (localTracks as? UiState.Success)?.data?.let(viewModel::sortTracks).orEmpty()
         LibrarySection.Following -> emptyList()
     }
+    // The queue a tap actually starts, as opposed to sectionTracks' own search-filtered display -
+    // see sortTracksIgnoringSearch's own doc for why these need to diverge while searching.
+    val queueSectionTracks: List<Track> = when (section) {
+        LibrarySection.Playlists -> emptyList()
+        LibrarySection.Liked -> viewModel.sortTracksIgnoringSearch(liked)
+        LibrarySection.Downloads -> viewModel.sortTracksIgnoringSearch(downloads)
+        LibrarySection.TopPlayed -> viewModel.sortTracksIgnoringSearch(topPlayed)
+        LibrarySection.Recent -> viewModel.sortTracksIgnoringSearch(recent)
+        LibrarySection.OnDevice ->
+            (localTracks as? UiState.Success)?.data?.let(viewModel::sortTracksIgnoringSearch).orEmpty()
+        LibrarySection.Following -> emptyList()
+    }
     // The cover mosaic's own source - the repository's raw order, not sectionTracks' sorted/
     // filtered view. Otherwise switching "Date added" to "Name" or flipping ascending/descending
     // would reshuffle which thumbnails the mosaic shows, which read as the cover randomly
@@ -362,7 +376,15 @@ fun LibraryScreen(
         it.sourceType == com.example.MusicSource.LOCAL_DEVICE || it.downloadKey() in downloadedKeys
     }
 
-    val listState = rememberLazyListState()
+    // Restores wherever the user last scrolled to in this exact section - tapping a track to open
+    // Now Playing and pressing back used to always land back at the top instead. See
+    // rememberRestoredLazyListState's own doc for the two real gotchas this needs to dodge.
+    val listReady = when (section) {
+        LibrarySection.Playlists -> filteredPlaylists.isNotEmpty()
+        LibrarySection.Following -> filteredFollowedArtists.isNotEmpty()
+        else -> sectionTracks.isNotEmpty()
+    }
+    val listState = rememberRestoredLazyListState(key = "library:${section.name}", isContentReady = listReady)
     // Same fade-with-scroll idea [ArtistScreen] uses for its own floating back/menu buttons: 1f
     // while still within the cover (item 0), fading to 0f as it scrolls past, back to 0f outright
     // once anything below the cover reaches the top. Only meaningful (and only rendered) for a
@@ -403,7 +425,20 @@ fun LibraryScreen(
     // after cover/heading/actions/stats/about (5 items) for a detail section - see where each is
     // actually emitted below.
     val searchFieldIndex = if (detailSection == null) 1 else 5
+    // Skips its very first run (the mount right after this composable enters composition, e.g.
+    // returning from Now Playing) - LaunchedEffect always runs once on mount regardless of whether
+    // searchActive "actually changed" from some prior value, and searchActive/preSearchScrollIndex/
+    // preSearchScrollOffset are all plain remember state that resets to false/0/0 on every fresh
+    // mount. Unconditionally acting on that first run meant this unconditionally animated the list
+    // back to (0, 0) on every single return from Now Playing, immediately undoing whatever
+    // rememberRestoredLazyListState had just restored a moment earlier - the real cause of the
+    // scroll-position bug surviving two earlier attempts at rememberRestoredLazyListState itself.
+    var hasHandledInitialSearchState by remember { mutableStateOf(false) }
     LaunchedEffect(searchActive) {
+        if (!hasHandledInitialSearchState) {
+            hasHandledInitialSearchState = true
+            return@LaunchedEffect
+        }
         if (searchActive) {
             listState.animateScrollToItem(searchFieldIndex)
         } else {
@@ -710,9 +745,9 @@ fun LibraryScreen(
                 onLongPress = { selectedPlaylistId = it.id },
                 emptyMessage = emptyMessageFor("No playlists yet. Long-press any song and choose \"Add to playlist\"."),
             )
-            LibrarySection.Liked -> trackItems(sectionTracks, emptyMessageFor("Nothing liked yet."), gridView, gridColumns, play, openMenu, selection, likedKeys, downloadedKeys, downloadsInProgress)
-            LibrarySection.Downloads -> trackItems(sectionTracks, emptyMessageFor("No downloads yet."), gridView, gridColumns, play, openMenu, selection, likedKeys, downloadedKeys, downloadsInProgress)
-            LibrarySection.TopPlayed -> trackItems(sectionTracks, emptyMessageFor("Play something and it'll show up here."), gridView, gridColumns, play, openMenu, selection, likedKeys, downloadedKeys, downloadsInProgress)
+            LibrarySection.Liked -> trackItems(sectionTracks, emptyMessageFor("Nothing liked yet."), gridView, gridColumns, play, openMenu, selection, likedKeys, downloadedKeys, downloadsInProgress, queueTracks = queueSectionTracks, nowPlayingKey = nowPlayingState.currentTrackKey)
+            LibrarySection.Downloads -> trackItems(sectionTracks, emptyMessageFor("No downloads yet."), gridView, gridColumns, play, openMenu, selection, likedKeys, downloadedKeys, downloadsInProgress, queueTracks = queueSectionTracks, nowPlayingKey = nowPlayingState.currentTrackKey)
+            LibrarySection.TopPlayed -> trackItems(sectionTracks, emptyMessageFor("Play something and it'll show up here."), gridView, gridColumns, play, openMenu, selection, likedKeys, downloadedKeys, downloadsInProgress, queueTracks = queueSectionTracks, nowPlayingKey = nowPlayingState.currentTrackKey)
             // The capped, sortable slice for getting back to something quickly - the full record,
             // with its own editing, lives on the History screen this links to.
             LibrarySection.Recent -> {
@@ -731,7 +766,7 @@ fun LibraryScreen(
                         Text(text = "View full history", modifier = Modifier.padding(start = 8.dp))
                     }
                 }
-                trackItems(sectionTracks, emptyMessageFor("Nothing played yet."), gridView, gridColumns, play, openMenu, selection, likedKeys, downloadedKeys, downloadsInProgress)
+                trackItems(sectionTracks, emptyMessageFor("Nothing played yet."), gridView, gridColumns, play, openMenu, selection, likedKeys, downloadedKeys, downloadsInProgress, queueTracks = queueSectionTracks, nowPlayingKey = nowPlayingState.currentTrackKey)
             }
             LibrarySection.OnDevice -> when {
                 !hasLocalPermission -> item {
@@ -754,6 +789,8 @@ fun LibraryScreen(
                     downloadedKeys,
                     downloadsInProgress,
                     showLocalDeviceBadge = false,
+                    queueTracks = queueSectionTracks,
+                    nowPlayingKey = nowPlayingState.currentTrackKey,
                 )
             }
             LibrarySection.Following -> followedArtistItems(
@@ -948,6 +985,13 @@ private fun LazyListScope.trackItems(
      * the glyph would just be noise repeated on every row instead of the distinguishing signal it
      * is in Liked/Downloads/Top 50/a playlist, where only *some* tracks are local files. */
     showLocalDeviceBadge: Boolean = true,
+    /** What a tap actually queues - defaults to [tracks] itself, but a caller mid-search passes
+     * the section's real (unfiltered) tracklist here instead, so playing a search hit still queues
+     * the whole section starting there rather than just the handful of on-screen matches. See
+     * [com.example.LibraryViewModel.sortTracksIgnoringSearch]'s own doc. */
+    queueTracks: List<Track> = tracks,
+    /** The player's current track key, for the "now playing" badge - see TrackRow's own doc. */
+    nowPlayingKey: String? = null,
 ) {
     if (tracks.isEmpty()) {
         item { Box(Modifier.fillParentMaxSize()) { EmptyState(emptyMessage) } }
@@ -971,7 +1015,7 @@ private fun LazyListScope.trackItems(
                         // Once anything is ticked a plain tap toggles instead of playing: with a
                         // selection on screen, tapping a row to start a song would look like a misfire.
                         onClick = {
-                            if (selection.active) selection.toggle(index) else onPlay(track, tracks)
+                            if (selection.active) selection.toggle(index) else onPlay(track, queueTracks)
                         },
                         // Enters selection directly - a grid cell has no room for its own menu button,
                         // so unlike the list this is the only way into multi-select from the grid.
@@ -979,6 +1023,7 @@ private fun LazyListScope.trackItems(
                             if (selection.active) selection.toggle(index) else selection.start(index)
                         },
                         selected = selection.isSelected(index),
+                        isPlaying = track.downloadKey() == nowPlayingKey,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -996,7 +1041,7 @@ private fun LazyListScope.trackItems(
             imageUrl = track.imageUrl,
             duration = track.duration,
             onClick = {
-                if (selection.active) selection.toggle(index) else onPlay(track, tracks)
+                if (selection.active) selection.toggle(index) else onPlay(track, queueTracks)
             },
             onLongClick = {
                 if (selection.active) selection.toggle(index) else selection.start(index)
@@ -1006,6 +1051,7 @@ private fun LazyListScope.trackItems(
             isDownloaded = key in downloadedKeys,
             isLocalDevice = showLocalDeviceBadge && track.sourceType == com.example.MusicSource.LOCAL_DEVICE,
             downloadProgress = downloadsInProgress[key],
+            isPlaying = key == nowPlayingKey,
             // No menu button while selecting - the selection bar is the row's controls then.
             onOpenMenu = if (selection.active) null else { { onOpenMenu(track) } },
             modifier = Modifier.animateItem(),
@@ -1021,6 +1067,7 @@ private fun TrackGridCell(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     selected: Boolean = false,
+    isPlaying: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1063,6 +1110,17 @@ private fun TrackGridCell(
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            // Same overlay treatment as TrackRow's own list-view artwork - see its doc.
+            if (isPlaying && !selected) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.45f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    com.example.ui.component.NowPlayingIndicator()
+                }
             }
         }
         Text(

@@ -82,6 +82,15 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             .map { it.first }
     }
 
+    /** The plain chosen sort, never the search-relevance reordering/filtering [sortTracks] folds
+     * in while a query is active - used to build the *queue* a tap starts, as opposed to what's
+     * displayed. Playing a search *hit* should still queue the section's real tracklist starting
+     * there, not just whatever few rows happened to match the search text - the latter is what
+     * made a tapped song "have nothing after it" while actually mid-playlist, since the on-screen
+     * search results were the entire queue. */
+    fun sortTracksIgnoringSearch(tracks: List<Track>): List<Track> =
+        tracks.sortedByLibraryOption(_trackSort.value, _ascending.value)
+
     /** Same query, applied to Playlists - the one section [sortTracks] doesn't cover, since a
      * playlist isn't a [Track]. */
     fun filterPlaylists(playlists: List<PlaylistEntity>): List<PlaylistEntity> {
@@ -153,7 +162,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun scanLocalTracks() {
         localScanJob?.cancel()
         localScanJob = viewModelScope.launch {
-            _localTracks.value = UiState.Loading
+            // Stale-while-revalidate: keep showing whatever's already loaded while this rescan
+            // runs, rather than flashing to a loading placeholder first. This is called on every
+            // visit to the section (see this function's own doc) - including a mere return from
+            // Now Playing, where the momentary switch to UiState.Loading was wiping the section's
+            // LazyColumn down to a single placeholder item and, with it, its scroll position: a
+            // LazyColumn that briefly has 0 real rows clamps its scroll state to fit, and that
+            // clamp doesn't undo itself once the real rows come back a moment later.
+            if (_localTracks.value !is UiState.Success) _localTracks.value = UiState.Loading
             _localTracks.value = runCatching {
                 LocalAudioProvider(getApplication()).search("").map { it.toLocalTrack() }
             }.fold(

@@ -104,6 +104,8 @@ fun SearchScreen(
     modifier: Modifier = Modifier,
 ) {
     val viewModel: SearchViewModel = viewModel()
+    // Drives the "now playing" equalizer badge on whichever row matches - see TrackRow's own doc.
+    val nowPlayingState by playerViewModel.state.collectAsState()
     val query by viewModel.query.collectAsState()
     val filter by viewModel.filter.collectAsState()
     val summary by viewModel.summary.collectAsState()
@@ -234,6 +236,7 @@ fun SearchScreen(
                                 onGoToAlbum = onGoToAlbum,
                                 onGoToArtist = onGoToArtist,
                                 onGoToPlaylist = onGoToPlaylist,
+                                nowPlayingKey = nowPlayingState.currentTrackKey,
                             )
 
                             SearchFilter.Songs -> TrackResults(
@@ -248,6 +251,7 @@ fun SearchScreen(
                                 recommendationsStartAt = recommendationsStartAt,
                                 isLoadingMore = isLoadingMoreSongs,
                                 onLoadMore = viewModel::loadMoreSongs,
+                                nowPlayingKey = nowPlayingState.currentTrackKey,
                             )
 
                             SearchFilter.Videos -> TrackResults(
@@ -262,6 +266,7 @@ fun SearchScreen(
                                 recommendationsStartAt = null,
                                 isLoadingMore = false,
                                 onLoadMore = {},
+                                nowPlayingKey = nowPlayingState.currentTrackKey,
                             )
 
                             SearchFilter.Albums -> CollectionResults(
@@ -397,6 +402,7 @@ private fun AllResults(
     onGoToAlbum: (String) -> Unit,
     onGoToArtist: (String) -> Unit,
     onGoToPlaylist: (String, String, String, String?) -> Unit,
+    nowPlayingKey: String? = null,
 ) {
     ResultsFrame(shelves, emptyMessage) { shelfList ->
         LazyColumn(contentPadding = PaddingValues(bottom = 200.dp)) {
@@ -426,6 +432,7 @@ private fun AllResults(
                                 isLiked = key in likedKeys,
                                 isDownloaded = key in downloadedKeys,
                                 downloadProgress = downloadsInProgress[key],
+                                isPlaying = key == nowPlayingKey,
                                 onOpenMenu = { onOpenMenu(resultItem.track) },
                                 modifier = Modifier.animateItem(),
                             )
@@ -494,6 +501,7 @@ private fun TrackResults(
     recommendationsStartAt: Int?,
     isLoadingMore: Boolean,
     onLoadMore: () -> Unit,
+    nowPlayingKey: String? = null,
 ) {
     ResultsFrame(results, emptyMessage) { tracks ->
         val listState = rememberLazyListState()
@@ -531,6 +539,7 @@ private fun TrackResults(
                     isLiked = likedKeys.contains(key),
                     isDownloaded = downloadedKeys.contains(key),
                     downloadProgress = downloadsInProgress[key],
+                    isPlaying = key == nowPlayingKey,
                     onOpenMenu = if (selection.active) null else { { onOpenMenu(track) } },
                     modifier = Modifier.animateItem(),
                 )

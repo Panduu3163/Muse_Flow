@@ -31,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +59,7 @@ import com.example.PlayerViewModel
 import com.example.TrackActionsViewModel
 import com.example.TrackResult
 import com.example.UiState
+import com.example.downloadKey
 import com.example.loadAsUiState
 import com.example.parseAlbumDetailsJson
 import com.example.toJson
@@ -94,6 +96,8 @@ fun AlbumScreen(
     val router = remember { MusicSearchRouter(context) }
     val pageCacheDao = remember { MuseFlowDatabase.getInstance(context).albumPageCacheDao() }
     val actionsViewModel: TrackActionsViewModel = viewModel()
+    // Drives the "now playing" equalizer badge on whichever row matches - see TrackRow's own doc.
+    val nowPlayingState by playerViewModel.state.collectAsState()
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
     var state by remember { mutableStateOf<UiState<AlbumDetails>>(UiState.Loading) }
@@ -249,6 +253,7 @@ fun AlbumScreen(
                                 duration = track.duration,
                                 onClick = { onPlayTrack(track, details.tracks) },
                                 onOpenMenu = { selectedTrack = track },
+                                isPlaying = track.downloadKey() == nowPlayingState.currentTrackKey,
                             )
                         }
                     }

@@ -1,14 +1,23 @@
 package com.example.ui.component
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -23,9 +32,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
@@ -59,6 +70,12 @@ fun TrackRow(
     isLocalDevice: Boolean = false,
     /** 0-100 while downloading, -1 for "started, no percentage yet", null when not downloading. */
     downloadProgress: Int? = null,
+    /** True when this row's track is the one currently loaded in the player (playing or paused) -
+     * shows a small animated equalizer over the cover art so the currently-playing song is
+     * identifiable at a glance in a long list, the same way Spotify/YouTube Music mark it. Callers
+     * compare their own track's `downloadKey()` against the player's current track to compute
+     * this - see e.g. `LibraryScreen`'s `nowPlayingKey`. */
+    isPlaying: Boolean = false,
     /** Ticked in multi-select mode. Tints the row and replaces the artwork with a checkmark. */
     selected: Boolean = false,
     /**
@@ -87,7 +104,7 @@ fun TrackRow(
             .testTag("track_row_${title.lowercase().replace(" ", "_")}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Artwork(imageUrl = imageUrl, selected = selected)
+        Artwork(imageUrl = imageUrl, selected = selected, isPlaying = isPlaying)
 
         Column(
             modifier = Modifier
@@ -210,6 +227,7 @@ private fun DownloadProgressRing(percent: Int, modifier: Modifier = Modifier) {
 private fun Artwork(
     imageUrl: String?,
     selected: Boolean = false,
+    isPlaying: Boolean = false,
     size: androidx.compose.ui.unit.Dp = 52.dp,
 ) {
     Box(
@@ -251,6 +269,55 @@ private fun Artwork(
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(24.dp),
+            )
+        }
+
+        // Overlaid rather than replacing the art (unlike the selected checkmark above) - the cover
+        // is still worth seeing; this only needs to be noticeable, not exclusive.
+        if (isPlaying) {
+            Box(
+                modifier = Modifier
+                    .size(size)
+                    .background(Color.Black.copy(alpha = 0.45f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                NowPlayingIndicator()
+            }
+        }
+    }
+}
+
+/** A small animated equalizer (three bars bouncing out of phase) marking whichever row's track is
+ * currently loaded in the player - the same "this one's playing" convention Spotify/YouTube Music
+ * use, so a long list of songs doesn't require opening Now Playing just to tell which one it is.
+ * Not `private`: also used directly by grid-view cells (e.g. `LibraryScreen`'s `TrackGridCell`),
+ * which render their own artwork box rather than going through [TrackRow]'s. */
+@Composable
+fun NowPlayingIndicator() {
+    val transition = rememberInfiniteTransition(label = "now_playing_bars")
+    val heights = List(3) { index ->
+        val duration = 480 + index * 130
+        transition.animateFloat(
+            initialValue = 0.25f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(duration, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "now_playing_bar_$index",
+        )
+    }
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.Bottom,
+        modifier = Modifier.height(18.dp),
+    ) {
+        heights.forEach { height ->
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(18.dp * height.value)
+                    .background(Color.White, RoundedCornerShape(1.dp)),
             )
         }
     }

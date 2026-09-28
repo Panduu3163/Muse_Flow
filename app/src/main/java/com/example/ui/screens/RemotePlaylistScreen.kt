@@ -100,18 +100,36 @@ fun RemotePlaylistScreen(
     val actionsViewModel: TrackActionsViewModel = viewModel()
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
-    var state by remember { mutableStateOf<UiState<List<TrackResult>>>(UiState.Loading) }
+    // Seeded from the in-memory cache when this exact playlist was already loaded once this
+    // session (e.g. returning from Now Playing), rather than always starting at Loading - a blank
+    // spinner flash on every remount was visually indistinguishable from "the scroll position got
+    // reset", even once rememberRestoredLazyListState below correctly restored it a moment later.
+    var state by remember {
+        mutableStateOf<UiState<List<TrackResult>>>(
+            RemotePlaylistTracksCache.get(playlistId)?.let { UiState.Success(it) } ?: UiState.Loading
+        )
+    }
     val savedPlaylists by actionsViewModel.playlists.collectAsState()
     val addedToLibrary = savedPlaylists.any { it.remoteId == playlistId }
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // Restores wherever the user last scrolled to in this playlist - tapping a track to open Now
+    // Playing and pressing back used to always land back at the top instead. See
+    // rememberRestoredLazyListState's own doc for the two real gotchas this needs to dodge.
+    val listState = com.example.rememberRestoredLazyListState(
+        key = "remote_playlist:$playlistId",
+        isContentReady = state is UiState.Success,
+    )
     // Same heart/download glyphs Library's own lists show - a remote playlist previously gave no
     // way to tell a song you'd already liked or downloaded elsewhere apart from one you hadn't.
     val likedKeys by actionsViewModel.likedKeys.collectAsState()
     val downloadedKeys by actionsViewModel.downloadedKeys.collectAsState()
     val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsState()
+    // Drives the "now playing" equalizer badge on whichever row matches - see TrackRow's own doc.
+    val nowPlayingState by playerViewModel.state.collectAsState()
 
     LaunchedEffect(playlistId) {
-        state = loadAsUiState("Couldn't load this playlist.") { router.getPlaylistTracks(playlistId) }
+        val fresh = loadAsUiState("Couldn't load this playlist.") { router.getPlaylistTracks(playlistId) }
+        if (fresh is UiState.Success) RemotePlaylistTracksCache.put(playlistId, fresh.data)
+        state = fresh
     }
 
     // Same fade-and-slide-out as the Artist/Playlist screens' back button - see their comments.
@@ -264,6 +282,7 @@ fun RemotePlaylistScreen(
                                 isLiked = key in likedKeys,
                                 isDownloaded = key in downloadedKeys,
                                 downloadProgress = downloadsInProgress[key],
+                                isPlaying = key == nowPlayingState.currentTrackKey,
                                 onOpenMenu = { selectedTrack = track },
                             )
                         }
@@ -507,6 +526,21 @@ private fun CircleIconButton(
             modifier = Modifier.size(if (prominent) 32.dp else 22.dp),
         )
     }
+}
+
+/**
+ * Last successfully loaded tracklist per remote playlist id, kept in memory only - lets a
+ * same-playlist remount (e.g. returning from Now Playing) show its content immediately instead of
+ * a blank loading spinner while a fresh fetch runs in the background, the same stale-while-
+ * revalidate treatment [ArtistScreen]/[AlbumScreen] get from their own Room page cache. This
+ * screen has no such cache (its own doc explains why - a remote playlist's header comes from nav
+ * args, not a re-fetchable id-only lookup), so this is the lightweight in-memory equivalent -
+ * enough to avoid the visible reload, not meant to survive process death.
+ */
+private object RemotePlaylistTracksCache {
+    private val cache = mutableMapOf<String, List<TrackResult>>()
+    fun get(playlistId: String): List<TrackResult>? = cache[playlistId]
+    fun put(playlistId: String, tracks: List<TrackResult>) { cache[playlistId] = tracks }
 }
 
 /** Same duration-summing logic as [com.example.totalDurationLabel] (`List<Track>`), duplicated for

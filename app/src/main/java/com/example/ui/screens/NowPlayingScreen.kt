@@ -816,10 +816,16 @@ private fun PlayerContent(
 
 /**
  * The Now Playing like button (background pill, tap handling, icon) with a heart-burst and a
- * bouncy pop the moment a track actually *becomes* liked - not on every tap (unliking shouldn't
- * burst), and driven by [isLiked] itself rather than the click event, so it also plays if the
- * track gets liked from somewhere else (e.g. a queue row's own like action) while this screen
- * happens to be open.
+ * bouncy pop the moment the user taps to *like* the track (not to unlike, and not every tap).
+ *
+ * Triggered directly from the tap itself, not from reactively watching [isLiked] change: an
+ * earlier version fired the burst on any false-to-true transition of [isLiked], which included
+ * the very first composition after opening Now Playing for a song that was *already* liked -
+ * `collectAsState()`'s initial placeholder value briefly reads false until the real, already-true
+ * value loads from the repository, and that "false then true" looked identical to a real like
+ * action from here, so the burst fired every single time the screen opened for an already-liked
+ * song. Driving it from the click instead can't misfire that way, since it only ever runs in
+ * response to an actual tap.
  *
  * The burst is a sibling of the clipped pill, not a child of it - the pill itself needs
  * `Modifier.clip(shape)` to keep its rounded background, but that clip would cut the burst's
@@ -836,12 +842,7 @@ private fun LikeButtonWithBurst(
     contentDescription: String,
     onClick: () -> Unit,
 ) {
-    var wasLiked by remember { mutableStateOf(isLiked) }
     var showBurst by remember { mutableStateOf(false) }
-    LaunchedEffect(isLiked) {
-        if (isLiked && !wasLiked) showBurst = true
-        wasLiked = isLiked
-    }
 
     val iconScale = remember { Animatable(1f) }
     LaunchedEffect(showBurst) {
@@ -859,7 +860,13 @@ private fun LikeButtonWithBurst(
                 .size(42.dp)
                 .clip(shape)
                 .background(containerColor)
-                .bounceClick(enabled = enabled, onClick = onClick)
+                .bounceClick(
+                    enabled = enabled,
+                    onClick = {
+                        if (!isLiked) showBurst = true
+                        onClick()
+                    },
+                )
                 .testTag("now_playing_like"),
             contentAlignment = Alignment.Center,
         ) {

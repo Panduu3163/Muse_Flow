@@ -1,5 +1,12 @@
 # Changelog
 
+## MuseFlow Beta v1.4.3
+
+- Fixed: playing a song found by searching inside a playlist (or Liked/Downloads/Top 50/On device while a search was active) could leave nothing queued after it, even mid-playlist - it now queues the whole list again, not just the search matches.
+- Fixed Now Playing's like button playing its heart-burst animation every time the screen opened for a song that was already liked.
+- Fixed Liked/Downloads/Top 50/On device/a playlist/an artist's songs scrolling back to the top after opening Now Playing and returning - found and fixed the actual cause this time: unrelated leftover search/tab logic on those screens was quietly re-resetting the scroll a frame after it was restored, undoing two earlier attempts at fixing this. On device specifically also re-scanned your files on every return, which wiped the list to a loading placeholder and reset the scroll with it - it now keeps showing your files while it quietly rescans in the background.
+- Added a "now playing" animation on the cover art of whichever song is currently playing - in Liked, Downloads, Top 50, On device, playlists, an artist's songs, grid view, search results, an album's tracklist, and history.
+
 ## MuseFlow Beta v1.4.2
 
 - Added playlist sharing: send any of your own playlists, or any YouTube playlist, to another MuseFlow user, and import one someone sends you from Library > Import shared playlist.

@@ -151,11 +151,9 @@ fun ChangelogDialog(onContinue: () -> Unit) {
  * Not `private`: also read by [UpdatesScreen]'s "Read changelog" section, since both are showing
  * the same "what's new in the version I'm running" content and shouldn't drift into two lists. */
 internal val CURRENT_CHANGELOG = listOf(
-    "Added playlist sharing: send your own playlists, or any YouTube playlist, to another MuseFlow user",
-    "Import shared playlist (Library) now accepts a YouTube playlist link as well as a MuseFlow code",
-    "Fixed a playlist saved from YouTube sharing as a MuseFlow code instead of a YouTube link",
-    "Fixed a crash pasting a playlist whose songs included a duplicate title/artist",
-    "Fixed the paste-a-code screen so a long paste no longer pushes the Preview button off-screen",
-    "A YouTube playlist's screen now shows Shuffle, Play, and a single \"more\" menu instead of five crowded buttons",
-    "Fixed a missing gap between Settings' changelog text and the mini player when expanded",
+    "Fixed: playing a song found by searching inside a playlist (or Liked/Downloads/Top 50/On device) could leave nothing queued after it, even mid-playlist",
+    "Fixed Now Playing's like button playing its heart-burst animation every time the screen opened for an already-liked song",
+    "Fixed Liked/Downloads/Top 50/On device/a playlist/an artist's songs scrolling back to the top after opening Now Playing and returning - found the actual cause this time",
+    "On device specifically also re-scanned your files on every return, wiping the list and its scroll position - it now rescans quietly in the background instead",
+    "Added a \"now playing\" animation on the cover art of whichever song is currently playing - Liked, Downloads, Top 50, On device, playlists, an artist's songs, grid view, search, an album's tracklist, and history",
 )

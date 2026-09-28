@@ -37,6 +37,7 @@ import com.example.PlayerViewModel
 import com.example.Track
 import com.example.TrackActionsViewModel
 import com.example.TrackResult
+import com.example.downloadKey
 import com.example.ui.component.TrackActionsHost
 import com.example.ui.component.TrackRow
 import com.example.ui.component.TrackSelectionHost
@@ -60,6 +61,8 @@ fun HistoryScreen(
 ) {
     val viewModel: HistoryViewModel = viewModel()
     val actionsViewModel: TrackActionsViewModel = viewModel()
+    // Drives the "now playing" equalizer badge on whichever row matches - see TrackRow's own doc.
+    val nowPlayingState by playerViewModel.state.collectAsState()
     val days by viewModel.days.collectAsState()
     val query by viewModel.query.collectAsState()
     val source by viewModel.source.collectAsState()
@@ -192,6 +195,7 @@ fun HistoryScreen(
                         onOpenMenu = if (selection.active) null else {
                             { selectedTrack = track.asTrackResult() }
                         },
+                        isPlaying = track.downloadKey() == nowPlayingState.currentTrackKey,
                     )
                 }
             }

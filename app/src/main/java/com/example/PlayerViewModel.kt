@@ -80,6 +80,13 @@ data class NowPlayingState(
 ) {
     val progress: Float
         get() = if (durationMs > 0L) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+
+    /** Same `"title::artist"` shape as [Track.downloadKey]/[TrackResult.downloadKey], so a track
+     * list can tell whether one of its own rows is the one currently loaded in the player by
+     * comparing keys - the "now playing" equalizer badge on [com.example.ui.component.TrackRow]
+     * is driven by this. Null while nothing is loaded. */
+    val currentTrackKey: String?
+        get() = title.trim().takeIf { it.isNotBlank() }?.let { "${it.lowercase()}::${artist.trim().lowercase()}" }
 }
 
 /** `mm:ss`, or `-:--` before a duration is known. */
