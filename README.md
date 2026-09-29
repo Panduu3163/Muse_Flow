@@ -157,11 +157,6 @@ MuseFlow does not host audio. Online search and playback use an included `:inner
 
 ---
 
-## Roadmap
-
-The current plan runs through **MuseFlow 1.8.0**. A later v2 will be researched separately. Planned areas include a more connected Player and Mini player experience, clearer queue editing, faster discovery and library organization, and deeper accessibility and performance work. See the [version roadmap](docs/MUSEFLOW-1.5-1.8-AND-V2-ROADMAP.md) for the proposed scope; planned items are not promises of shipped features.
-
----
 
 ## Credits
 
