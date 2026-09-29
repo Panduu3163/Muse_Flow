@@ -1,148 +1,191 @@
 <div align="center">
 
-# 🎵 MuseFlow
+<img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp" alt="MuseFlow app icon" width="112">
 
-**A free, ad-free music streaming app for Android.**
+<h1>MuseFlow</h1>
 
-Built with Kotlin, Jetpack Compose, and Media3 — a personal project aiming for a Spotify-level experience without the price tag.
+<p><strong>Music that moves with you.</strong></p>
 
-![Kotlin](https://img.shields.io/badge/Kotlin-100%25-7F52FF?style=for-the-badge&logo=kotlin)
-![Platform](https://img.shields.io/badge/Platform-Android-3DDC84?style=for-the-badge&logo=android)
-![License](https://img.shields.io/badge/License-GPL--3.0-blue?style=for-the-badge)
-![Status](https://img.shields.io/badge/Status-Active%20Development-orange?style=for-the-badge)
+<p>A free, ad-free Android music player for streaming, downloads, and songs on your device.</p>
+
+<p>
+  <img src="https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square&amp;logo=android&amp;logoColor=white" alt="Android 7.0 or newer">
+  <img src="https://img.shields.io/badge/Kotlin-7F52FF?style=flat-square&amp;logo=kotlin&amp;logoColor=white" alt="Built with Kotlin">
+  <img src="https://img.shields.io/badge/status-beta-F59E0B?style=flat-square" alt="Beta status">
+  <img src="https://img.shields.io/badge/license-GPL--3.0-64748B?style=flat-square" alt="GPL 3.0 license">
+</p>
 
 </div>
 
 ---
 
-## ⚠️ Before you read further
+## Overview
 
-MuseFlow is a **personal hobby project**, not a commercial product. It has bugs. It's actively being worked on. It exists because I wanted to learn and build something I'd actually use — not to compete with anyone.
+MuseFlow brings streaming, offline downloads, local songs, synchronized lyrics, and deep Player customization into one Android app. It is built with Kotlin, Jetpack Compose, and Media3, with a focus on making everyday listening feel personal and easy to control.
 
-It also relies on unofficial/reverse-engineered access to YouTube Music's internal API (details below), which exists in a legal gray area regarding YouTube's Terms of Service. This is the same trade-off made by several well-known open-source music apps this project draws inspiration and code from. Use accordingly.
+> [!NOTE]
+> MuseFlow is a personal, actively developed beta. It does not host music or provide an official YouTube service. Online playback relies on unofficial YouTube Music and YouTube interfaces that may change or stop working.
 
----
+## Contents
 
-## ✨ Features
-
-### 🎧 Playback
-- Background playback with a real, controllable media notification (play/pause, like, cover art), backed by a foreground service so it survives the screen turning off — and stops cleanly when the app is swiped away from Recents, so nothing keeps playing invisibly
-- A **heart/like button on the lock screen and notification**, wired to the same Liked Songs list as the in-app button — like a track without unlocking your phone
-- Real shuffle/repeat (wired to ExoPlayer, not cosmetic toggles), a live queue view, and swipe-left/right on the album art to skip tracks (opt-in, off by default)
-- A real 7-band equalizer plus normalization, crossfade, bass boost, and crossfeed — all backed by actual DSP that audibly changes the sound, not settings that silently do nothing
-- Sleep timer with a live countdown shown next to the icon
-- Dynamic codec/bitrate display that reflects whatever's actually decoding, styled as a small pill under the seek bar, toggleable in Settings
-- **Taste-aware autoplay** — when a queue runs out, the next track blends YouTube Music's own "radio" continuation for the last song with a weighted pick from your own most-played tracks, instead of always drifting toward whatever the last song happened to be
-- A mini-player with previous/next/close and smooth crossfade transitions between tracks, always in sync with what's really playing even after the app's been fully closed and reopened
-- Offline downloads with real download progress notifications, running in a foreground service so a download in progress survives the screen turning off
-- Local device file playback alongside streaming — toggle search between Online and On-Device
-- Automatic fallback across YouTube Music client types and stream extraction paths if one is rejected or blocked
-
-### 🔍 Discovery
-- Search across **Songs, Albums, Artists, and Playlists**, with state that survives navigating away and back (no lost query/results/scroll position)
-- Find a song from a remembered lyric line, not just its title — YouTube Music's own search backend (the same one its official app uses) handles the matching
-- Recent search history (capped, shown only while the search field is focused)
-- Real artist pages, including monthly listener counts, with clickable artist names throughout the app — from Search, Now Playing, restored queues, Liked Songs, and playlists alike
-- Real Home feed shelves (Recently Played, mood/genre-based shelves) — cached for offline viewing, auto-refreshes when you're back online, with a dynamic time-of-day greeting on the Home header
-- Charts and New Releases, sourced live from YouTube Music's real charts/new-music endpoints
-
-### 🎤 Lyrics
-- Real-time synced lyrics, scrolling in time with playback
-- Word-by-word lyric highlighting in 9 different animation styles (Karaoke, Bounce, Scale, Wave, Fade, Metro, Fluid, Vivi Music, Apple Music), selectable in Settings
-- **6 independent lyrics sources** (YouLyPlus, PaxSenix, Better Lyrics, SimpMusic, LRCLib, Kugou) with a drag-to-reorder fallback priority list, so a gap in one source's catalog rarely means no lyrics at all
-
-### 🎨 Personalization
-- First-launch onboarding with a custom display name and profile photo
-- AMOLED (true black) and Gradient theme modes, with selectable color palettes
-- **4 Now Playing background styles**: Solid, Album Gradient, Blurred Artwork, and Live Mesh (three blurred, saturated copies of the album art rotating independently behind the content)
-- **3 selectable transport button styles**: Static (classic separate buttons), Wheel (play/pause gets a rotating scalloped edge while playing), and Pill (prev/play/next joined into one continuous rounded pill)
-- Wavy/squiggly seek-bar styles with independently tunable speed and wavelength
-- Settings organized into 12 focused categories (General, Appearance, Player, Playback, Lyrics, Audio, Mini Player, Library Sections, Privacy, Storage, Backup, About) instead of one long flat list
-
-### 📚 Library
-- Quick-access tiles for Liked Songs, Downloaded tracks, Cached (Home's offline cache), My Top 50 (real play-count tracking, not just recency), and on-device Local files — all backed by real local data, nothing hardcoded
-- Like/unlike any track from anywhere it's listed, and download every Liked Song in one tap
-- Create playlists and actually add songs to them — from Search, Downloads, or Liked Songs — or save a whole online playlist into your library with one tap
-- Playlist covers are a real image when available, or an auto-generated 2×2 collage built from the playlist's own tracks otherwise
-- **Import playlists from CSV or M3U**, matched back to real, playable tracks
-- Full backup/restore (Liked Songs, playlists, settings) to a single portable file
-- In-app update check against this project's GitHub releases — notifies once per new version, never silently self-updates
+- [Screenshots](#screenshots)
+- [Features](#features)
+- [Installation and setup](#installation-and-setup)
+- [How it works](#how-it-works)
+- [Roadmap](#roadmap)
+- [Credits](#credits)
+- [License](#license)
 
 ---
 
-## 🛠️ Tech Stack
+## Screenshots
 
-| Layer | Technology |
-|---|---|
-| Language | Kotlin |
-| UI | Jetpack Compose + Material 3 |
-| Playback | Media3 / ExoPlayer |
-| Architecture | MVVM, Kotlin Coroutines & Flow |
-| Local Storage | Room, DataStore Preferences |
-| Networking | Retrofit, OkHttp |
-| Images | Coil |
+Device screenshots for the current beta will be added here. The gallery is prepared for Home, Now Playing, Lyrics, Search, Library, and Appearance.
 
-### How music sourcing works
-
-MuseFlow doesn't host or own any music. All streaming audio comes from **YouTube Music**, resolved through a vendored `:innertube` module (a Kotlin port of YouTube Music's internal API) rather than any official, authorized API:
-
-- A chain of YouTube client identities (Android VR, TV-embedded, iOS, and others) is tried in an order tuned by real-world testing, since which client is accepted varies by video, region, and over time
-- [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor) handles signature/cipher deobfuscation for clients that need it
-- A separate legacy resolution pipeline (visitor identity, BotGuard proof-of-origin tokens, its own cipher deobfuscation) remains available as a fallback backend
-- **Local device files** are a fully independent source — no network or resolution step involved, just a direct MediaStore read
-- **Lyrics** are sourced independently of audio, from 6 providers tried in a user-configurable priority order (see Lyrics above)
-
-Every source is isolated behind a shared `Provider` interface, so a single broken integration (which does happen — these are unofficial integrations reacting to platform changes) doesn't take the rest of the app down with it.
+<!-- Replace the sentence above with this gallery after adding the named images.
+<table>
+  <tr>
+    <td align="center"><strong>Home</strong><br><br><img src="docs/screenshots/home.png" alt="MuseFlow Home screen" width="220"></td>
+    <td align="center"><strong>Now Playing</strong><br><br><img src="docs/screenshots/player.png" alt="MuseFlow Now Playing screen" width="220"></td>
+    <td align="center"><strong>Lyrics</strong><br><br><img src="docs/screenshots/lyrics.png" alt="MuseFlow synchronized lyrics screen" width="220"></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Search</strong><br><br><img src="docs/screenshots/search.png" alt="MuseFlow Search screen" width="220"></td>
+    <td align="center"><strong>Library</strong><br><br><img src="docs/screenshots/library.png" alt="MuseFlow Library screen" width="220"></td>
+    <td align="center"><strong>Appearance</strong><br><br><img src="docs/screenshots/appearance.png" alt="MuseFlow Appearance settings screen" width="220"></td>
+  </tr>
+</table>
+-->
 
 ---
 
-## 🙏 Credits & Acknowledgements
+## Features
 
-MuseFlow wouldn't exist without the open-source music-client community. Significant logic, architecture patterns, and research in this project were adapted from:
+### New in 1.5.0
 
-- [Metrolist](https://github.com/MetrolistGroup/Metrolist) — reference implementation for YouTube Music integration
-- [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor) — YouTube signature/cipher deobfuscation
-- [zemer-cipher](https://github.com/ZemerTeam/zemer-cipher) — YouTube cipher deobfuscation and PoToken generation
-- [SimpMusic](https://github.com/maxrave-dev/SimpMusic) — cross-reference for YouTube Music streaming
-- [Echo Music](https://github.com/EchoMusicApp/Echo-Music) — architectural inspiration and direct component ports (Live Mesh background, transport button shapes, Now Playing layout, lyrics animation styles)
-- [LRCLib](https://lrclib.net), Better Lyrics, YouLyPlus, PaxSenix, SimpMusic, Kugou — synced lyrics sources
+> - **Appearance redesign** — Four theme modes, artwork colours, a custom hue picker, and visual choices for fonts, density, and card size.
+> - **More expressive Player** — Glow and Apple Music inspired backgrounds, rotating artwork, and refined progress styles.
+> - **Clearer navigation** — The selected tab expands to show its name; the Mini player shows progress around its cover art.
+> - **Easier settings** — Search for controls, preview changes, and reset Appearance, Player, or Mini player choices.
+> - **Polished motion** — Artwork swipes, playback indicators that pause with the music, and support for Android's reduced-motion setting.
 
-Genuine thanks to the maintainers of these projects for their work being open enough to learn from.
+Read the [full changelog](CHANGELOG.md) for the release history.
+
+<details>
+<summary><strong>Streaming and playback</strong></summary>
+
+- Background playback with a media notification and lock-screen controls, including a Like action.
+- Queue, shuffle, repeat, sleep timer, and taste-aware autoplay.
+- Seven-band equalizer, normalization, crossfade, bass boost, and crossfeed.
+- Optional codec and bitrate display for the active stream.
+- Offline downloads, local device audio, and recovery to downloaded tracks when connectivity drops.
+
+</details>
+
+<details>
+<summary><strong>Discovery and library</strong></summary>
+
+- Search songs, videos, albums, artists, and playlists, including YouTube uploads outside the YouTube Music catalog.
+- Home recommendations, charts, new releases, artist pages, and recent searches.
+- Liked Songs, Downloads, Top 50, history, local files, and personal playlists.
+- Playlist creation, sharing, online playlist saving, CSV and M3U import, and library backup and restore.
+- Listen Together rooms for synchronized playback with a compatible server.
+
+</details>
+
+<details>
+<summary><strong>Lyrics</strong></summary>
+
+- Synchronized lyrics with word-by-word highlighting and nine animation styles.
+- Six reorderable lyric sources: YouLyPlus, PaxSenix, Better Lyrics, SimpMusic, LRCLib, and Kugou.
+- An Apple Music inspired lyrics view with a translucent panel over the artwork backdrop.
+
+</details>
+
+<details>
+<summary><strong>Personalization</strong></summary>
+
+- Follow system, Light, Dark, and AMOLED modes with album-art colours or a custom accent hue.
+- Visual selectors for fonts, display density, and card size.
+- Solid, Album gradient, Blurred artwork, Live mesh, Glow animated, and Apple Music inspired Player backgrounds.
+- Default, Slim, Wavy, and Squiggly progress controls, plus artwork and transport-button choices.
+- Searchable Settings and live Appearance, Player, and Mini player previews.
+- Motion that respects Android's reduced-motion setting.
+
+</details>
 
 ---
 
-## 📦 Getting the App
+## Installation and setup
 
-Install the APK located on the [*releases*](https://github.com/Panduu3163/Muse_Flow/releases) section
+### Android installation
+
+Download an APK from [GitHub Releases](https://github.com/Panduu3163/Muse_Flow/releases) when a build is published. MuseFlow is currently distributed as a beta, not through an app store.
+
+**Already using MuseFlow Beta?** Install a newer **beta APK** over the existing beta app to keep its local data. The regular APK has a different Android app ID and installs as a separate app. An in-app update opens Android's installer; it never installs silently. Back up your library before major updates.
+
+<details>
+<summary><strong>Build from source</strong></summary>
+
+<br>
+
+1. Clone the repository and open it in Android Studio with a compatible Android SDK and JDK.
+2. Create a local signing key in the repository root. The build expects this file, but it is not committed:
+
+   ```sh
+   keytool -genkeypair -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+   ```
+
+3. Sync the Gradle project and build with `./gradlew assembleDebug` (macOS/Linux) or `.\gradlew.bat assembleDebug` (Windows).
+
+A locally generated key **cannot update an APK signed with MuseFlow's existing beta certificate**. Android requires the same app ID and signing certificate for an in-place update.
+
+</details>
 
 ---
 
-## 🚧 Roadmap
+## How it works
 
-- [ ] A cohesive app-wide color theme overhaul (in progress — current UI mixes hardcoded per-screen colors with the shared Material theme, so a full recolor needs those consolidated first)
-- [ ] Album/Artist browsing inside Library itself (currently search-only)
-- [ ] Home-screen widget and Quick Settings tile
-- [ ] Discord Rich Presence, Last.fm/ListenBrainz scrobbling
-- [ ] Listen Together (real-time synced listening sessions)
-- [ ] Lyrics romanization and AI-assisted translation
-- [ ] 2 more Now Playing background styles (animated glow, Apple Music–style)
-- [ ] Verified Android Auto support
+| Area | Technology |
+| --- | --- |
+| App and UI | Kotlin, Jetpack Compose, Material 3 |
+| Playback | Media3 / ExoPlayer and Android media sessions |
+| State and storage | Coroutines, Flow, Room, DataStore |
+| Networking and images | OkHttp, Retrofit, Coil |
 
----
-
-## 📄 License
-
-This project is licensed under **GPL-3.0**, consistent with the licenses of the upstream projects it adapts code and research from. See [LICENSE](LICENSE) for the full text.
+MuseFlow does not host audio. Online search and playback use an included `:innertube` module, YouTube Music and YouTube client integrations, and [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor) where stream signatures need resolving. Local files play through Android's media library without a network request. Lyrics are fetched separately from the audio stream. Because the online integrations are unofficial, availability can vary by track, region, and changes to upstream services.
 
 ---
 
-## 👤 Developer
+## Roadmap
 
-**Mynul Kabir Nayem**
-📧 mynulkbr@gmail.com
+The current plan runs through **MuseFlow 1.8.0**. A later v2 will be researched separately. Planned areas include a more connected Player and Mini player experience, clearer queue editing, faster discovery and library organization, and deeper accessibility and performance work. See the [version roadmap](docs/MUSEFLOW-1.5-1.8-AND-V2-ROADMAP.md) for the proposed scope; planned items are not promises of shipped features.
+
+---
+
+## Credits
+
+MuseFlow builds on work and ideas shared by the open-source music community:
+
+- [Metrolist](https://github.com/MetrolistGroup/Metrolist) and [SimpMusic](https://github.com/maxrave-dev/SimpMusic) for YouTube Music integration research.
+- [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor) and [zemer-cipher](https://github.com/ZemerTeam/zemer-cipher) for stream and cipher work.
+- [Echo Music](https://github.com/EchoMusicApp/Echo-Music) for Player, lyrics, and Listen Together references. Some component and protocol ideas were adapted under the project's open-source license.
+- The maintainers of LRCLib, Better Lyrics, YouLyPlus, PaxSenix, SimpMusic, and Kugou for lyric sources.
+
+See the source and bundled license notices for implementation details and attribution.
+
+---
+
+## License
+
+MuseFlow is licensed under [GPL-3.0](LICENSE).
+
+## Developer
+
+**Mynul Kabir Nayem** · mynulkbr@gmail.com
 
 <div align="center">
 
-*Made with a lot of trial, error, and genuine love for music.*
+*Made with care for the music and the people listening.*
 
 </div>
