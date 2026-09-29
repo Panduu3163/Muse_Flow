@@ -40,19 +40,19 @@ MuseFlow brings streaming, offline downloads, local songs, synchronized lyrics, 
 
 ## Screenshots
 
-Device screenshots for the current beta will be added here. The gallery is prepared for Home, Now Playing, Lyrics, Search, Library, and Appearance.
+Device screenshots for the current beta will be added here. The gallery is prepared for Home, Library, Lyrics, MuseChart, and two Player views.
 
 <!-- Replace the sentence above with this gallery after adding the named images.
 <table>
   <tr>
-    <td align="center"><strong>Home</strong><br><br><img src="docs/screenshots/home.png" alt="MuseFlow Home screen" width="220"></td>
-    <td align="center"><strong>Now Playing</strong><br><br><img src="docs/screenshots/player.png" alt="MuseFlow Now Playing screen" width="220"></td>
-    <td align="center"><strong>Lyrics</strong><br><br><img src="docs/screenshots/lyrics.png" alt="MuseFlow synchronized lyrics screen" width="220"></td>
+    <td align="center"><strong>Home</strong><br><br><img src="docs/screenshots/Home.jpg" alt="MuseFlow Home screen" width="220"></td>
+    <td align="center"><strong>Player</strong><br><br><img src="docs/screenshots/Player.jpg" alt="MuseFlow Now Playing screen" width="220"></td>
+    <td align="center"><strong>Player 2</strong><br><br><img src="docs/screenshots/Player_2.jpg" alt="MuseFlow second Player style" width="220"></td>
   </tr>
   <tr>
-    <td align="center"><strong>Search</strong><br><br><img src="docs/screenshots/search.png" alt="MuseFlow Search screen" width="220"></td>
-    <td align="center"><strong>Library</strong><br><br><img src="docs/screenshots/library.png" alt="MuseFlow Library screen" width="220"></td>
-    <td align="center"><strong>Appearance</strong><br><br><img src="docs/screenshots/appearance.png" alt="MuseFlow Appearance settings screen" width="220"></td>
+    <td align="center"><strong>Lyrics</strong><br><br><img src="docs/screenshots/Lyrics.jpg" alt="MuseFlow synchronized lyrics screen" width="220"></td>
+    <td align="center"><strong>MuseChart</strong><br><br><img src="docs/screenshots/MuseChart.jpg" alt="MuseFlow MuseChart screen" width="220"></td>
+    <td align="center"><strong>Library</strong><br><br><img src="docs/screenshots/Library.jpg" alt="MuseFlow Library screen" width="220"></td>
   </tr>
 </table>
 -->
