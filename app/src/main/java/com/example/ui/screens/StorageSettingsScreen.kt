@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.annotation.OptIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.media3.common.util.UnstableApi
 import com.example.StorageViewModel
 import com.example.ui.component.ActionPreference
 import com.example.ui.component.PreferenceGroup
@@ -45,6 +47,7 @@ import kotlin.math.pow
  * time) - see [StorageViewModel]'s own doc.
  */
 @Composable
+@OptIn(UnstableApi::class)
 fun StorageSettingsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,

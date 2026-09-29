@@ -1,22 +1,26 @@
 package com.example.ui.component
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -30,17 +34,25 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.TopLevelDestination
+import com.example.ui.theme.LocalReducedMotion
+import com.example.ui.theme.MuseFlowShapes
+import com.example.ui.theme.MuseFlowSpacing
+import com.example.ui.theme.MuseFlowMotion
 
 /**
  * MuseFlow's floating bottom navigation bar.
  *
  * A rounded, slightly translucent bar that hovers above the content rather than sitting flush at
- * the window edge, so the themed background stays visible behind it. The selected tab gets a
- * filled "pill" behind its icon plus a springy scale bump - motion feedback that makes a tap feel
- * acknowledged without an animation long enough to delay the actual navigation.
+ * the window edge, so the themed background stays visible behind it. The selected tab grows
+ * horizontally to show its label beside the icon; the other tabs retain reachable icon-only
+ * targets. A subtle scale bump acknowledges selection without delaying navigation.
  *
  * Deliberately NOT tinted from the current track's album palette (tried once, reverted at the
  * user's explicit request) - this bar's colour follows the app theme only, not whatever's
@@ -54,6 +66,11 @@ fun MuseFlowNavBar(
     onNavigate: (TopLevelDestination) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val sideInset = when {
+        LocalConfiguration.current.screenWidthDp < 340 -> 16.dp
+        LocalConfiguration.current.screenWidthDp < 380 -> 24.dp
+        else -> 32.dp
+    }
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -61,8 +78,8 @@ fun MuseFlowNavBar(
             // MiniPlayer in MainActivity - not here. Applying it to this Surface alone left
             // MiniPlayer unprotected on every screen where this bar is hidden (a playlist detail,
             // History, ...), so it drew flush against the gesture/navigation bar there.
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .liquidSurface(28.dp),
+            .padding(horizontal = sideInset, vertical = 12.dp)
+            .liquidSurface(MuseFlowShapes.navigation),
         color = Color.Transparent,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
@@ -70,17 +87,24 @@ fun MuseFlowNavBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(64.dp)
-                .padding(horizontal = 8.dp),
+                .heightIn(min = 64.dp)
+                .padding(horizontal = MuseFlowSpacing.small),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             destinations.forEach { destination ->
+                val selected = currentRoute == destination.route
+                val reducedMotion = LocalReducedMotion.current
+                val weight by animateFloatAsState(
+                    targetValue = if (selected) 2f else 1f,
+                    animationSpec = if (reducedMotion) snap() else tween(MuseFlowMotion.standardMillis),
+                    label = "nav_item_width_${destination.route}",
+                )
                 NavBarItem(
                     destination = destination,
-                    selected = currentRoute == destination.route,
+                    selected = selected,
                     onClick = { onNavigate(destination) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(weight),
                 )
             }
         }
@@ -94,9 +118,10 @@ private fun NavBarItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val reducedMotion = LocalReducedMotion.current
     val scale by animateFloatAsState(
         targetValue = if (selected) 1f else 0.92f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        animationSpec = if (reducedMotion) snap() else spring(dampingRatio = Spring.DampingRatioMediumBouncy),
         label = "nav_item_scale",
     )
     val contentColor by animateColorAsState(
@@ -105,6 +130,7 @@ private fun NavBarItem(
         } else {
             MaterialTheme.colorScheme.onSurfaceVariant
         },
+        animationSpec = if (reducedMotion) snap() else tween(MuseFlowMotion.quickMillis),
         label = "nav_item_color",
     )
     val pillColor by animateColorAsState(
@@ -113,15 +139,18 @@ private fun NavBarItem(
         } else {
             Color.Transparent
         },
+        animationSpec = if (reducedMotion) snap() else tween(MuseFlowMotion.quickMillis),
         label = "nav_item_pill",
     )
 
-    // A no-indication interaction source: the pill and the scale bump already convey the press,
-    // and the default ripple would spill outside the pill's rounded shape.
+    // The pill and scale bump convey selection; the default ripple would spill outside the shape.
     val interactionSource = remember { MutableInteractionSource() }
 
-    Column(
+    Row(
         modifier = modifier
+            .clip(CircleShape)
+            .background(pillColor)
+            .semantics { contentDescription = destination.label }
             .selectable(
                 selected = selected,
                 onClick = onClick,
@@ -129,32 +158,36 @@ private fun NavBarItem(
                 interactionSource = interactionSource,
                 indication = null,
             )
-            .padding(vertical = 6.dp)
+            // Compact density is 0.88x, so 56 logical dp still gives a 49dp physical target.
+            .heightIn(min = 56.dp)
+            .padding(horizontal = 4.dp)
             .testTag("nav_item_${destination.route}"),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .clip(CircleShape)
-                .background(pillColor)
-                .padding(horizontal = 18.dp, vertical = 4.dp),
-            contentAlignment = Alignment.Center,
+        Icon(
+            imageVector = if (selected) destination.filledIcon else destination.outlinedIcon,
+            contentDescription = null,
+            tint = contentColor,
+            modifier = Modifier.size(24.dp).scale(scale),
+        )
+        AnimatedVisibility(
+            visible = selected,
+            enter = if (reducedMotion) fadeIn(snap()) else
+                expandHorizontally(animationSpec = tween(MuseFlowMotion.standardMillis)) +
+                    fadeIn(tween(MuseFlowMotion.quickMillis)),
+            exit = if (reducedMotion) fadeOut(snap()) else
+                shrinkHorizontally(animationSpec = tween(MuseFlowMotion.standardMillis)) +
+                    fadeOut(tween(MuseFlowMotion.quickMillis)),
         ) {
-            Icon(
-                imageVector = if (selected) destination.filledIcon else destination.outlinedIcon,
-                contentDescription = destination.label,
-                tint = contentColor,
-                modifier = Modifier
-                    .size(24.dp)
-                    .scale(scale),
+            Text(
+                text = destination.label,
+                style = MaterialTheme.typography.labelSmall,
+                color = contentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 6.dp),
             )
         }
-        Text(
-            text = destination.label,
-            style = MaterialTheme.typography.labelSmall,
-            color = contentColor,
-            modifier = Modifier.padding(top = 2.dp),
-        )
     }
 }

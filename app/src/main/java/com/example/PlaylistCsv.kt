@@ -68,7 +68,7 @@ private val ARTIST_HEADERS = listOf("artist name(s)", "artist name", "artist(s)"
 private val ALBUM_HEADERS = listOf("album name", "album")
 
 private fun List<String>.indexOfHeader(candidates: List<String>): Int {
-    val normalized = map { it.trim().lowercase().removePrefix("﻿") }
+    val normalized = map { it.trim().lowercase().removePrefix("\uFEFF") }
     // Exact match first: "album" would otherwise match "album artist" by prefix and steal the
     // artist column on exports that carry both.
     candidates.forEach { candidate ->

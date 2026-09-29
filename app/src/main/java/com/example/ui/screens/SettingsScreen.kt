@@ -3,8 +3,10 @@ package com.example.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Backup
@@ -15,19 +17,33 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.ui.component.NavigationPreference
 import com.example.ui.component.PreferenceGroup
+import com.example.SettingsSearchEntry
+import com.example.SettingsSearchIndex
 
 /**
  * Settings' top-level screen: a picker for categories rather than a single long list of ~40+
@@ -51,8 +67,13 @@ fun SettingsScreen(
     onOpenCrashLogs: () -> Unit = {},
     onOpenAbout: () -> Unit = {},
     onOpenUpdates: () -> Unit = {},
+    onOpenSettingsSearchResult: (SettingsSearchEntry) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var query by rememberSaveable { mutableStateOf("") }
+    val searchResults = remember(query) { SettingsSearchIndex.search(query) }
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -69,6 +90,52 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 4.dp),
             )
         }
+
+        item {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth().testTag("settings_search"),
+                shape = RoundedCornerShape(50),
+                singleLine = true,
+                label = { Text("Search settings") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = { query = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                        }
+                    }
+                },
+            )
+        }
+
+        if (query.isNotBlank()) {
+            item {
+                if (searchResults.isEmpty()) {
+                    Text(
+                        text = "No settings found",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                } else {
+                    PreferenceGroup(title = "Results") {
+                        searchResults.forEach { result ->
+                            NavigationPreference(
+                                title = result.title,
+                                subtitle = result.category,
+                                onClick = {
+                                    focusManager.clearFocus()
+                                    keyboardController?.hide()
+                                    onOpenSettingsSearchResult(result)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
 
         item {
             PreferenceGroup(title = "Look & feel") {
@@ -172,6 +239,7 @@ fun SettingsScreen(
                     onClick = onOpenUpdates,
                 )
             }
+        }
         }
     }
 }

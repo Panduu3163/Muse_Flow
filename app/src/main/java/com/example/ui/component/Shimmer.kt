@@ -27,6 +27,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.dp
+import com.example.ui.theme.LocalReducedMotion
 
 /**
  * A soft band of highlight sweeping left-to-right over the base surface colour, looped forever -
@@ -38,6 +39,7 @@ import androidx.compose.ui.unit.dp
 private fun rememberShimmerBrush(): Brush {
     val base = MaterialTheme.colorScheme.surfaceContainerHigh
     val highlight = MaterialTheme.colorScheme.surfaceContainerHighest
+    if (LocalReducedMotion.current) return Brush.linearGradient(listOf(base, base))
     val transition = rememberInfiniteTransition(label = "shimmer")
     val translateX by transition.animateFloat(
         initialValue = -1000f,

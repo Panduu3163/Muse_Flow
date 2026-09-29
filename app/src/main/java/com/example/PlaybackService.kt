@@ -4,12 +4,14 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
 import androidx.core.net.toUri
+import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
@@ -84,6 +86,7 @@ internal fun nextPlayableQueueIndex(
     online || schemeAt(index) in setOf("file", "content", "asset")
 }
 
+@OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null

@@ -10,7 +10,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -131,13 +130,6 @@ fun LyricsSettingsScreen(
                     range = 10..30,
                     onValueChange = { settingsViewModel.setLyricsLineSpacing(it / 10f) },
                     valueLabel = { "%.1fx".format(it / 10f) },
-                )
-                SwitchPreference(
-                    title = "Hide status bar in fullscreen lyrics",
-                    subtitle = "More room for lyrics while the panel is open.",
-                    icon = Icons.Default.Fullscreen,
-                    checked = settings.hideStatusBarInFullscreenLyrics,
-                    onCheckedChange = settingsViewModel::setHideStatusBarInFullscreenLyrics,
                 )
             }
         }

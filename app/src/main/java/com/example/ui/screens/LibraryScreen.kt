@@ -775,7 +775,7 @@ fun LibraryScreen(
 
                 localTracks is UiState.Loading -> item { ListPlaceholder() }
 
-                localTracks is UiState.Error -> item { EmptyState((localTracks as UiState.Error).message) }
+                localTracks is UiState.Error -> item { EmptyState((localTracks as UiState.Error).message, isError = true) }
 
                 else -> trackItems(
                     sectionTracks,
@@ -1296,18 +1296,10 @@ private fun LazyListScope.followedArtistItems(
 }
 
 @Composable
-private fun EmptyState(message: String) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-    }
+private fun EmptyState(message: String, isError: Boolean = false) {
+    com.example.ui.component.FeedbackMessage(
+        message = message,
+        isError = isError,
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+    )
 }

@@ -73,6 +73,9 @@ class MuseFlowApplication : Application(), ImageLoaderFactory {
         appScope.launch {
             runCatching { UpdateChecker.checkForUpdate(this@MuseFlowApplication) }
         }
+        appScope.launch {
+            runCatching { InstalledReleaseNotes.prefetch(this@MuseFlowApplication) }
+        }
 
         // Backfills artistId/albumId for likes/playlist tracks added before that plumbing was
         // reliably wired through the like/add-to-playlist write path - those rows have both

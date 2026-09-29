@@ -473,7 +473,7 @@ class YouTubeMusicProvider(context: Context) : Provider<TrackResult> {
         val subtitleRuns = flexColumnRuns(renderer, 1)
         var artist: String? = null
         var duration: String? = null
-        val durationPattern = Regex("""^\d{1,2}:\d{2}$""")
+        val durationPattern = Regex("""^\d{1,3}:\d{2}(?::\d{2})?$""")
         if (subtitleRuns != null) {
             for (k in 0 until subtitleRuns.length()) {
                 val text = subtitleRuns.optJSONObject(k)?.optString("text")?.trim() ?: continue

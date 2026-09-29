@@ -83,7 +83,11 @@ object DownloadNotificationHelper {
         } else {
             builder.setProgress(100, overallPercent, false)
         }
-        NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, builder.build())
+        try {
+            NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, builder.build())
+        } catch (_: SecurityException) {
+            // Permission can be revoked while a download is active.
+        }
     }
 
     /** Cancels the batch notification outright - used on a full-stop (e.g. every download

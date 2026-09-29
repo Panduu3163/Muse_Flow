@@ -66,7 +66,11 @@ object UpdateNotificationHelper {
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
 
-        NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+        try {
+            NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) {
+            // The update remains available in Settings if permission was revoked.
+        }
     }
 
     private fun hasPermission(context: Context): Boolean =

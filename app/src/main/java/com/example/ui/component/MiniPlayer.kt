@@ -11,6 +11,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import com.example.ui.utils.bounceClick
 import com.example.ui.utils.slowMarquee
 import androidx.compose.foundation.layout.Box
@@ -31,7 +32,6 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -47,9 +47,14 @@ import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -79,7 +84,14 @@ fun MiniPlayer(
     modifier: Modifier = Modifier,
     backgroundStyle: BackgroundStyle = BackgroundStyle.Solid,
     palette: AlbumPalette? = null,
+    artworkModel: Any? = state.artworkUrl,
 ) {
+    // Keep an 8dp inset beyond the nav pill, but preserve text room on narrow devices.
+    val sideInset = when {
+        LocalConfiguration.current.screenWidthDp < 340 -> 24.dp
+        LocalConfiguration.current.screenWidthDp < 380 -> 32.dp
+        else -> 40.dp
+    }
     AnimatedVisibility(
         visible = state.hasMedia,
         enter = slideInVertically { it },
@@ -89,7 +101,7 @@ fun MiniPlayer(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 32.dp)
+                .padding(horizontal = sideInset)
                 .liquidSurface(50.dp)
                 .bounceClick(onClick = onClick)
                 .testTag("mini_player"),
@@ -106,7 +118,7 @@ fun MiniPlayer(
                 modifier = Modifier.matchParentSize(),
                 style = backgroundStyle,
                 palette = palette,
-                artworkUrl = state.artworkUrl,
+                artworkModel = artworkModel,
             )
 
             Column {
@@ -131,27 +143,45 @@ fun MiniPlayer(
                         },
                         label = "mini_player_artwork_crossfade",
                     ) { (_, _) ->
+                        val ringColor = MaterialTheme.colorScheme.primary
+                        val ringTrack = MaterialTheme.colorScheme.onSurface.copy(alpha = .22f)
                         Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(RoundedCornerShape(50))
-                                .background(MaterialTheme.colorScheme.surfaceContainer),
+                            modifier = Modifier.size(50.dp),
                             contentAlignment = Alignment.Center,
                         ) {
-                            if (state.artworkUrl != null) {
-                                AsyncImage(
-                                    model = state.artworkUrl,
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.size(44.dp),
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.MusicNote,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp),
-                                )
+                            Box(
+                                Modifier.size(43.dp).clip(RoundedCornerShape(50))
+                                    .background(MaterialTheme.colorScheme.surfaceContainer),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (artworkModel != null) {
+                                    AsyncImage(
+                                        model = artworkModel,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.MusicNote,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                            }
+                            Canvas(Modifier.fillMaxSize().testTag("mini_player_artwork_progress")) {
+                                val width = 2.dp.toPx()
+                                val stroke = Stroke(width = width, cap = StrokeCap.Round)
+                                val inset = width / 2f + 1.dp.toPx()
+                                val arcSize = Size(size.width - inset * 2f, size.height - inset * 2f)
+                                val arcOrigin = Offset(inset, inset)
+                                drawArc(ringTrack, -90f, 360f, false,
+                                    topLeft = arcOrigin, size = arcSize, style = stroke)
+                                if (state.progress > 0f) {
+                                    drawArc(ringColor, -90f, state.progress.coerceIn(0f, 1f) * 360f,
+                                        false, topLeft = arcOrigin, size = arcSize, style = stroke)
+                                }
                             }
                         }
                     }
@@ -220,14 +250,6 @@ fun MiniPlayer(
                     }
                 }
 
-                LinearProgressIndicator(
-                    progress = { state.progress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(2.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                )
             }
         }
         }
@@ -237,7 +259,7 @@ fun MiniPlayer(
 /**
  * The painted layer behind the compact bar - the same four [BackgroundStyle]s Now Playing offers,
  * scaled down for a short wide bar instead of a full screen. Every branch falls back to a plain
- * theme surface color when there's no [palette]/[artworkUrl] yet, so the bar never flashes
+ * theme surface color when there's no [palette]/[artworkModel] yet, so the bar never flashes
  * unpainted on the first frame after a track loads.
  */
 @Composable
@@ -245,11 +267,14 @@ private fun MiniPlayerBackground(
     modifier: Modifier,
     style: BackgroundStyle,
     palette: AlbumPalette?,
-    artworkUrl: String?,
+    artworkModel: Any?,
 ) {
     val base = MaterialTheme.colorScheme.surfaceContainerHighest
 
     when {
+        style == BackgroundStyle.GlowAnimated && palette != null ->
+            AlbumGlowBackground(palette = palette, base = base, modifier = modifier)
+
         style == BackgroundStyle.Gradient && palette != null -> Box(
             modifier = modifier
                 .background(
@@ -262,9 +287,9 @@ private fun MiniPlayerBackground(
                 ),
         )
 
-        style == BackgroundStyle.Blur && artworkUrl != null -> Box(modifier = modifier) {
+        style == BackgroundStyle.Blur && artworkModel != null -> Box(modifier = modifier) {
             AsyncImage(
-                model = artworkUrl,
+                model = artworkModel,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -281,7 +306,7 @@ private fun MiniPlayerBackground(
         // was tried for frame-rate headroom, but stops masking the seam - see NowPlayingScreen's
         // LiveMeshBackground doc for the fuller reasoning), so this deliberately matches Echo's
         // real number rather than a lighter one.
-        style == BackgroundStyle.LiveMesh && artworkUrl != null -> Box(modifier = modifier) {
+        style == BackgroundStyle.LiveMesh && artworkModel != null -> Box(modifier = modifier) {
             // A fully OPAQUE base fill first, painted before anything else - this bar's own outer
             // Surface is Color.Transparent (see MiniPlayer's call site), so without a solid layer
             // under the rotating image, any gap the single 1.5x-scaled layer doesn't cover at some
@@ -292,6 +317,16 @@ private fun MiniPlayerBackground(
             // `MiniPlayerBackgroundLayer`), with every background style layered on top of that, not
             // relying on the style's own layer to provide full coverage by itself.
             Box(modifier = Modifier.fillMaxSize().background(base))
+
+            if (com.example.ui.theme.LocalReducedMotion.current) {
+                AsyncImage(
+                    model = artworkModel,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().blur(40.dp),
+                )
+                return@Box
+            }
 
             val rotation by rememberInfiniteTransition(label = "mini_live_mesh").animateFloat(
                 initialValue = 0f,
@@ -313,7 +348,7 @@ private fun MiniPlayerBackground(
             ) {
                 AsyncImage(
                     model = coil.request.ImageRequest.Builder(context)
-                        .data(artworkUrl)
+                        .data(artworkModel)
                         .size(128, 128)
                         .allowHardware(false)
                         .build(),

@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -102,7 +103,7 @@ fun LyricsView(
                         fontSize = textSizeSp.sp,
                         lineHeight = (textSizeSp * lineSpacing * 1.3f).sp,
                     ),
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = LocalContentColor.current,
                     textAlign = alignment,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -516,7 +517,7 @@ private fun CenteredBox(modifier: Modifier, content: @Composable () -> Unit) {
 private fun CenteredMessage(
     modifier: Modifier,
     message: String,
-    color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    color: androidx.compose.ui.graphics.Color = LocalContentColor.current.copy(alpha = .72f),
 ) {
     Box(modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Text(

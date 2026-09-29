@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.core.net.toUri
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -66,10 +67,13 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.ui.component.LocalSettingsFocus
+import com.example.ui.component.LocalSettingsRoute
 import com.example.ui.component.LyricsView
 import com.example.ui.theme.Motion
 import com.example.ui.component.MiniPlayer
 import com.example.ui.component.MuseFlowNavBar
+import com.example.ui.component.LocalPlaybackActive
 import com.example.ui.component.TrackActionsHost
 import com.example.ui.screens.AboutScreen
 import com.example.ui.screens.ImportSharedPlaylistScreen
@@ -106,6 +110,9 @@ import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.StorageSettingsScreen
 import com.example.ui.theme.MuseFlowTheme
+import com.example.ui.theme.LocalReducedMotion
+import com.example.ui.theme.rememberReducedMotion
+import androidx.compose.foundation.isSystemInDarkTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -128,6 +135,9 @@ class MainActivity : ComponentActivity() {
                 android.graphics.Color.TRANSPARENT,
             ),
         )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
         setContent { MuseFlowApp() }
     }
 }
@@ -157,10 +167,16 @@ fun MuseFlowApp() {
 
     val appSettingsViewModel: AppSettingsViewModel = viewModel()
     val appSettings by appSettingsViewModel.state.collectAsState()
+    // Navigation's start destination is created once. Wait for DataStore before constructing it,
+    // or a saved Default tab can be replaced by the ViewModel's temporary Home default.
+    if (!appSettings.isLoaded) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+        return
+    }
 
     // Applied reactively (not just read once at startup), so toggling "Disable screenshots" in
     // Settings takes effect on the window immediately - no relaunch needed either way.
-    val activity = LocalContext.current as? android.app.Activity
+    val activity = LocalActivity.current
     LaunchedEffect(appSettings.disableScreenshots, activity) {
         val window = activity?.window ?: return@LaunchedEffect
         if (appSettings.disableScreenshots) {
@@ -179,27 +195,30 @@ fun MuseFlowApp() {
     // "Colour from album art": the artwork's dominant colour becomes the MaterialKolor seed, so the
     // whole generated palette follows what's playing. Falls back to the user's chosen accent
     // whenever nothing is playing or no palette could be extracted.
-    val seedColor = if (theme.dynamicAlbumColor) {
-        albumPalette?.dominant ?: theme.seedColor
-    } else {
-        theme.seedColor
-    }
+    val seedColor = themeSeedColor(theme.seedColor, albumPalette?.accent, theme.dynamicAlbumColor)
 
     // Display density scales every dp in the app at once by overriding LocalDensity, rather than
     // each screen having to know about the preference.
-    val densityScale = when (appSettings.displayDensity) {
-        DisplayDensity.Compact -> 0.88f
-        DisplayDensity.Native -> 1.0f
-        DisplayDensity.Comfortable -> 1.08f
-    }
+    val densityScale = appSettings.displayDensity.scale
     val baseDensity = LocalDensity.current
 
+    val systemDark = isSystemInDarkTheme()
+    val useDarkTheme = theme.mode.isDark(systemDark)
+    LaunchedEffect(useDarkTheme, systemDark, activity) {
+        val window = activity?.window ?: return@LaunchedEffect
+        val bars = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        bars.isAppearanceLightStatusBars = !useDarkTheme
+        bars.isAppearanceLightNavigationBars = !useDarkTheme
+    }
+
     MuseFlowTheme(
-        darkTheme = theme.darkTheme,
-        pureBlack = theme.pureBlack,
+        darkTheme = useDarkTheme,
+        pureBlack = theme.mode == ThemeMode.Amoled,
         themeColor = seedColor,
+        fontStyle = appSettings.fontStyle,
     ) {
       CompositionLocalProvider(
+          LocalReducedMotion provides rememberReducedMotion(),
           LocalDensity provides Density(
               density = baseDensity.density * densityScale,
               // fontScale is left alone: it's the user's accessibility setting, and quietly
@@ -265,16 +284,18 @@ fun MuseFlowApp() {
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
-                .navigationBarsPadding(),
+                .then(if (currentRoute == Routes.NOW_PLAYING) Modifier else Modifier.navigationBarsPadding()),
         ) {
-            MuseFlowNavHost(
-                navController = navController,
-                onPlayTrack = playerViewModel::play,
-                playerViewModel = playerViewModel,
-                appSettings = appSettings,
-                albumPalette = albumPalette,
-                modifier = Modifier.fillMaxSize(),
-            )
+            CompositionLocalProvider(LocalPlaybackActive provides nowPlaying.isPlaying) {
+                MuseFlowNavHost(
+                    navController = navController,
+                    onPlayTrack = playerViewModel::play,
+                    playerViewModel = playerViewModel,
+                    appSettings = appSettings,
+                    albumPalette = albumPalette,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
 
             // Connectivity is app state, not an error discovered only after a spinner times out.
             // Shown briefly on the transition to offline (see showOfflineBanner above) rather than
@@ -567,6 +588,9 @@ private fun MuseFlowNavHost(
             onOpenSettingsGeneral = { navController.navigate(Routes.SETTINGS_GENERAL) },
             onOpenSettingsPrivacy = { navController.navigate(Routes.SETTINGS_PRIVACY) },
             onOpenSettingsLibrarySections = { navController.navigate(Routes.SETTINGS_LIBRARY_SECTIONS) },
+            onOpenSettingsSearchResult = { entry ->
+                navController.navigate(Routes.focusedSetting(entry.route, entry.id))
+            },
             onOpenCharts = { navController.navigate(Routes.CHARTS) },
             onOpenNewReleases = { navController.navigate(Routes.NEW_RELEASES) },
             onOpenExplore = { navController.navigate(Routes.EXPLORE) },
@@ -574,13 +598,13 @@ private fun MuseFlowNavHost(
             onGoToAlbum = onGoToAlbum,
             onGoToRemotePlaylist = onGoToRemotePlaylist,
         )
-        composable(Routes.BACKUP) {
+        settingsDestination(Routes.BACKUP) {
             BackupSettingsScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.CRASH_LOGS) {
             CrashLogsScreen(onBack = { navController.popBackStack() })
         }
-        composable(Routes.STORAGE) {
+        settingsDestination(Routes.STORAGE) {
             StorageSettingsScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.ABOUT) {
@@ -592,16 +616,16 @@ private fun MuseFlowNavHost(
         composable(Routes.IMPORT_SHARED_PLAYLIST) {
             ImportSharedPlaylistScreen(onBack = { navController.popBackStack() })
         }
-        composable(Routes.SETTINGS_APPEARANCE) {
+        settingsDestination(Routes.SETTINGS_APPEARANCE) {
             AppearanceSettingsScreen(onBack = { navController.popBackStack() })
         }
-        composable(Routes.SETTINGS_MINI_PLAYER) {
+        settingsDestination(Routes.SETTINGS_MINI_PLAYER) {
             MiniPlayerSettingsScreen(onBack = { navController.popBackStack() })
         }
-        composable(Routes.SETTINGS_PLAYER) {
+        settingsDestination(Routes.SETTINGS_PLAYER) {
             PlayerSettingsScreen(onBack = { navController.popBackStack() })
         }
-        composable(Routes.SETTINGS_LYRICS) {
+        settingsDestination(Routes.SETTINGS_LYRICS) {
             LyricsSettingsScreen(
                 onBack = { navController.popBackStack() },
                 onOpenProviderOrder = { navController.navigate(Routes.SETTINGS_LYRICS_PROVIDER_ORDER) },
@@ -610,22 +634,22 @@ private fun MuseFlowNavHost(
         composable(Routes.SETTINGS_LYRICS_PROVIDER_ORDER) {
             LyricsProviderPriorityScreen(onBack = { navController.popBackStack() })
         }
-        composable(Routes.SETTINGS_AUDIO) {
+        settingsDestination(Routes.SETTINGS_AUDIO) {
             AudioSettingsScreen(
                 onBack = { navController.popBackStack() },
                 onOpenEqualizer = { navController.navigate(Routes.EQUALIZER) },
             )
         }
-        composable(Routes.SETTINGS_PLAYBACK) {
+        settingsDestination(Routes.SETTINGS_PLAYBACK) {
             PlaybackSettingsScreen(onBack = { navController.popBackStack() })
         }
-        composable(Routes.SETTINGS_GENERAL) {
+        settingsDestination(Routes.SETTINGS_GENERAL) {
             GeneralSettingsScreen(onBack = { navController.popBackStack() })
         }
-        composable(Routes.SETTINGS_PRIVACY) {
+        settingsDestination(Routes.SETTINGS_PRIVACY) {
             PrivacySettingsScreen(onBack = { navController.popBackStack() })
         }
-        composable(Routes.SETTINGS_LIBRARY_SECTIONS) {
+        settingsDestination(Routes.SETTINGS_LIBRARY_SECTIONS) {
             LibrarySectionsSettingsScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.CHARTS) {
@@ -914,6 +938,7 @@ private fun NavGraphBuilder.playerGraph(
             hideArtwork = appSettings.hidePlayerThumbnail,
             artworkCornerRadius = appSettings.thumbnailCornerRadius,
             cropArtwork = appSettings.cropAlbumArt,
+            rotatingArtwork = appSettings.rotatingThumbnailAnimation,
             wavySlider = appSettings.playerSliderStyle == PlayerSliderStyle.Wavy,
             slimSlider = appSettings.playerSliderStyle == PlayerSliderStyle.Slim,
             squigglySlider = appSettings.playerSliderStyle == PlayerSliderStyle.Squiggly,
@@ -1028,6 +1053,7 @@ private fun NavGraphBuilder.topLevelGraph(
     onOpenSettingsGeneral: () -> Unit,
     onOpenSettingsPrivacy: () -> Unit,
     onOpenSettingsLibrarySections: () -> Unit,
+    onOpenSettingsSearchResult: (SettingsSearchEntry) -> Unit,
     onOpenCharts: () -> Unit,
     onOpenNewReleases: () -> Unit,
     onOpenExplore: () -> Unit,
@@ -1089,6 +1115,7 @@ private fun NavGraphBuilder.topLevelGraph(
             onOpenCrashLogs = onOpenCrashLogs,
             onOpenAbout = onOpenAbout,
             onOpenUpdates = onOpenUpdates,
+            onOpenSettingsSearchResult = onOpenSettingsSearchResult,
         )
     }
 }
@@ -1113,5 +1140,20 @@ private fun NavHostController.navigateToTab(route: String) {
         popUpTo(graph.startDestinationId) { saveState = true }
         launchSingleTop = true
         restoreState = true
+    }
+}
+
+/** Optional search target is supplied to the shared preference rows on a settings destination. */
+private fun NavGraphBuilder.settingsDestination(route: String, content: @Composable () -> Unit) {
+    composable(
+        route = "$route?focus={focus}",
+        arguments = listOf(navArgument("focus") { type = NavType.StringType; defaultValue = "" }),
+    ) { entry ->
+        CompositionLocalProvider(
+            LocalSettingsFocus provides entry.arguments?.getString("focus").orEmpty(),
+            LocalSettingsRoute provides route,
+        ) {
+            content()
+        }
     }
 }

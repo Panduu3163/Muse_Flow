@@ -46,6 +46,8 @@ object Routes {
     const val SETTINGS_GENERAL = "settings/general"
     const val SETTINGS_PRIVACY = "settings/privacy"
     const val SETTINGS_LIBRARY_SECTIONS = "settings/library_sections"
+    fun focusedSetting(route: String, id: String): String =
+        "$route?focus=${android.net.Uri.encode(id)}"
     const val CHARTS = "charts"
     const val NEW_RELEASES = "new_releases"
     const val EXPLORE = "explore"

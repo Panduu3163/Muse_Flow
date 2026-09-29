@@ -222,11 +222,7 @@ fun HomeScreen(
 
     // Card width follows the user's grid-size preference; the shelves are horizontal carousels, so
     // this is what "grid size" actually means here.
-    val cardSize = when (settings.gridCellSize) {
-        GridCellSize.Small -> 112.dp
-        GridCellSize.Medium -> 140.dp
-        GridCellSize.Large -> 172.dp
-    }
+    val cardSize = settings.gridCellSize.homeSizeDp.dp
     val recentlyPlayed by viewModel.recentlyPlayed.collectAsState()
     val likedSongs by viewModel.likedSongs.collectAsState()
     val topPlayed by viewModel.topPlayed.collectAsState()
@@ -355,7 +351,7 @@ fun HomeScreen(
                 Crossfade(targetState = shelves[spec.title] ?: UiState.Loading, label = "shelf_${spec.title}") { state ->
                     when (state) {
                         is UiState.Loading -> ShelfSkeleton()
-                        is UiState.Error -> ShelfMessage(state.message)
+                        is UiState.Error -> ShelfMessage(state.message, isError = true)
                         is UiState.Success -> if (state.data.isEmpty()) {
                             ShelfMessage("Nothing here yet.")
                         } else {
@@ -493,12 +489,11 @@ private fun ShelfSkeleton() {
 }
 
 @Composable
-private fun ShelfMessage(message: String) {
-    Text(
-        text = message,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 16.dp),
+private fun ShelfMessage(message: String, isError: Boolean = false) {
+    com.example.ui.component.FeedbackMessage(
+        message = message,
+        isError = isError,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
     )
 }
 

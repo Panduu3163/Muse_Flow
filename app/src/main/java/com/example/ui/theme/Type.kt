@@ -3,8 +3,11 @@ package com.example.ui.theme
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.example.AppFontStyle
+import com.example.R
 
 /**
  * A full Material 3 type scale, tuned for a music app: display/headline styles are tightened
@@ -125,3 +128,38 @@ val Typography = Typography(
         letterSpacing = 0.5.sp,
     ),
 )
+
+fun fontFamilyFor(style: AppFontStyle): FontFamily = when (style) {
+        AppFontStyle.System -> FontFamily.Default
+        AppFontStyle.Serif -> FontFamily.Serif
+        AppFontStyle.Monospace -> FontFamily.Monospace
+        AppFontStyle.DotMatrix -> FontFamily(Font(R.font.doto))
+    }
+
+fun museFlowTypography(style: AppFontStyle): Typography {
+    val family = fontFamilyFor(style)
+    // Doto's separated dots are clearest at a regular weight. Keep every role in the chosen
+    // family, with hierarchy supplied by size instead of synthetic bold on this single font file.
+    val dot = style == AppFontStyle.DotMatrix
+    fun TextStyle.withFamily(): TextStyle = copy(
+        fontFamily = family,
+        fontWeight = if (dot) FontWeight.Normal else fontWeight,
+    )
+    return Typography(
+        displayLarge = Typography.displayLarge.withFamily(),
+        displayMedium = Typography.displayMedium.withFamily(),
+        displaySmall = Typography.displaySmall.withFamily(),
+        headlineLarge = Typography.headlineLarge.withFamily(),
+        headlineMedium = Typography.headlineMedium.withFamily(),
+        headlineSmall = Typography.headlineSmall.withFamily(),
+        titleLarge = Typography.titleLarge.withFamily().let { if (dot) it.copy(fontSize = 24.sp, lineHeight = 32.sp) else it },
+        titleMedium = Typography.titleMedium.withFamily().let { if (dot) it.copy(fontSize = 18.sp, lineHeight = 26.sp) else it },
+        titleSmall = Typography.titleSmall.withFamily().let { if (dot) it.copy(fontSize = 16.sp, lineHeight = 22.sp) else it },
+        bodyLarge = Typography.bodyLarge.withFamily(),
+        bodyMedium = Typography.bodyMedium.withFamily(),
+        bodySmall = Typography.bodySmall.withFamily().let { if (dot) it.copy(fontSize = 13.sp, lineHeight = 18.sp) else it },
+        labelLarge = Typography.labelLarge.withFamily(),
+        labelMedium = Typography.labelMedium.withFamily(),
+        labelSmall = Typography.labelSmall.withFamily().let { if (dot) it.copy(fontSize = 12.sp, lineHeight = 18.sp) else it },
+    )
+}

@@ -20,11 +20,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.ui.utils.slowMarquee
+import com.example.ui.theme.MuseFlowShapes
+import com.example.ui.theme.MuseFlowSpacing
 
 /**
  * One card for an album/artist/playlist/track (image, title, optional subtitle) in a horizontal
@@ -42,18 +45,19 @@ fun MediaCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     size: Dp = 120.dp,
-    shape: Shape = RoundedCornerShape(14.dp),
+    shape: Shape = RoundedCornerShape(MuseFlowShapes.control),
     /** Overrides the default single-[imageUrl] artwork box when set - e.g. a playlist's mosaic
      * cover, which needs its own track data rather than one flat URL. [imageUrl] is unused when
      * this is provided. */
     artwork: (@Composable (Modifier) -> Unit)? = null,
 ) {
+    val largeText = LocalDensity.current.fontScale > 1.2f
     Column(
         modifier = modifier
             .width(size)
-            .liquidSurface(20.dp)
+            .liquidSurface(MuseFlowShapes.card)
             .clickable(onClick = onClick)
-            .padding(8.dp),
+            .padding(MuseFlowSpacing.small),
     ) {
         if (artwork != null) {
             artwork(Modifier.fillMaxWidth().aspectRatio(1f).clip(shape))
@@ -64,9 +68,9 @@ fun MediaCard(
             text = title,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
+            maxLines = if (largeText) 2 else 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp).slowMarquee(),
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp).then(if (largeText) Modifier else Modifier.slowMarquee()),
         )
         if (!subtitle.isNullOrBlank()) {
             Text(
@@ -75,7 +79,7 @@ fun MediaCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth().slowMarquee(),
+                modifier = Modifier.fillMaxWidth().then(if (largeText) Modifier else Modifier.slowMarquee()),
             )
         }
     }
@@ -92,9 +96,10 @@ fun MediaGridCard(
     placeholder: ImageVector,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    shape: Shape = RoundedCornerShape(14.dp),
+    shape: Shape = RoundedCornerShape(MuseFlowShapes.control),
 ) {
-    Column(modifier = modifier.fillMaxWidth().liquidSurface().clickable(onClick = onClick).padding(8.dp)) {
+    val largeText = LocalDensity.current.fontScale > 1.2f
+    Column(modifier = modifier.fillMaxWidth().liquidSurface().clickable(onClick = onClick).padding(MuseFlowSpacing.small)) {
         CardArtwork(
             imageUrl = imageUrl,
             placeholder = placeholder,
@@ -106,9 +111,9 @@ fun MediaGridCard(
             text = title,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
+            maxLines = if (largeText) 2 else 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp).slowMarquee(),
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp).then(if (largeText) Modifier else Modifier.slowMarquee()),
         )
         if (!subtitle.isNullOrBlank()) {
             Text(
@@ -117,7 +122,7 @@ fun MediaGridCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth().slowMarquee(),
+                modifier = Modifier.fillMaxWidth().then(if (largeText) Modifier else Modifier.slowMarquee()),
             )
         }
     }

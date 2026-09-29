@@ -634,10 +634,7 @@ private fun <T> ResultsFrame(
     when (results) {
         is UiState.Loading -> ListPlaceholder()
 
-        is UiState.Error -> CenteredMessage(
-            text = results.message,
-            color = MaterialTheme.colorScheme.error,
-        )
+        is UiState.Error -> CenteredMessage(results.message, isError = true)
 
         is UiState.Success -> if (results.data.isEmpty()) {
             CenteredMessage(emptyMessage)
@@ -728,9 +725,11 @@ private fun RecentList(
 @Composable
 private fun CenteredMessage(
     text: String,
-    color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    isError: Boolean = false,
 ) {
-    Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-        Text(text = text, style = MaterialTheme.typography.bodyMedium, color = color, textAlign = TextAlign.Center)
-    }
+    com.example.ui.component.FeedbackMessage(
+        message = text,
+        isError = isError,
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+    )
 }

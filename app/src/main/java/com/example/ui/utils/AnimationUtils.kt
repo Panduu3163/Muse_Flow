@@ -67,7 +67,9 @@ fun Modifier.bounceClick(
  * short and sometimes long.
  */
 @OptIn(ExperimentalFoundationApi::class)
-fun Modifier.slowMarquee(): Modifier = this.basicMarquee(
-    iterations = Int.MAX_VALUE,
-    velocity = 15.dp,
-)
+@androidx.compose.runtime.Composable
+fun Modifier.slowMarquee(): Modifier = if (com.example.ui.theme.LocalReducedMotion.current) {
+    this
+} else {
+    this.basicMarquee(iterations = Int.MAX_VALUE, velocity = 15.dp)
+}

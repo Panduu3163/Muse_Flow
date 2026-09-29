@@ -8,7 +8,11 @@ enum class BackgroundStyle(val label: String) {
     /** The artwork itself, blurred and dimmed behind the content. */
     Blur("Blurred artwork"),
     /** Three blurred, saturated copies of the artwork rotating independently behind the content. */
-    LiveMesh("Live mesh")
+    LiveMesh("Live mesh"),
+    /** Slowly moving, artwork-coloured radial light behind player controls. */
+    GlowAnimated("Glow animated"),
+    /** Clear cover fading into a blurred artwork backdrop. */
+    AppleMusic("Apple Music inspired")
 }
 
 /** Which theme color drives the Now Playing control buttons. */
@@ -81,17 +85,25 @@ enum class DefaultLibraryChip(val label: String) {
 }
 
 /** Size of grid cells used in grid-style browsing layouts. */
-enum class GridCellSize(val label: String) {
-    Small("Small"),
-    Medium("Medium"),
-    Large("Large")
+enum class GridCellSize(val label: String, val homeSizeDp: Int) {
+    Small("Small", 112),
+    Medium("Medium", 140),
+    Large("Large", 172)
 }
 
 /** Overall UI density/spacing of the app. */
-enum class DisplayDensity(val label: String) {
-    Compact("Compact"),
-    Native("Native"),
-    Comfortable("Comfortable")
+enum class DisplayDensity(val label: String, val scale: Float) {
+    Compact("Compact", 0.88f),
+    Native("Native", 1.0f),
+    Comfortable("Comfortable", 1.08f)
+}
+
+/** App typography choice. Android's system font scale is always preserved. */
+enum class AppFontStyle(val label: String) {
+    System("System"),
+    Serif("Serif"),
+    Monospace("Monospace"),
+    DotMatrix("Dot matrix"),
 }
 
 /**
@@ -134,12 +146,11 @@ enum class LyricsProviderId(val label: String) {
 }
 
 /**
- * All Appearance-adjacent app preferences beyond the app-wide background [ThemeState].
- * These are UI-only preferences: persisted via DataStore (see [AppSettingsViewModel]) so
- * choices survive relaunch, but (aside from the theme itself) don't yet drive real
- * playback/lyrics behavior.
+ * Persisted app preferences used by the player, lyrics, playback service and UI.
+ * Some historical fields remain stored for compatibility even though their controls are hidden.
  */
 data class AppSettingsState(
+    val isLoaded: Boolean = false,
     // Mini-player
     val miniPlayerBackgroundStyle: BackgroundStyle = BackgroundStyle.Solid,
 
@@ -209,6 +220,7 @@ data class AppSettingsState(
     val swipeSongToRemoveFromPlaylist: Boolean = false,
     val gridCellSize: GridCellSize = GridCellSize.Medium,
     val displayDensity: DisplayDensity = DisplayDensity.Comfortable,
+    val fontStyle: AppFontStyle = AppFontStyle.System,
 
     // Auto playlists
     val showLikedPlaylist: Boolean = true,

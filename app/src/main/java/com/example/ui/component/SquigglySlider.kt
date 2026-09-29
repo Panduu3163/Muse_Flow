@@ -23,15 +23,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.Canvas
 import kotlin.math.PI
-import kotlin.math.sin
+import com.example.ui.theme.LocalReducedMotion
 
 /**
- * A progress slider whose played portion is a travelling sine wave.
+ * A progress slider whose played portion is a travelling chain of smooth cubic waves.
  *
  * The wave animates only while [playing], so a paused player shows a still line — motion is the
  * signal that audio is actually running, which is exactly the value of this style over a plain bar.
@@ -48,13 +49,10 @@ fun SquigglySlider(
     modifier: Modifier = Modifier,
     activeColor: Color,
     inactiveColor: Color,
-    /** Cycles visible across the full width - lower is a wider, gentler wave ("Wavy"), higher is
-     * a tighter, busier one ("Squiggly"). Default matches "Wavy"'s own tuning, so anywhere this
-     * is used as a bare visual reference (the style-picker's Wavy preview cell) stays in sync
-     * with the real seek bar without repeating the numbers. */
-    visibleCycles: Float = 1.2f,
-    /** Full phase-cycle duration - lower travels faster. Default matches "Wavy"'s own tuning. */
-    phaseDurationMs: Int = 2200,
+    /** Approximate cycles across the full width, limited to a readable minimum wavelength. */
+    visibleCycles: Float = 4f,
+    /** Time for one wave to pass a point. */
+    phaseDurationMs: Int = 3200,
     /** False for a purely visual preview (e.g. the style-picker's grid cells) - skips attaching
      * this slider's own tap/drag handling entirely, rather than relying on a wrapping clickable
      * to "win" against it. Compose dispatches gesture recognition child-first, so a real, nested
@@ -67,12 +65,12 @@ fun SquigglySlider(
      * thumb shape. "Wavy" keeps the original plain circle. */
     pillThumb: Boolean = false,
 ) {
+    val reducedMotion = LocalReducedMotion.current
     var dragProgress by remember { mutableFloatStateOf(-1f) }
     val isDragging = dragProgress >= 0f
     val shown = if (isDragging) dragProgress else progress.coerceIn(0f, 1f)
 
-    val transition = rememberInfiniteTransition(label = "squiggly")
-    val phase by transition.animateFloat(
+    val phase = if (reducedMotion || !playing || isDragging) 0f else rememberInfiniteTransition(label = "squiggly").animateFloat(
         initialValue = 0f,
         targetValue = (2 * PI).toFloat(),
         animationSpec = infiniteRepeatable(
@@ -80,10 +78,10 @@ fun SquigglySlider(
             repeatMode = RepeatMode.Restart,
         ),
         label = "wave_phase",
-    )
+    ).value
 
     val amplitude by animateFloatAsState(
-        targetValue = if (playing && !isDragging) 1f else 0f,
+        targetValue = if (playing && !isDragging && !reducedMotion) 1f else 0f,
         animationSpec = tween(durationMillis = 350),
         label = "wave_amplitude",
     )
@@ -124,10 +122,11 @@ fun SquigglySlider(
         ) {
             val centerY = size.height / 2f
             val activeWidth = size.width * shown
-            val strokeWidth = 4.dp.toPx()
-            val waveHeight = 7.dp.toPx() * amplitude
-            // [visibleCycles] full sine cycles across the full width, regardless of screen size.
-            val wavelength = size.width / (visibleCycles * 5.6f)
+            val strokeWidth = 5.dp.toPx()
+            val waveHeight = 6.dp.toPx() * amplitude
+            // A stable wavelength instead of multiplying requested cycles by 5.6 (which made
+            // the old style look like a dense sawtooth on both phone and picker widths).
+            val wavelength = maxOf(80.dp.toPx(), size.width / visibleCycles.coerceAtLeast(1f))
 
             // Remaining portion: always a flat line.
             drawLine(
@@ -138,8 +137,8 @@ fun SquigglySlider(
                 cap = StrokeCap.Round,
             )
 
-            // Played portion: sampled sine. Falls back to a straight line at zero amplitude so a
-            // paused/scrubbing state doesn't pay for path building it won't show.
+            // Cubic half-waves like Echo's squiggle, easing to the track centre near the thumb.
+            // Paused/scrubbing states use a precise straight line.
             if (activeWidth > 0f) {
                 if (waveHeight < 0.5f) {
                     drawLine(
@@ -150,20 +149,27 @@ fun SquigglySlider(
                         cap = StrokeCap.Round,
                     )
                 } else {
+                    val start = -wavelength - phase / (2f * PI.toFloat()) * wavelength
+                    fun heightAt(x: Float) = waveHeight *
+                        ((activeWidth - x) / wavelength).coerceIn(0f, 1f)
                     val path = Path().apply {
-                        moveTo(0f, centerY)
-                        var x = 0f
-                        while (x <= activeWidth) {
-                            val y = centerY + sin(x / wavelength * 2f * PI.toFloat() - phase) * waveHeight
-                            lineTo(x, y)
-                            x += 2f // 2px steps: smooth enough to read, cheap enough for 60fps.
+                        var x = start
+                        var sign = 1f
+                        moveTo(x, centerY + sign * heightAt(x))
+                        while (x < activeWidth + wavelength) {
+                            val nextX = x + wavelength / 2f
+                            val midX = (x + nextX) / 2f
+                            val currentY = centerY + sign * heightAt(x)
+                            sign = -sign
+                            val nextY = centerY + sign * heightAt(nextX)
+                            cubicTo(midX, currentY, midX, nextY, nextX, nextY)
+                            x = nextX
                         }
                     }
-                    drawPath(
-                        path = path,
-                        color = activeColor,
-                        style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
-                    )
+                    clipRect(left = 0f, top = 0f, right = activeWidth, bottom = size.height) {
+                        drawPath(path, activeColor,
+                            style = Stroke(width = strokeWidth, cap = StrokeCap.Round))
+                    }
                 }
             }
 

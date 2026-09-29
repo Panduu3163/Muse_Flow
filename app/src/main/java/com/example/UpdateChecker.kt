@@ -120,20 +120,23 @@ object UpdateChecker {
         }
     }
 
-    /** Every run of digits in [version], in order - e.g. "v1.4.0" -> [1, 4, 0], "1.4.0-beta" ->
-     * [1, 4, 0] (the `versionNameSuffix` on the beta build type has no digits, so it's ignored on
-     * its own). Deliberately not a dot-split: a real published tag came through as "V1.4,1_Beta"
-     * (a comma instead of a period, plus an "_Beta" suffix) - splitting on "." alone left "4,1_Beta"
-     * as one unparseable segment that silently became 0, so "1.4.1" compared as "1.4.0" and never
-     * registered as newer than an already-installed 1.4.0. Extracting digit runs directly is
-     * immune to whatever punctuation/casing a hand-typed tag mixes in around the numbers. */
+    /** First three numeric components; suffix numbers such as rc1 are compared separately. */
     private fun versionComponents(version: String): List<Int> =
-        Regex("""\d+""").findAll(version).map { it.value.toInt() }.toList()
+        Regex("""\d+""").findAll(version).take(3).map { it.value.toInt() }.toList()
+
+    private fun prereleaseRank(version: String): Int = when {
+        Regex("(?i)(?:^|[-_])rc\\d*").containsMatchIn(version) -> 2
+        Regex("(?i)(?:^|[-_])beta\\d*").containsMatchIn(version) -> 1
+        else -> 3
+    }
+
+    private fun prereleaseNumber(version: String): Int =
+        Regex("(?i)(?:^|[-_])(?:rc|beta)(\\d+)").find(version)?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
     /** Numeric component comparison (e.g. "1.4.0" vs "1.10.0") rather than string equality - a
      * release tag only counts as an update if it's genuinely greater than what's installed, not
      * merely different from it. Missing components count as 0. */
-    private fun isNewerVersion(remoteTag: String, installedVersion: String): Boolean {
+    internal fun isNewerVersion(remoteTag: String, installedVersion: String): Boolean {
         val remote = versionComponents(remoteTag)
         val local = versionComponents(installedVersion)
         for (i in 0 until maxOf(remote.size, local.size)) {
@@ -141,7 +144,10 @@ object UpdateChecker {
             val l = local.getOrElse(i) { 0 }
             if (r != l) return r > l
         }
-        return false
+        val remoteRank = prereleaseRank(remoteTag)
+        val localRank = prereleaseRank(installedVersion)
+        return if (remoteRank != localRank) remoteRank > localRank
+        else remoteRank < 3 && prereleaseNumber(remoteTag) > prereleaseNumber(installedVersion)
     }
 
     /** [checkNow]'s outcome - kept separate from [checkForUpdate]'s own [availableUpdate]/

@@ -1,5 +1,93 @@
 # Changelog
 
+## MuseFlow 1.5.0 — cohesive UI and customization
+
+- Redesigned Appearance with four accurate theme modes, album-art colours, a manual hue picker, font samples, density and card-size selectors, and a live preview.
+- Added searchable settings, consistent shapes and spacing, reset actions, larger touch targets, and reduced-motion support across the app.
+- Redesigned the Player and Mini player with artwork-coloured Glow, Apple Music inspired artwork, new seek styles, rotating artwork, swipeable queued covers, and an artwork progress ring.
+- Refined lyrics contrast, fixed album-art playback indicators when paused, and made the selected navigation tab expand horizontally.
+- Improved search duration parsing and fixed several player background, text layout, and update-screen issues.
+- Read changelog now caches the installed version's GitHub Release notes after the first successful fetch.
+- Removed appearance and Player quick presets so every visual setting remains directly adjustable.
+- Prepared the stable sideload build with shrinking, minification and the signing certificate used by existing MuseFlow installations.
+
+## MuseFlow 1.5.0 RC8 — player and update refinements
+
+- Apple Music inspired lyrics now use a genuinely translucent panel while the clear and blurred artwork background remains visible unchanged.
+- Mini player progress now follows a rounded ring around its small cover art.
+- Search parses song durations across all metadata segments and fixed columns; direct video links use player metadata for duration when available.
+- Full player artwork swipes reveal the adjacent queued cover and snap it into place, including shuffle-aware neighbors; vertical volume gestures remain available.
+- Liked hearts use a fixed pink with a soft baby-pink glow.
+- Read changelog fetches the installed version's GitHub Release body on launch and saves successful results on the device for that version.
+
+## MuseFlow 1.5.0 RC7 — playback badge, lyrics contrast and navigation
+
+- The current-track artwork badge now freezes its equalizer bars at their current heights when
+  playback pauses, then continues from those heights on resume. The badge remains visible.
+- Apple Music inspired Now Playing fades its clear background artwork when inline lyrics open and
+  places lyrics on a rounded, high-contrast translucent surface. Closing lyrics restores the art.
+- Replaced the optional scroll-collapsing navigation experiment with an always-horizontal pill:
+  only the selected tab expands to show its icon and label. Removed the now-obsolete General toggle.
+- Made the navigation pill narrower and the Mini player a further 8dp narrower on each side, with
+  responsive insets on small phones to preserve room for track text and controls.
+
+## MuseFlow 1.5.0 RC6 — foundation completion candidate
+
+- Added an opt-in compact navigation experiment in General. On top-level scroll it hides tab labels
+  while preserving named, reachable tab controls; scrolling up or changing tabs restores the full bar.
+- Fixed the saved Default tab sometimes being ignored at startup by waiting for app settings to load
+  before creating the navigation graph.
+- Unified Home, Search and Library empty/error messages with shared themed cards and TalkBack error
+  announcements. Applied shared sheet shape tokens to collection action menus and settings pickers.
+- Expanded touch targets in navigation and settings for Compact display density, and made navigation
+  color changes immediate when Android animations are disabled.
+- Added a source-backed test that checks every visible standard preference is indexed by Settings
+  search, plus an index target for Player Quick looks.
+- Added a repeatable Android screenshot/frame-stat capture script and an RC6 phone checklist.
+
+## MuseFlow 1.5.0 RC5 — Apple backdrop and progress polish
+
+- Refined Apple Music inspired Player background with a larger blurred copy, a clear cover that fades into it, slow playback motion, and a stronger semantic scrim behind controls for readable text.
+- Rebuilt Wavy as a broad, smooth travelling wave with a clean thumb gap; reshaped Squiggly into curved half-waves that taper into the thumb. Both flatten while paused, scrubbing or reduced motion is active.
+- Used the same live Wavy and Squiggly renderers in the Player preview and progress-style picker.
+- Stacked the Player preview vertically so long style names and larger fonts no longer squeeze its artwork, track label and progress into one row.
+- Matched Progress bar style and Transport button style to other Settings rows with rounded icon boxes. Kept long selected values in the flexible text area so row labels can wrap cleanly.
+
+## MuseFlow 1.5.0 RC4 — full Player refinement
+
+- Made full-screen Glow visibly move with larger, quicker artwork-coloured lights while leaving the Mini player treatment unchanged.
+- Let full-screen backgrounds paint behind the device navigation bar; retained the prior album palette during cover changes and supplied immediate theme-colour glow while artwork loads.
+- Added Apple Music inspired clear-to-blurred artwork background, with a colour fallback while the cover loads.
+- Reorganized Player settings around background, artwork, and controls while keeping the existing quick presets below them. Added the persisted rotating artwork control and live preview.
+- Added directional artwork shrink/slide transitions on song changes and visual drag response to artwork swipes, respecting reduced motion.
+- Rebuilt Slim seek as a thin, accessible 48dp-touch control and updated its selector and Player preview.
+
+## MuseFlow 1.5.0 RC3 — typography and mini player glow
+
+- Font picker labels and samples now preview each option in its own font, independent of the current selection.
+- Dot matrix applies throughout the app: larger regular-weight titles and regular-weight supporting text keep the dots distinct.
+- Added artwork-coloured Glow animated backgrounds to the Mini player and full Player, including the live Mini player preview and a static reduced-motion state.
+
+## MuseFlow 1.5.0 RC2 — Appearance redesign
+
+- Rounded the Settings search field into a pill.
+- Replaced the separate Dark and AMOLED switches with four theme mode cards: Follow system, Light, Dark and AMOLED. Existing choices migrate to the matching mode.
+- Redesigned colour controls: artwork colour follows the currently playing cover; when off, the saved colour has a preview bar, hue slider and fine-tune picker.
+- Replaced Appearance's layout preset chips with floating visual selectors for font, display density and Home card size.
+- Added optional Dot matrix display typography using the open-source Doto typeface.
+- Made the Mini player preview render the real Mini player component with bundled sample artwork and a matching sample palette.
+- Kept status and navigation bar icons legible when the app's theme differs from the device theme.
+
+## MuseFlow 1.5.0 RC1 — device verification build
+
+- Added Settings search for every visible control, with stable target IDs and scrolling to the selected control.
+- Added live Appearance, Player and Mini player samples, layout/player presets and reset actions.
+- Added a persistent app font choice while preserving Android's system text scaling.
+- Applied shared spacing and shape values to settings, navigation, track rows and collection cards.
+- Improved large-text layout and screen-reader labels for settings switches, sliders and accent choices.
+- Followed Android's reduced-motion preference for marquee, shimmer, seek waves, playback indicators and live mesh artwork.
+- Removed three visible settings that only saved a value without changing app behavior: comment button, mini-player swipe sensitivity, and fullscreen-lyrics status bar. Their stored values remain available for future implementations.
+
 ## MuseFlow Beta v1.4.3
 
 - Fixed: playing a song found by searching inside a playlist (or Liked/Downloads/Top 50/On device while a search was active) could leave nothing queued after it, even mid-playlist - it now queues the whole list again, not just the search matches.

@@ -132,6 +132,10 @@ fun TrackActionsSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(
+            topStart = com.example.ui.theme.MuseFlowShapes.sheet,
+            topEnd = com.example.ui.theme.MuseFlowShapes.sheet,
+        ),
     ) {
         Column(
             modifier = Modifier

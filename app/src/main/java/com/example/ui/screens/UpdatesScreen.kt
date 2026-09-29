@@ -35,6 +35,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.example.AvailableUpdate
 import com.example.BuildConfig
 import com.example.InAppUpdater
+import com.example.InstalledReleaseNotes
 import com.example.UpdateChecker
 import kotlinx.coroutines.launch
 
@@ -70,10 +73,8 @@ private sealed interface CheckState {
  * the button here, never fires the background notification, and never pops the launch-time
  * dialog on top of itself (see [UpdateChecker.checkNow]'s own doc on why the two stay separate).
  *
- * Two independent sections, per the request this was built for: a live "Check for updates" that
- * hits GitHub right now, and a "Read changelog" that just shows what's already in *this* build
- * (Continue reading [com.example.ui.screens.CURRENT_CHANGELOG] - the exact list [ChangelogDialog]
- * shows after an update, so there's one hand-maintained list, not two that can drift apart).
+ * The update check remains on demand. Read changelog shows the installed version's cached
+ * GitHub Release body, falling back to the bundled notes until a matching release is available.
  */
 @Composable
 fun UpdatesScreen(
@@ -85,6 +86,8 @@ fun UpdatesScreen(
     var checkState by remember { mutableStateOf<CheckState>(CheckState.Idle) }
     var isDownloading by remember { mutableStateOf(false) }
     var changelogExpanded by remember { mutableStateOf(false) }
+    val fetchedNotes by InstalledReleaseNotes.body.collectAsState()
+    LaunchedEffect(Unit) { InstalledReleaseNotes.prefetch(context) }
 
     fun runCheck() {
         checkState = CheckState.Checking
@@ -250,7 +253,7 @@ fun UpdatesScreen(
                 }
             }
 
-            // "Read changelog" - what's already in this build, expanded in place on tap.
+            // Installed version's release body, cached after its first successful fetch.
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -282,10 +285,16 @@ fun UpdatesScreen(
                             modifier = Modifier.padding(top = 14.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            CURRENT_CHANGELOG.forEach { line ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Text("•", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-                                    Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                            val notes = fetchedNotes ?: InstalledReleaseNotes.cached(context)
+                            if (notes != null) {
+                                Text(notes, style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface)
+                            } else {
+                                CURRENT_CHANGELOG.forEach { line ->
+                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        Text("•", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                                        Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                                    }
                                 }
                             }
                         }

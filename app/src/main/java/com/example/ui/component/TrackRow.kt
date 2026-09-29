@@ -1,10 +1,7 @@
 package com.example.ui.component
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -32,7 +29,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,6 +44,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+
+/** Playback state for artwork badges throughout the NavHost. The badge's visibility is separate. */
+val LocalPlaybackActive = staticCompositionLocalOf { false }
 
 /**
  * The one song row every list in the app uses - search results, playlists, downloads, liked songs.
@@ -100,7 +105,7 @@ fun TrackRow(
                 },
             )
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = com.example.ui.theme.MuseFlowSpacing.medium, vertical = com.example.ui.theme.MuseFlowSpacing.small)
             .testTag("track_row_${title.lowercase().replace(" ", "_")}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -115,7 +120,7 @@ fun TrackRow(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
+                maxLines = if (androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.2f) 2 else 1,
                 overflow = TextOverflow.Ellipsis,
             )
             // Duration sits beside the artist rather than out at the row's trailing edge - with
@@ -294,25 +299,26 @@ private fun Artwork(
  * which render their own artwork box rather than going through [TrackRow]'s. */
 @Composable
 fun NowPlayingIndicator() {
-    val transition = rememberInfiniteTransition(label = "now_playing_bars")
-    val heights = List(3) { index ->
-        val duration = 480 + index * 130
-        transition.animateFloat(
-            initialValue = 0.25f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(duration, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse,
-            ),
-            label = "now_playing_bar_$index",
-        )
-    }
+    val active = LocalPlaybackActive.current && !com.example.ui.theme.LocalReducedMotion.current
     Row(
         horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.Bottom,
         modifier = Modifier.height(18.dp),
     ) {
-        heights.forEach { height ->
+        repeat(3) { index ->
+            val height = remember { Animatable(listOf(.45f, .95f, .65f)[index]) }
+            var rising by remember { mutableStateOf(index != 1) }
+            LaunchedEffect(active) {
+                // Cancelling animateTo retains its current value. On resume, the bar continues
+                // toward the same target instead of restarting or jumping to another frame.
+                while (active) {
+                    height.animateTo(
+                        targetValue = if (rising) 1f else .25f,
+                        animationSpec = tween(480 + index * 130, easing = LinearEasing),
+                    )
+                    rising = !rising
+                }
+            }
             Box(
                 modifier = Modifier
                     .width(3.dp)

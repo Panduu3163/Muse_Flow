@@ -269,14 +269,16 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                 } }.getOrNull()
                 // oEmbed excludes some ordinary videos. The player response can still supply
                 // metadata for an ID that the existing audio resolver is able to play.
-                val details = if (metadata == null) com.music.innertube.YouTube.player(
+                val details = com.music.innertube.YouTube.player(
                     videoId, client = com.music.innertube.models.YouTubeClient.VISIONOS
-                ).getOrNull()?.videoDetails else null
+                ).getOrNull()?.videoDetails
                 TrackPage(listOf(TrackResult(id = videoId,
                     title = metadata?.optString("title")?.takeIf { it.isNotBlank() }
                         ?: details?.title ?: "YouTube video $videoId",
                     artist = metadata?.optString("author_name") ?: details?.author.orEmpty(),
-                    duration = null, source = "YouTube video", sourceType = MusicSource.YOUTUBE_MUSIC,
+                    duration = details?.lengthSeconds?.toLongOrNull()?.takeIf { it > 0 }
+                        ?.let { "${it / 60}:${(it % 60).toString().padStart(2, '0')}" },
+                    source = "YouTube video", sourceType = MusicSource.YOUTUBE_MUSIC,
                     imageUrl = metadata?.optString("thumbnail_url")
                         ?: details?.thumbnail?.thumbnails?.lastOrNull()?.url
                         ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg")), null)

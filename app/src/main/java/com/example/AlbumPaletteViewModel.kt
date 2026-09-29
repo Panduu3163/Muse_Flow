@@ -45,6 +45,8 @@ class AlbumPaletteViewModel(application: Application) : AndroidViewModel(applica
         }
 
         job?.cancel()
+        // Keep the last artwork palette visible while the next cover is decoded. Clearing it
+        // here makes the player and gesture navigation area flash the dark fallback on every skip.
         // extractAlbumPalette already dispatches its own real work off Main - this just makes sure
         // the trivial pre-work above (the cache lookup, `loadedUrl` bookkeeping) doesn't run inline
         // on Main.immediate either, so this coroutine costs nothing on the main thread from the

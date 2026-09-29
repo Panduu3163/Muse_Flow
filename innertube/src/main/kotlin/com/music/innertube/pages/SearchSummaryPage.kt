@@ -101,12 +101,8 @@ data class SearchSummaryPage(
                                     id = it.navigationEndpoint?.browseEndpoint?.browseId!!,
                                 )
                             },
-                        duration =
-                            subtitle
-                                .lastOrNull()
-                                ?.firstOrNull()
-                                ?.text
-                                ?.parseTime(),
+                        duration = subtitle.asSequence().flatMap { it.asSequence() }
+                            ?.mapNotNull { it.text.parseTime() }?.firstOrNull(),
                         musicVideoType = renderer.onTap.musicVideoType,
                         thumbnail = renderer.thumbnail.musicThumbnailRenderer?.getThumbnailUrl() ?: return null,
                         explicit =
@@ -260,12 +256,11 @@ data class SearchSummaryPage(
                                 id = it.navigationEndpoint?.browseEndpoint?.browseId!!
                             )
                         },
-                        duration =
-                            secondaryLine
-                                .lastOrNull()
-                                ?.firstOrNull()
-                                ?.text
-                                ?.parseTime(),
+                        duration = secondaryLine.asSequence().flatMap { it.asSequence() }
+                            .mapNotNull { it.text.parseTime() }.firstOrNull()
+                            ?: renderer.fixedColumns?.firstOrNull()
+                                ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs
+                                ?.firstOrNull()?.text?.parseTime(),
                         musicVideoType = renderer.musicVideoType,
                         thumbnail = renderer.thumbnail?.musicThumbnailRenderer?.getThumbnailUrl() ?: return null,
                         explicit =

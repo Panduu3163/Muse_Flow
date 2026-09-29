@@ -87,7 +87,7 @@ class EqualizerAudioProcessor : BaseAudioProcessor() {
         }
     }
 
-    override fun isActive(): Boolean = enabled && sampleRate > 0 && channelCount > 0
+    override fun isActive(): Boolean = super.isActive() && enabled && sampleRate > 0 && channelCount > 0
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         if (needsRebuild) {

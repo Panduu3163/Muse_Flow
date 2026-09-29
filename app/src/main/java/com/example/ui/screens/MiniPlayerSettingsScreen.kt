@@ -26,6 +26,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.AppSettingsViewModel
 import com.example.BackgroundStyle
 import com.example.ui.component.ListPreference
+import com.example.ui.component.ActionPreference
+import com.example.ui.component.MiniPlayerLivePreview
 import com.example.ui.component.PreferenceGroup
 
 /** The compact player docked above the bottom bar. */
@@ -64,15 +66,21 @@ fun MiniPlayerSettingsScreen(
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 200.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            MiniPlayerLivePreview(settings)
             PreferenceGroup(title = "Mini player") {
                 ListPreference(
                     title = "Background style",
                     subtitle = "Gradient, blur and glow are built from the current artwork.",
                     icon = Icons.Default.Gradient,
                     selected = settings.miniPlayerBackgroundStyle,
-                    options = BackgroundStyle.entries.toList(),
+                    options = BackgroundStyle.entries.filterNot { it == BackgroundStyle.AppleMusic },
                     label = { it.label },
                     onSelect = settingsViewModel::setMiniPlayerBackgroundStyle,
+                )
+                ActionPreference(
+                    title = "Reset mini player",
+                    subtitle = "Restore the default background.",
+                    onClick = settingsViewModel::resetMiniPlayer,
                 )
             }
         }

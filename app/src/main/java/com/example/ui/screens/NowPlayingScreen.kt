@@ -16,6 +16,10 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -91,6 +95,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -105,11 +112,16 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
@@ -132,8 +144,12 @@ import com.example.QueueItem
 import com.example.asPlaybackTime
 import androidx.compose.foundation.clickable
 import com.example.ui.component.SquigglySlider
+import com.example.ui.component.WavySeekBar
+import com.example.ui.component.SlimSeekBar
 import com.example.ui.utils.bounceClick
 import com.example.ui.utils.slowMarquee
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 /**
  * The full-screen player: large artwork, a seekable progress bar, transport controls, and a
@@ -164,6 +180,7 @@ fun NowPlayingScreen(
     hideArtwork: Boolean = false,
     artworkCornerRadius: Int = 20,
     cropArtwork: Boolean = true,
+    rotatingArtwork: Boolean = false,
     wavySlider: Boolean = false,
     slimSlider: Boolean = false,
     squigglySlider: Boolean = false,
@@ -187,12 +204,14 @@ fun NowPlayingScreen(
     lyricsContent: @Composable (Modifier) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    var showLyrics by remember { mutableStateOf(false) }
 
     Box(modifier = modifier.fillMaxSize()) {
         PlayerBackground(
             style = backgroundStyle,
             palette = palette,
             artworkUrl = state.artworkUrl,
+            isPlaying = state.isPlaying,
         )
         PlayerContent(
             state = state,
@@ -217,18 +236,22 @@ fun NowPlayingScreen(
             hideArtwork = hideArtwork,
             artworkCornerRadius = artworkCornerRadius,
             cropArtwork = cropArtwork,
+            rotatingArtwork = rotatingArtwork,
             wavySlider = wavySlider,
             slimSlider = slimSlider,
             squigglySlider = squigglySlider,
             swipeToChangeSongEnabled = swipeToChangeSongEnabled,
             showCodecInfo = showCodecInfo,
             transportStyle = transportStyle,
+            backgroundStyle = backgroundStyle,
             buttonColor = buttonColor,
             sleepTimerRemainingMs = sleepTimerRemainingMs,
             onStartSleepTimer = onStartSleepTimer,
             onCancelSleepTimer = onCancelSleepTimer,
             onSetPlaybackSpeed = onSetPlaybackSpeed,
             lyricsContent = lyricsContent,
+            showLyrics = showLyrics,
+            onShowLyricsChange = { showLyrics = it },
         )
     }
 }
@@ -245,10 +268,22 @@ private fun PlayerBackground(
     style: BackgroundStyle,
     palette: AlbumPalette?,
     artworkUrl: String?,
+    isPlaying: Boolean,
 ) {
     val base = MaterialTheme.colorScheme.background
 
     when {
+        style == BackgroundStyle.GlowAnimated ->
+            com.example.ui.component.AlbumGlowBackground(
+                palette = palette ?: AlbumPalette(
+                    dominant = MaterialTheme.colorScheme.primary,
+                    muted = MaterialTheme.colorScheme.secondary,
+                    vibrant = MaterialTheme.colorScheme.tertiary,
+                ),
+                base = base,
+                immersive = true,
+            )
+
         style == BackgroundStyle.Gradient && palette != null -> {
             val top by animateColorAsState(palette.dominant, label = "bg_top")
             val bottom by animateColorAsState(palette.muted, label = "bg_bottom")
@@ -270,6 +305,63 @@ private fun PlayerBackground(
         }
 
         style == BackgroundStyle.LiveMesh && artworkUrl != null -> LiveMeshBackground(artworkUrl = artworkUrl, base = base)
+
+        style == BackgroundStyle.AppleMusic && artworkUrl != null -> {
+            val breathe = if (isPlaying && !com.example.ui.theme.LocalReducedMotion.current) {
+                val transition = rememberInfiniteTransition(label = "apple_backdrop_breathe")
+                val scale by transition.animateFloat(1.30f, 1.40f,
+                    infiniteRepeatable(tween(12_000, easing = LinearEasing), RepeatMode.Reverse),
+                    label = "apple_backdrop_scale")
+                scale
+            } else 1.35f
+            val fallbackTop = palette?.dominant ?: MaterialTheme.colorScheme.primaryContainer
+            val fallbackBottom = palette?.muted ?: MaterialTheme.colorScheme.secondaryContainer
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+                listOf(fallbackTop.copy(alpha = .45f).compositeOver(base),
+                    fallbackBottom.copy(alpha = .35f).compositeOver(base), base),
+            ))) {
+                AnimatedContent(
+                    targetState = artworkUrl,
+                    transitionSpec = { fadeIn(tween(850)) togetherWith fadeOut(tween(850)) },
+                    label = "apple_artwork_background",
+                ) { url ->
+                    Box(Modifier.fillMaxSize()) {
+                        // Echo's useful idea is clear cover art dissolving into a blurred copy.
+                        // MuseFlow uses the current artwork only, with no external Canvas video.
+                        AsyncImage(
+                            model = url, contentDescription = null, contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = breathe; scaleY = breathe }.blur(110.dp),
+                        )
+                        AsyncImage(
+                            model = url, contentDescription = null, contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxWidth().fillMaxHeight(.66f)
+                                .graphicsLayer {
+                                    compositingStrategy = CompositingStrategy.Offscreen
+                                }
+                                .drawWithContent {
+                                    drawContent()
+                                    drawRect(
+                                        brush = Brush.verticalGradient(
+                                            0f to Color.Black,
+                                            .73f to Color.Black,
+                                            .91f to Color.Black.copy(alpha = .35f),
+                                            1f to Color.Transparent,
+                                        ),
+                                        blendMode = BlendMode.DstIn,
+                                    )
+                                },
+                        )
+                    }
+                }
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+                    0f to base.copy(alpha = .82f),
+                    .18f to base.copy(alpha = .38f),
+                    .45f to base.copy(alpha = .45f),
+                    .62f to base.copy(alpha = .85f),
+                    1f to base.copy(alpha = .93f),
+                )))
+            }
+        }
 
         style == BackgroundStyle.Blur && artworkUrl != null -> {
             Box(modifier = Modifier.fillMaxSize().background(base)) {
@@ -320,6 +412,17 @@ private fun PlayerBackground(
 @Composable
 private fun LiveMeshBackground(artworkUrl: String, base: Color) {
     val context = LocalContext.current
+    if (com.example.ui.theme.LocalReducedMotion.current) {
+        Box(modifier = Modifier.fillMaxSize().background(base)) {
+            AsyncImage(
+                model = artworkUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().blur(100.dp),
+            )
+        }
+        return
+    }
     val infiniteTransition = rememberInfiniteTransition(label = "liveMeshRotation")
     val anchorRotation by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -431,8 +534,8 @@ private fun LiveMeshBackground(artworkUrl: String, base: Color) {
  */
 @Composable
 private fun Modifier.artworkSwipeGestures(
-    onNext: () -> Unit,
-    onPrevious: () -> Unit,
+    onHorizontalDrag: (Float) -> Unit,
+    onHorizontalEnd: (Float) -> Unit,
     swipeToChangeSongEnabled: Boolean = true,
 ): Modifier {
     val context = LocalContext.current
@@ -442,6 +545,9 @@ private fun Modifier.artworkSwipeGestures(
     var axis by remember { mutableStateOf<Char?>(null) } // 'h' or 'v', decided once per gesture
     var horizontalAccum by remember { mutableFloatStateOf(0f) }
     var verticalAccum by remember { mutableFloatStateOf(0f) }
+    val dragAction by rememberUpdatedState(onHorizontalDrag)
+    val endAction by rememberUpdatedState(onHorizontalEnd)
+    val swipeEnabled by rememberUpdatedState(swipeToChangeSongEnabled)
 
     return this.pointerInput(Unit) {
         detectDragGestures(
@@ -451,20 +557,24 @@ private fun Modifier.artworkSwipeGestures(
                 verticalAccum = 0f
             },
             onDragEnd = {
-                if (swipeToChangeSongEnabled && axis == 'h' && abs(horizontalAccum) > 120f) {
-                    if (horizontalAccum < 0) onNext() else onPrevious()
-                }
+                if (axis == 'h') endAction(horizontalAccum)
                 axis = null
+                horizontalAccum = 0f
+            },
+            onDragCancel = {
+                if (axis == 'h') endAction(0f)
+                axis = null
+                horizontalAccum = 0f
             },
             onDrag = { change, dragAmount ->
                 change.consume()
                 if (axis == null) {
                     // Vertical volume-swipe always available regardless of the setting - only the
                     // horizontal skip gesture is what "swipe to change song" turns off.
-                    axis = if (swipeToChangeSongEnabled && abs(dragAmount.x) > abs(dragAmount.y)) 'h' else 'v'
+                    axis = if (swipeEnabled && abs(dragAmount.x) > abs(dragAmount.y)) 'h' else 'v'
                 }
                 when (axis) {
-                    'h' -> horizontalAccum += dragAmount.x
+                    'h' -> { horizontalAccum += dragAmount.x; dragAction(horizontalAccum) }
                     'v' -> {
                         verticalAccum += dragAmount.y
                         // One volume step per ~24px of vertical travel - up (negative dy) raises.
@@ -510,12 +620,14 @@ private fun PlayerContent(
     hideArtwork: Boolean,
     artworkCornerRadius: Int,
     cropArtwork: Boolean,
+    rotatingArtwork: Boolean,
     wavySlider: Boolean,
     slimSlider: Boolean,
     squigglySlider: Boolean = false,
     swipeToChangeSongEnabled: Boolean = true,
     showCodecInfo: Boolean = false,
     transportStyle: PlayerTransportStyle = PlayerTransportStyle.Static,
+    backgroundStyle: BackgroundStyle,
     buttonColor: Color,
     sleepTimerRemainingMs: Long? = null,
     onStartSleepTimer: (Int) -> Unit = {},
@@ -524,11 +636,13 @@ private fun PlayerContent(
     onOpenMenu: () -> Unit = {},
     onGoToArtist: (String) -> Unit = {},
     lyricsContent: @Composable (Modifier) -> Unit,
+    showLyrics: Boolean,
+    onShowLyricsChange: (Boolean) -> Unit,
 ) {
     var showQueue by remember { mutableStateOf(false) }
-    var showLyrics by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
     var showSpeedDialog by remember { mutableStateOf(false) }
+    var artworkDirection by remember { mutableStateOf(1) }
 
     Column(
         modifier = Modifier
@@ -577,7 +691,22 @@ private fun PlayerContent(
         }
 
         if (showLyrics) {
-            lyricsContent(Modifier.weight(1f))
+            if (backgroundStyle == BackgroundStyle.AppleMusic) {
+                // Keep the same Apple backdrop visible through a light glass panel.
+                Surface(
+                    modifier = Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    color = if (MaterialTheme.colorScheme.background.luminance() < .5f)
+                        Color.White.copy(alpha = .13f) else Color.Black.copy(alpha = .52f),
+                    contentColor = Color.White,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = .15f)),
+                ) {
+                    lyricsContent(Modifier.fillMaxSize())
+                }
+            } else {
+                lyricsContent(Modifier.weight(1f))
+            }
         } else if (showQueue) {
             // Sized and centred exactly like the artwork it replaces - fillMaxWidth + a 1:1
             // aspect ratio, flanked by the same two half-weight spacers - rather than the queue
@@ -587,7 +716,10 @@ private fun PlayerContent(
             Spacer(Modifier.weight(0.5f))
             QueueList(
                 queue = state.queue,
-                onPlayQueueItem = onPlayQueueItem,
+                onPlayQueueItem = { index ->
+                    artworkDirection = if (index >= state.queue.indexOfFirst { it.isCurrent }) 1 else -1
+                    onPlayQueueItem(index)
+                },
                 onMoveQueueItem = onMoveQueueItem,
                 onRemoveQueueItem = onRemoveQueueItem,
                 modifier = Modifier
@@ -599,17 +731,23 @@ private fun PlayerContent(
             Spacer(Modifier.weight(0.5f))
             Artwork(
                 imageUrl = state.artworkUrl,
+                artworkKey = "${state.queue.indexOfFirst { it.isCurrent }}:${state.currentTrackKey ?: state.artworkUrl.orEmpty()}",
                 isBuffering = state.isBuffering,
+                isPlaying = state.isPlaying,
+                rotating = rotatingArtwork,
+                transitionDirection = artworkDirection,
+                previousImageUrl = state.previousArtworkUrl,
+                nextImageUrl = state.nextArtworkUrl,
+                canPrevious = state.hasPrevious,
+                canNext = state.hasNext,
+                swipeEnabled = swipeToChangeSongEnabled,
+                onSwipeNext = { artworkDirection = 1; onNext() },
+                onSwipePrevious = { artworkDirection = -1; onPrevious() },
                 cornerRadius = artworkCornerRadius.dp,
                 cropToSquare = cropArtwork,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .artworkSwipeGestures(
-                        onNext = onNext,
-                        onPrevious = onPrevious,
-                        swipeToChangeSongEnabled = swipeToChangeSongEnabled,
-                    ),
+                    .aspectRatio(1f),
             )
             Spacer(Modifier.weight(0.5f))
         } else {
@@ -646,6 +784,7 @@ private fun PlayerContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 4.dp)
+                        .clipToBounds()
                         .slowMarquee(),
                 ) {
                     state.artistCredits.forEachIndexed { index, credit ->
@@ -736,7 +875,7 @@ private fun PlayerContent(
                     shape = favShape,
                     containerColor = pillContainerColor,
                     tint = when {
-                        isLiked -> MaterialTheme.colorScheme.primary
+                        isLiked -> HeartBurstPink
                         isLocalDevice -> MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.35f)
                         else -> MaterialTheme.colorScheme.onPrimaryContainer
                     },
@@ -764,8 +903,8 @@ private fun PlayerContent(
             buttonColor = buttonColor,
             transportStyle = transportStyle,
             onTogglePlayPause = onTogglePlayPause,
-            onNext = onNext,
-            onPrevious = onPrevious,
+            onNext = { artworkDirection = 1; onNext() },
+            onPrevious = { artworkDirection = -1; onPrevious() },
         )
 
         PlayerQuickActionsRow(
@@ -775,11 +914,11 @@ private fun PlayerContent(
             sleepTimerRemainingMs = sleepTimerRemainingMs,
             onToggleQueue = {
                 showQueue = !showQueue
-                if (showQueue) showLyrics = false
+                if (showQueue) onShowLyricsChange(false)
             },
             onToggleLyrics = {
-                showLyrics = !showLyrics
-                if (showLyrics) showQueue = false
+                onShowLyricsChange(!showLyrics)
+                if (!showLyrics) showQueue = false
             },
             onOpenSleepTimer = { showSleepTimerDialog = true },
             onToggleShuffle = onToggleShuffle,
@@ -870,6 +1009,19 @@ private fun LikeButtonWithBurst(
                 .testTag("now_playing_like"),
             contentAlignment = Alignment.Center,
         ) {
+            if (isLiked) {
+                Box(
+                    Modifier.size(36.dp)
+                        .background(
+                            Brush.radialGradient(listOf(
+                                HeartBurstBabyPink.copy(alpha = .38f),
+                                HeartBurstBabyPink.copy(alpha = .10f),
+                                Color.Transparent,
+                            )),
+                            CircleShape,
+                        )
+                )
+            }
             Icon(
                 imageVector = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                 contentDescription = contentDescription,
@@ -1050,19 +1202,24 @@ private fun SeekBar(
                 playing = state.isPlaying,
                 activeColor = MaterialTheme.colorScheme.primary,
                 inactiveColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                visibleCycles = 3f,
-                phaseDurationMs = 1400,
+                visibleCycles = 4f,
+                phaseDurationMs = 3200,
                 pillThumb = true,
             )
 
-            wavySlider -> SquigglySlider(
+            wavySlider -> WavySeekBar(
                 progress = state.progress,
                 onSeek = onSeek,
                 playing = state.isPlaying,
                 activeColor = MaterialTheme.colorScheme.primary,
                 inactiveColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                visibleCycles = 1.2f,
-                phaseDurationMs = 2200,
+            )
+
+            slimSlider -> SlimSeekBar(
+                progress = state.progress,
+                onSeek = onSeek,
+                activeColor = MaterialTheme.colorScheme.primary,
+                inactiveColor = MaterialTheme.colorScheme.surfaceContainerHighest,
             )
 
             else -> Slider(
@@ -1072,10 +1229,7 @@ private fun SeekBar(
                     scrubPosition?.let(onSeek)
                     scrubPosition = null
                 },
-                // Slim keeps the same touch target but draws a visually lighter track.
-                modifier = Modifier
-                    .testTag("now_playing_seekbar")
-                    .then(if (slimSlider) Modifier.height(24.dp) else Modifier),
+                modifier = Modifier.testTag("now_playing_seekbar"),
             )
         }
         Row(modifier = Modifier.fillMaxWidth()) {
@@ -1713,33 +1867,144 @@ private fun QueueList(
 @Composable
 private fun Artwork(
     imageUrl: String?,
+    artworkKey: String,
     isBuffering: Boolean,
+    isPlaying: Boolean,
+    rotating: Boolean,
+    transitionDirection: Int,
+    previousImageUrl: String?,
+    nextImageUrl: String?,
+    canPrevious: Boolean,
+    canNext: Boolean,
+    swipeEnabled: Boolean,
+    onSwipeNext: () -> Unit,
+    onSwipePrevious: () -> Unit,
     cornerRadius: androidx.compose.ui.unit.Dp = 20.dp,
     cropToSquare: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(cornerRadius))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (imageUrl != null) {
-            AsyncImage(
-                model = imageUrl,
-                contentDescription = null,
-                // Fit keeps a non-square cover fully visible inside the frame instead of
-                // cropping its edges away.
-                contentScale = if (cropToSquare) ContentScale.Crop else ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            Icon(
-                imageVector = Icons.Default.MusicNote,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(72.dp),
-            )
+    val reducedMotion = com.example.ui.theme.LocalReducedMotion.current
+    val scope = rememberCoroutineScope()
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    val dragDirection by remember { derivedStateOf { when {
+        dragOffset < 0f -> -1
+        dragOffset > 0f -> 1
+        else -> 0
+    } } }
+    var swipePending by remember { mutableStateOf(false) }
+    var settleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    LaunchedEffect(artworkKey) {
+        dragOffset = 0f
+        swipePending = false
+    }
+    val rotation = remember(artworkKey) { Animatable(0f) }
+    LaunchedEffect(rotation, rotating, isPlaying, reducedMotion) {
+        if (!rotating) rotation.snapTo(0f)
+        else if (isPlaying && !reducedMotion) {
+            while (true) {
+                rotation.animateTo(rotation.value + 360f, tween(20_000, easing = LinearEasing))
+            }
+        }
+    }
+    BoxWithConstraints(modifier = modifier.clipToBounds(), contentAlignment = Alignment.Center) {
+        val widthPx = with(LocalDensity.current) { maxWidth.toPx() }.coerceAtLeast(1f)
+        val neighborUrl = if (dragDirection < 0) nextImageUrl else previousImageUrl
+        val neighborAvailable = if (dragDirection < 0) canNext else canPrevious
+        if (dragDirection != 0 && neighborAvailable) {
+            Box(
+                Modifier.fillMaxSize().graphicsLayer {
+                    val fraction = (abs(dragOffset) / widthPx).coerceIn(0f, 1f)
+                    translationX = dragOffset + if (dragOffset < 0f) widthPx else -widthPx
+                    scaleX = .92f + .08f * fraction
+                    scaleY = scaleX
+                }.clip(if (rotating) CircleShape else RoundedCornerShape(cornerRadius))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (neighborUrl != null) AsyncImage(
+                    model = neighborUrl, contentDescription = null,
+                    contentScale = if (cropToSquare) ContentScale.Crop else ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                ) else Icon(Icons.Default.MusicNote, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(72.dp))
+            }
+        }
+        Box(
+            Modifier.fillMaxSize().graphicsLayer {
+                val fraction = (abs(dragOffset) / widthPx).coerceIn(0f, 1f)
+                translationX = dragOffset
+                scaleX = 1f - .08f * fraction
+                scaleY = scaleX
+            }.clip(if (rotating) CircleShape else RoundedCornerShape(cornerRadius))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .artworkSwipeGestures(
+                    onHorizontalDrag = { distance ->
+                        settleJob?.cancel()
+                        val available = if (distance < 0f) canNext else canPrevious
+                        dragOffset = (if (available) distance else distance * .18f)
+                            .coerceIn(-widthPx, widthPx)
+                    },
+                    onHorizontalEnd = { distance ->
+                        val commit = swipeEnabled && abs(distance) > widthPx * .22f &&
+                            (if (distance < 0f) canNext else canPrevious)
+                        val target = if (commit) (if (distance < 0f) -widthPx else widthPx) else 0f
+                        settleJob = scope.launch {
+                            val animation = Animatable(dragOffset)
+                            animation.animateTo(target, tween(if (reducedMotion) 0 else 240)) {
+                                dragOffset = value
+                            }
+                            if (commit) {
+                                swipePending = true
+                                if (distance < 0f) onSwipeNext() else onSwipePrevious()
+                                // A failed skip must not strand the neighbor cover on screen.
+                                delay(2500)
+                                if (swipePending) {
+                                    Animatable(dragOffset).animateTo(0f, tween(200)) {
+                                        dragOffset = value
+                                    }
+                                    swipePending = false
+                                }
+                            }
+                        }
+                    },
+                    swipeToChangeSongEnabled = swipeEnabled,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+        AnimatedContent(
+            targetState = artworkKey to imageUrl,
+            transitionSpec = {
+                if (reducedMotion || swipePending) fadeIn(tween(0)) togetherWith fadeOut(tween(0))
+                else {
+                    val direction = transitionDirection
+                    (slideInHorizontally(tween(420)) { direction * it } +
+                        scaleIn(initialScale = .82f, animationSpec = tween(420)) + fadeIn(tween(300)))
+                        .togetherWith(slideOutHorizontally(tween(420)) { -direction * it } +
+                            scaleOut(targetScale = .82f, animationSpec = tween(420)) + fadeOut(tween(300)))
+                }
+            },
+            label = "player_artwork_carousel",
+        ) { (_, displayedUrl) ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                if (displayedUrl != null) {
+                    AsyncImage(
+                        model = displayedUrl,
+                        contentDescription = null,
+                        contentScale = if (cropToSquare) ContentScale.Crop else ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize().graphicsLayer {
+                            if (rotating) {
+                                scaleX = 1.42f
+                                scaleY = 1.42f
+                                rotationZ = rotation.value
+                            }
+                        },
+                    )
+                } else {
+                    Icon(Icons.Default.MusicNote, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(72.dp))
+                }
+            }
         }
 
         AnimatedVisibility(visible = isBuffering) {
@@ -1751,6 +2016,7 @@ private fun Artwork(
             ) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
+        }
         }
     }
 }

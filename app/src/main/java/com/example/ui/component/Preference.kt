@@ -2,11 +2,14 @@ package com.example.ui.component
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,10 +27,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,8 +40,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+import com.example.ui.theme.MuseFlowShapes
+import com.example.ui.theme.MuseFlowSpacing
+import com.example.SettingsSearchIndex
 
 /*
  * The settings DSL.
@@ -45,6 +61,31 @@ import kotlin.math.roundToInt
  * declarative lines instead of a hand-assembled Row each time. This matters at the scale MuseFlow
  * is heading for (~120 preferences): without it, every option is bespoke and the effort compounds.
  */
+
+/** The control title requested by Settings search on the current destination. */
+val LocalSettingsFocus = staticCompositionLocalOf { "" }
+val LocalSettingsRoute = staticCompositionLocalOf { "" }
+
+/** Bring a searched control into view after its destination has finished entering. */
+@Composable
+fun Modifier.settingsFocusTarget(title: String): Modifier {
+    val target = LocalSettingsFocus.current == SettingsSearchIndex.idFor(LocalSettingsRoute.current, title)
+    val requester = remember { BringIntoViewRequester() }
+    var positioned by remember { mutableStateOf(false) }
+    LaunchedEffect(target, positioned) {
+        if (target && positioned) {
+            delay(250)
+            requester.bringIntoView()
+        }
+    }
+    return this
+        .bringIntoViewRequester(requester)
+        .onGloballyPositioned { positioned = true }
+        .background(
+            if (target) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else Color.Transparent,
+            RoundedCornerShape(MuseFlowShapes.control),
+        )
+}
 
 /** A titled card grouping related preferences. */
 @Composable
@@ -62,7 +103,7 @@ fun PreferenceGroup(
         )
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(MuseFlowShapes.card),
             color = MaterialTheme.colorScheme.surfaceContainer,
         ) {
             Column(modifier = Modifier.padding(vertical = 6.dp)) { content() }
@@ -86,8 +127,11 @@ fun SwitchPreference(
         icon = icon,
         enabled = enabled,
         onClick = { onCheckedChange(!checked) },
+        role = Role.Switch,
+        stateLabel = if (checked) "On" else "Off",
         trailing = {
-            Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+            Switch(checked = checked, onCheckedChange = null, enabled = enabled,
+                modifier = Modifier.clearAndSetSemantics { })
         },
     )
 }
@@ -115,16 +159,14 @@ fun <T> ListPreference(
 
     PreferenceRow(
         title = title,
-        subtitle = subtitle ?: label(selected),
+        subtitle = if (subtitle == null || subtitle == label(selected)) label(selected)
+            else "${label(selected)} · $subtitle",
         icon = icon,
         enabled = enabled,
         onClick = { showPicker = true },
         trailing = {
-            Text(
-                text = label(selected),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-            )
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
         },
     )
 
@@ -163,7 +205,7 @@ private fun <T> ListPreferencePicker(
         sheetState = sheetState,
         dragHandle = { BottomSheetDefaults.DragHandle() },
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        shape = RoundedCornerShape(topStart = MuseFlowShapes.sheet, topEnd = MuseFlowShapes.sheet),
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(bottom = 32.dp)) {
             Text(
@@ -177,6 +219,7 @@ private fun <T> ListPreferencePicker(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 56.dp)
                         .clickable { onSelect(option) }
                         .padding(horizontal = 24.dp, vertical = 14.dp)
                         .testTag("list_pref_option_${label(option).lowercase().replace(" ", "_")}"),
@@ -231,7 +274,7 @@ fun SliderPreference(
     var dragging by remember { mutableStateOf<Float?>(null) }
     val shown = dragging?.roundToInt() ?: value
 
-    Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+    Column(modifier = Modifier.settingsFocusTarget(title).padding(horizontal = 20.dp, vertical = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = title,
@@ -254,6 +297,10 @@ fun SliderPreference(
             },
             valueRange = range.first.toFloat()..range.last.toFloat(),
             enabled = enabled,
+            modifier = Modifier.heightIn(min = 56.dp).semantics {
+                contentDescription = title
+                stateDescription = valueLabel(shown)
+            },
         )
     }
 }
@@ -323,12 +370,20 @@ private fun PreferenceRow(
     trailing: @Composable () -> Unit,
     titleColor: Color? = null,
     iconTint: Color? = null,
+    role: Role? = null,
+    stateLabel: String? = null,
 ) {
     val alpha = if (enabled) 1f else 0.4f
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick)
+            .heightIn(min = 56.dp)
+            .settingsFocusTarget(title)
+            .semantics(mergeDescendants = true) {
+                if (role != null) this.role = role
+                if (stateLabel != null) stateDescription = stateLabel
+            }
+            .clickable(enabled = enabled, role = role, onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 14.dp)
             .testTag("pref_${title.lowercase().replace(" ", "_")}"),
         verticalAlignment = Alignment.CenterVertically,
@@ -338,7 +393,7 @@ private fun PreferenceRow(
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(MuseFlowShapes.control))
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = alpha)),
                 contentAlignment = Alignment.Center,
             ) {

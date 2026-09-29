@@ -23,7 +23,7 @@ fun parsePlaylistM3u(text: String): List<CsvTrack> {
     var pendingArtist: String? = null
 
     for (rawLine in lines) {
-        val line = rawLine.trim().removePrefix("﻿")
+        val line = rawLine.trim().removePrefix("\uFEFF")
         if (line.isEmpty()) continue
 
         if (line.startsWith("#EXTINF:", ignoreCase = true)) {

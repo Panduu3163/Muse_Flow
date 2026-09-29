@@ -50,7 +50,7 @@ class BassBoostAudioProcessor : BaseAudioProcessor() {
         filters.forEach { it.configure(FilterType.LOW_SHELF, SHELF_FREQUENCY_HZ, gainDb, q = 1.0) }
     }
 
-    override fun isActive(): Boolean = enabled && gainDb > 0.0 && sampleRate > 0 && channelCount > 0
+    override fun isActive(): Boolean = super.isActive() && enabled && gainDb > 0.0 && sampleRate > 0 && channelCount > 0
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         if (needsRebuild) {

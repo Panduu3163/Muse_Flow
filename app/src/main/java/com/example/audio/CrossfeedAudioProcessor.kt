@@ -60,7 +60,7 @@ class CrossfeedAudioProcessor : BaseAudioProcessor() {
         needsRebuild = false
     }
 
-    override fun isActive(): Boolean = enabled && amount > 0.0 && channelCount == 2
+    override fun isActive(): Boolean = super.isActive() && enabled && amount > 0.0 && channelCount == 2
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         if (needsRebuild) configureFilters()

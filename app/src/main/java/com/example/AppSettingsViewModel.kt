@@ -67,6 +67,7 @@ private object AppSettingsKeys {
     val SWIPE_SONG_TO_REMOVE_FROM_PLAYLIST = booleanPreferencesKey("swipe_song_to_remove_from_playlist")
     val GRID_CELL_SIZE = stringPreferencesKey("grid_cell_size")
     val DISPLAY_DENSITY = stringPreferencesKey("display_density")
+    val FONT_STYLE = stringPreferencesKey("font_style")
 
     val SHOW_LIKED_PLAYLIST = booleanPreferencesKey("show_liked_playlist")
     val SHOW_DOWNLOADED_PLAYLIST = booleanPreferencesKey("show_downloaded_playlist")
@@ -88,6 +89,7 @@ private inline fun <reified T : Enum<T>> Preferences.enumOrDefault(
 internal class AppSettingsRepository(private val context: Context) {
     val state: Flow<AppSettingsState> = context.appSettingsDataStore.data.map { prefs ->
         AppSettingsState(
+            isLoaded = true,
             miniPlayerBackgroundStyle = prefs.enumOrDefault(AppSettingsKeys.MINI_PLAYER_BACKGROUND_STYLE, BackgroundStyle.Solid),
 
             playerBackgroundStyle = prefs.enumOrDefault(AppSettingsKeys.PLAYER_BACKGROUND_STYLE, BackgroundStyle.Solid),
@@ -135,6 +137,7 @@ internal class AppSettingsRepository(private val context: Context) {
             swipeSongToRemoveFromPlaylist = prefs[AppSettingsKeys.SWIPE_SONG_TO_REMOVE_FROM_PLAYLIST] ?: false,
             gridCellSize = prefs.enumOrDefault(AppSettingsKeys.GRID_CELL_SIZE, GridCellSize.Medium),
             displayDensity = prefs.enumOrDefault(AppSettingsKeys.DISPLAY_DENSITY, DisplayDensity.Comfortable),
+            fontStyle = prefs.enumOrDefault(AppSettingsKeys.FONT_STYLE, AppFontStyle.System),
 
             showLikedPlaylist = prefs[AppSettingsKeys.SHOW_LIKED_PLAYLIST] ?: true,
             showDownloadedPlaylist = prefs[AppSettingsKeys.SHOW_DOWNLOADED_PLAYLIST] ?: true,
@@ -154,14 +157,40 @@ internal class AppSettingsRepository(private val context: Context) {
     suspend fun <T : Enum<T>> setEnum(key: Preferences.Key<String>, value: T) {
         context.appSettingsDataStore.edit { it[key] = value.name }
     }
+
+    suspend fun resetAppearance() {
+        context.appSettingsDataStore.edit { prefs ->
+            prefs.remove(AppSettingsKeys.GRID_CELL_SIZE)
+            prefs.remove(AppSettingsKeys.DISPLAY_DENSITY)
+            prefs.remove(AppSettingsKeys.FONT_STYLE)
+        }
+    }
+
+    suspend fun resetPlayer() {
+        context.appSettingsDataStore.edit { prefs ->
+            listOf(
+                AppSettingsKeys.PLAYER_BACKGROUND_STYLE,
+                AppSettingsKeys.PLAYER_BUTTON_COLOR,
+                AppSettingsKeys.PLAYER_SLIDER_STYLE,
+                AppSettingsKeys.PLAYER_TRANSPORT_STYLE,
+            ).forEach(prefs::remove)
+            prefs.remove(AppSettingsKeys.HIDE_PLAYER_THUMBNAIL)
+            prefs.remove(AppSettingsKeys.THUMBNAIL_CORNER_RADIUS)
+            prefs.remove(AppSettingsKeys.CROP_ALBUM_ART)
+            prefs.remove(AppSettingsKeys.SWIPE_TO_CHANGE_SONG_ENABLED)
+            prefs.remove(AppSettingsKeys.ROTATING_THUMBNAIL_ANIMATION)
+            prefs.remove(AppSettingsKeys.SHOW_CODEC_INFO)
+        }
+    }
+
+    suspend fun resetMiniPlayer() {
+        context.appSettingsDataStore.edit { it.remove(AppSettingsKeys.MINI_PLAYER_BACKGROUND_STYLE) }
+    }
 }
 
 /**
- * Single source of truth for the extra Appearance preferences (Mini-player, Player, Lyrics,
- * Misc, Auto playlists). Scoped to the hosting Activity via `viewModel()`, same pattern as
- * [ThemeViewModel], and persisted to its own DataStore Preferences file so choices survive
- * relaunch. None of these (aside from the app background theme) drive real playback/lyrics
- * behavior yet - they only hold the user's selection.
+ * Single source of truth for the app's persisted UI and playback preferences. Scoped to the
+ * hosting Activity via `viewModel()` and backed by DataStore so choices survive relaunch.
  */
 class AppSettingsViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AppSettingsRepository(application)
@@ -223,6 +252,7 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
     fun setSwipeSongToRemoveFromPlaylist(value: Boolean) = set(AppSettingsKeys.SWIPE_SONG_TO_REMOVE_FROM_PLAYLIST, value)
     fun setGridCellSize(value: GridCellSize) = setEnum(AppSettingsKeys.GRID_CELL_SIZE, value)
     fun setDisplayDensity(value: DisplayDensity) = setEnum(AppSettingsKeys.DISPLAY_DENSITY, value)
+    fun setFontStyle(value: AppFontStyle) = setEnum(AppSettingsKeys.FONT_STYLE, value)
 
     // Auto playlists
     fun setShowLikedPlaylist(value: Boolean) = set(AppSettingsKeys.SHOW_LIKED_PLAYLIST, value)
@@ -234,6 +264,10 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
 
     // Privacy
     fun setDisableScreenshots(value: Boolean) = set(AppSettingsKeys.DISABLE_SCREENSHOTS, value)
+
+    fun resetAppearance() = viewModelScope.launch { repository.resetAppearance() }
+    fun resetPlayer() = viewModelScope.launch { repository.resetPlayer() }
+    fun resetMiniPlayer() = viewModelScope.launch { repository.resetMiniPlayer() }
 
     private fun <T> set(key: Preferences.Key<T>, value: T) {
         viewModelScope.launch { repository.setValue(key, value) }

@@ -69,6 +69,8 @@ data class NowPlayingState(
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val hasNext: Boolean = false,
     val hasPrevious: Boolean = false,
+    val nextArtworkUrl: String? = null,
+    val previousArtworkUrl: String? = null,
     /** True for a track playing straight off this device's own media store, not something
      * downloaded through the app or streamed. Now Playing shows this as its own glyph, distinct
      * from "downloaded" - see [com.example.ui.component.TrackRow]'s own isLocalDevice doc for why
@@ -270,6 +272,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             repeatMode = player.repeatMode,
             hasNext = player.hasNextMediaItem(),
             hasPrevious = player.hasPreviousMediaItem(),
+            nextArtworkUrl = player.nextMediaItemIndex.takeIf { it in queue.indices }
+                ?.let { queue[it].artworkUrl },
+            previousArtworkUrl = player.previousMediaItemIndex.takeIf { it in queue.indices }
+                ?.let { queue[it].artworkUrl },
             // A device media-store track's mediaId is its own content:// URI (see
             // LocalAudioProvider) - nothing else in the app produces a mediaId with that scheme,
             // so it's a reliable, self-contained signal with no extra plumbing needed.

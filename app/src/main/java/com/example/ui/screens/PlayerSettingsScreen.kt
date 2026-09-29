@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -19,14 +21,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Comment
 import androidx.compose.material.icons.filled.Crop
+import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Gradient
 import androidx.compose.material.icons.filled.HideImage
 import androidx.compose.material.icons.filled.SwipeLeft
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Waves
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -56,10 +60,15 @@ import com.example.PlayerButtonColorOption
 import com.example.PlayerSliderStyle
 import com.example.PlayerTransportStyle
 import com.example.ui.component.ListPreference
+import com.example.ui.component.ActionPreference
+import com.example.ui.component.PlayerLivePreview
 import com.example.ui.component.PreferenceGroup
 import com.example.ui.component.SliderPreference
 import com.example.ui.component.SquigglySlider
+import com.example.ui.component.WavySeekBar
+import com.example.ui.component.SlimSeekBar
 import com.example.ui.component.SwitchPreference
+import com.example.ui.component.settingsFocusTarget
 
 /** Now Playing's artwork, background, buttons and progress bar. */
 @Composable
@@ -97,7 +106,18 @@ fun PlayerSettingsScreen(
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 200.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            PreferenceGroup(title = "Player") {
+            PreferenceGroup(title = "Player background") {
+                ListPreference(
+                    title = "Background style",
+                    icon = Icons.Default.Gradient,
+                    selected = settings.playerBackgroundStyle,
+                    options = BackgroundStyle.entries.toList(),
+                    label = { it.label },
+                    onSelect = settingsViewModel::setPlayerBackgroundStyle,
+                )
+            }
+            PlayerLivePreview(settings)
+            PreferenceGroup(title = "Artwork") {
                 SwitchPreference(
                     title = "Hide artwork",
                     subtitle = "Show a compact player without the large cover image.",
@@ -113,14 +133,27 @@ fun PlayerSettingsScreen(
                     onCheckedChange = settingsViewModel::setCropAlbumArt,
                     enabled = !settings.hidePlayerThumbnail,
                 )
-                ListPreference(
-                    title = "Background style",
-                    subtitle = "Gradient and blur are built from the current artwork.",
-                    icon = Icons.Default.Gradient,
-                    selected = settings.playerBackgroundStyle,
-                    options = BackgroundStyle.entries.toList(),
-                    label = { it.label },
-                    onSelect = settingsViewModel::setPlayerBackgroundStyle,
+                SwitchPreference(
+                    title = "Rotating artwork",
+                    subtitle = "Slowly rotate the cover in a circular frame while music plays.",
+                    icon = Icons.Default.Autorenew,
+                    checked = settings.rotatingThumbnailAnimation,
+                    onCheckedChange = settingsViewModel::setRotatingThumbnailAnimation,
+                    enabled = !settings.hidePlayerThumbnail,
+                )
+                SliderPreference(
+                    title = "Artwork corner radius",
+                    value = settings.thumbnailCornerRadius,
+                    range = 0..48,
+                    onValueChange = settingsViewModel::setThumbnailCornerRadius,
+                    enabled = !settings.hidePlayerThumbnail && !settings.rotatingThumbnailAnimation,
+                    valueLabel = { "$it dp" },
+                )
+            }
+            PreferenceGroup(title = "Progress and controls") {
+                SliderStylePreference(
+                    selected = settings.playerSliderStyle,
+                    onSelect = settingsViewModel::setPlayerSliderStyle,
                 )
                 ListPreference(
                     title = "Button colour",
@@ -131,13 +164,10 @@ fun PlayerSettingsScreen(
                     label = { it.label },
                     onSelect = settingsViewModel::setPlayerButtonColor,
                 )
-                SliderStylePreference(
-                    selected = settings.playerSliderStyle,
-                    onSelect = settingsViewModel::setPlayerSliderStyle,
-                )
                 ListPreference(
                     title = "Transport button style",
-                    subtitle = "Wheel spins while playing; Pill joins prev/play/next into one shape.",
+                    subtitle = "Control shape and motion",
+                    icon = Icons.Default.SkipNext,
                     selected = settings.playerTransportStyle,
                     options = PlayerTransportStyle.entries.toList(),
                     label = { it.label },
@@ -150,21 +180,6 @@ fun PlayerSettingsScreen(
                     checked = settings.swipeToChangeSongEnabled,
                     onCheckedChange = settingsViewModel::setSwipeToChangeSong,
                 )
-                SliderPreference(
-                    title = "Artwork corner radius",
-                    value = settings.thumbnailCornerRadius,
-                    range = 0..48,
-                    onValueChange = settingsViewModel::setThumbnailCornerRadius,
-                    enabled = !settings.hidePlayerThumbnail,
-                    valueLabel = { "$it dp" },
-                )
-                SwitchPreference(
-                    title = "Show comment button",
-                    subtitle = "Adds a shortcut to the track's comments on Now Playing.",
-                    icon = Icons.Default.Comment,
-                    checked = settings.showCommentButton,
-                    onCheckedChange = settingsViewModel::setShowCommentButton,
-                )
                 SwitchPreference(
                     title = "Show codec info",
                     subtitle = "Displays the audio format/bitrate on Now Playing.",
@@ -172,12 +187,12 @@ fun PlayerSettingsScreen(
                     checked = settings.showCodecInfo,
                     onCheckedChange = settingsViewModel::setShowCodecInfo,
                 )
-                SliderPreference(
-                    title = "Mini-player swipe sensitivity",
-                    value = settings.miniPlayerSwipeSensitivity,
-                    range = 10..100,
-                    onValueChange = settingsViewModel::setMiniPlayerSwipeSensitivity,
-                    valueLabel = { "$it%" },
+            }
+            PreferenceGroup(title = "Reset") {
+                ActionPreference(
+                    title = "Reset player appearance",
+                    subtitle = "Restore artwork, background, progress and button defaults.",
+                    onClick = settingsViewModel::resetPlayer,
                 )
             }
         }
@@ -199,26 +214,29 @@ private fun SliderStylePreference(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .settingsFocusTarget("Progress bar style")
             .clickable { showPicker = true }
             .padding(horizontal = 20.dp, vertical = 14.dp)
             .testTag("player_slider_style_row"),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Icon(
-            imageVector = Icons.Default.Waves,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(end = 16.dp),
-        )
+        Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.surfaceVariant,
+            RoundedCornerShape(com.example.ui.theme.MuseFlowShapes.control)),
+            contentAlignment = Alignment.Center) {
+            Icon(Icons.Default.Waves, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(text = "Progress bar style", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
             Text(
-                text = "Wavy and Squiggly animate while audio is playing.",
+                text = selected.label,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.primary,
             )
         }
-        Text(text = selected.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 
     if (showPicker) {
@@ -247,7 +265,8 @@ private fun SliderStylePickerSheet(
         sheetState = sheetState,
         dragHandle = { BottomSheetDefaults.DragHandle() },
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        shape = RoundedCornerShape(topStart = com.example.ui.theme.MuseFlowShapes.sheet,
+            topEnd = com.example.ui.theme.MuseFlowShapes.sheet),
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(bottom = 32.dp)) {
             Text(
@@ -330,12 +349,12 @@ private fun SliderStylePreviewCell(
                         playing = true,
                         activeColor = MaterialTheme.colorScheme.primary,
                         inactiveColor = MaterialTheme.colorScheme.outlineVariant,
-                        visibleCycles = 3f,
-                        phaseDurationMs = 1400,
+                        visibleCycles = 4f,
+                        phaseDurationMs = 3200,
                         interactive = false,
                         pillThumb = true,
                     )
-                    PlayerSliderStyle.Wavy -> SquigglySlider(
+                    PlayerSliderStyle.Wavy -> WavySeekBar(
                         progress = 0.4f,
                         onSeek = {},
                         playing = true,
@@ -343,16 +362,10 @@ private fun SliderStylePreviewCell(
                         inactiveColor = MaterialTheme.colorScheme.outlineVariant,
                         interactive = false,
                     )
-                    PlayerSliderStyle.Slim -> Slider(
-                        value = 0.4f,
-                        onValueChange = {},
-                        enabled = false,
-                        colors = SliderDefaults.colors(
-                            disabledThumbColor = MaterialTheme.colorScheme.primary,
-                            disabledActiveTrackColor = MaterialTheme.colorScheme.primary,
-                            disabledInactiveTrackColor = MaterialTheme.colorScheme.outlineVariant,
-                        ),
-                        modifier = Modifier.fillMaxWidth().height(20.dp),
+                    PlayerSliderStyle.Slim -> SlimSeekBar(
+                        progress = .4f, onSeek = {}, interactive = false,
+                        activeColor = MaterialTheme.colorScheme.primary,
+                        inactiveColor = MaterialTheme.colorScheme.outlineVariant,
                     )
                     PlayerSliderStyle.Default -> Slider(
                         value = 0.4f,
