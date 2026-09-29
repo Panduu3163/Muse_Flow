@@ -40,9 +40,9 @@ MuseFlow brings streaming, offline downloads, local songs, synchronized lyrics, 
 
 ## Screenshots
 
-Device screenshots for the current beta will be added here. The gallery is prepared for Home, Library, Lyrics, MuseChart, and two Player views.
 
-<!-- Replace the sentence above with this gallery after adding the named images.
+
+
 <table>
   <tr>
     <td align="center"><strong>Home</strong><br><br><img src="docs/screenshots/Home.jpg" alt="MuseFlow Home screen" width="220"></td>
@@ -55,7 +55,7 @@ Device screenshots for the current beta will be added here. The gallery is prepa
     <td align="center"><strong>Library</strong><br><br><img src="docs/screenshots/Library.jpg" alt="MuseFlow Library screen" width="220"></td>
   </tr>
 </table>
--->
+
 
 ---
 
