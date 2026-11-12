@@ -1,0 +1,47 @@
+title = "MuseFlow credential scanning"
+
+[extend]
+useDefault = true
+
+# Rule-scoped AND exceptions preserve detection of other secrets in these files.
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Reviewed public constant or historical documentation phrase"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^(?:innertube/src/main/kotlin/com/music/innertube/InnerTube\.kt|\.gitleaks\.toml)$''']
+regexes = ['''^AIzaSyC9XL3ZjWddXya6X74dJoCTL\-WEYFDNX3$''']
+
+[[rules.allowlists]]
+description = "Reviewed public constant or historical documentation phrase"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^(?:README\.md|\.gitleaks\.toml)$''']
+regexes = ['''^signature/cipher$''']
+
+[[rules.allowlists]]
+description = "Reviewed public constant or historical documentation phrase"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^(?:app/src/main/java/com/example/ytcipher/potoken/PoTokenWebView\.kt|\.gitleaks\.toml)$''']
+regexes = ['''^O43z0dpjhgX20SCx4KAo$''']
+
+
+[[rules.allowlists]]
+description = "Reviewed public constant or historical documentation phrase"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^(?:app/src/main/java/com/example/ytcipher/potoken/PoTokenWebView\.kt|\.gitleaks\.toml)$''']
+regexes = ['''^AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw$''']
+[[rules]]
+id = "gcp-api-key"
+
+[[rules.allowlists]]
+description = "Reviewed public constant or historical documentation phrase"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^(?:app/src/main/java/com/example/ytcipher/potoken/PoTokenWebView\.kt|\.gitleaks\.toml)$''']
+regexes = ['''^AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw$''']

@@ -13,7 +13,7 @@ private const val TAG = "AudioTagger"
  *
  * jaudiotagger identifies a file's format by its extension, not its content, so this works
  * against a temporary copy named with the right extension rather than [DownloadRepository]'s
- * actual `$key.audio` on-disk convention, then copies the tagged bytes back over the original -
+ * actual `$key.audio` on-disk convention, then atomically replaces the original with the tagged copy -
  * every part of the app that reads a download's `filePath` keeps working unmodified. Fails
  * completely silently (logged, not thrown) on any error: a tagging failure must never break or
  * corrupt an otherwise-successful download, which is why the original file is only ever
@@ -23,11 +23,13 @@ object AudioTagger {
 
     fun embedIfSupported(targetFile: File, contentType: String?, track: Track, coverArtBytes: ByteArray?) {
         val extension = audioTagFileExtensionFor(contentType) ?: return
+        // Tagging is optional. Keep room for its working copy and atomic replacement staging.
+        if (targetFile.length() > ((targetFile.parentFile?.usableSpace ?: 0) - 16L * 1024 * 1024) / 2) return
         val workingFile = File(targetFile.parentFile, "${targetFile.name}$extension")
         runCatching {
             targetFile.copyTo(workingFile, overwrite = true)
             writeTags(workingFile, track, coverArtBytes)
-            workingFile.copyTo(targetFile, overwrite = true)
+            promoteTaggedAudio(workingFile, targetFile)
         }.onFailure { Log.w(TAG, "tag embed failed for \"${track.title}\"", it) }
         workingFile.delete()
     }
@@ -54,4 +56,11 @@ object AudioTagger {
 
         audioFile.commit()
     }
+}
+
+/** A failed staged replacement restores the original bytes rather than leaving a partial copy. */
+internal fun promoteTaggedAudio(working: File, target: File) {
+    check(working.parentFile?.canonicalFile != null && working.parentFile?.canonicalFile == target.parentFile?.canonicalFile && working.isFile && working.length() > 0)
+    java.io.FileOutputStream(working, true).use { it.fd.sync() }
+    replaceFileAtomically(working, target)
 }

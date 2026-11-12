@@ -64,12 +64,11 @@ object SearchPage {
                                 id = it.navigationEndpoint?.browseEndpoint?.browseId!!,
                             )
                         },
-                    duration =
-                        secondaryLine
-                            .lastOrNull()
-                            ?.firstOrNull()
-                            ?.text
-                            ?.parseTime(),
+                    duration = secondaryLine.asSequence().flatMap { it.asSequence() }
+                        .mapNotNull { it.text.parseTime() }.firstOrNull()
+                        ?: renderer.fixedColumns?.firstOrNull()
+                            ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs
+                            ?.firstOrNull()?.text?.parseTime(),
                     musicVideoType = renderer.musicVideoType,
                     thumbnail = renderer.thumbnail?.musicThumbnailRenderer?.getThumbnailUrl() ?: return null,
                     explicit =

@@ -1,5 +1,7 @@
 package com.example.ui.component
 
+import com.example.ui.utils.MotionLabel
+import com.example.ui.utils.MicroIconButton
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -19,7 +21,6 @@ import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -60,11 +61,11 @@ fun TrackSelectionBar(
     onAddToPlaylist: () -> Unit,
     onToggleLike: () -> Unit,
     onDownload: () -> Unit,
+    modifier: Modifier = Modifier,
     /** Absent unless at least one selected track has a completed download to delete. */
     onDeleteDownloads: (() -> Unit)? = null,
     /** Absent outside a playlist that owns the rows - the same rule the single-track sheet uses. */
     onRemoveFromPlaylist: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
 ) {
     var overflowOpen by remember { mutableStateOf(false) }
 
@@ -79,7 +80,7 @@ fun TrackSelectionBar(
                 .testTag("selection_bar"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(
+            MicroIconButton(
                 onClick = onClearSelection,
                 modifier = Modifier.testTag("selection_clear"),
             ) {
@@ -97,7 +98,7 @@ fun TrackSelectionBar(
                 testTag = "selection_select_all",
             )
 
-            Text(
+            MotionLabel(
                 text = "$selectedCount selected",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -116,6 +117,7 @@ fun TrackSelectionBar(
 
             DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
                 DropdownMenuItem(
+                    enabled = selectedCount > 0,
                     text = { Text("Play next") },
                     leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, contentDescription = null) },
                     onClick = {
@@ -125,6 +127,7 @@ fun TrackSelectionBar(
                     modifier = Modifier.testTag("selection_play_next"),
                 )
                 DropdownMenuItem(
+                    enabled = selectedCount > 0,
                     text = { Text("Add to queue") },
                     leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null) },
                     onClick = {
@@ -134,6 +137,7 @@ fun TrackSelectionBar(
                     modifier = Modifier.testTag("selection_add_to_queue"),
                 )
                 DropdownMenuItem(
+                    enabled = selectedCount > 0,
                     text = { Text("Add to playlist") },
                     leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) },
                     onClick = {
@@ -143,6 +147,7 @@ fun TrackSelectionBar(
                     modifier = Modifier.testTag("selection_add_to_playlist"),
                 )
                 DropdownMenuItem(
+                    enabled = selectedCount > 0,
                     text = { Text(if (allLiked) "Remove from Liked" else "Add to Liked") },
                     leadingIcon = {
                         Icon(
@@ -157,6 +162,7 @@ fun TrackSelectionBar(
                     modifier = Modifier.testTag("selection_like"),
                 )
                 DropdownMenuItem(
+                    enabled = selectedCount > 0,
                     text = { Text("Download") },
                     leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
                     onClick = {
@@ -167,6 +173,7 @@ fun TrackSelectionBar(
                 )
                 onDeleteDownloads?.let { deleteDownloads ->
                     DropdownMenuItem(
+                        enabled = selectedCount > 0,
                         text = { Text("Delete downloads") },
                         leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
                         onClick = {
@@ -178,6 +185,7 @@ fun TrackSelectionBar(
                 }
                 onRemoveFromPlaylist?.let { removeFromPlaylist ->
                     DropdownMenuItem(
+                        enabled = selectedCount > 0,
                         text = { Text("Remove from this playlist") },
                         leadingIcon = { Icon(Icons.Default.PlaylistRemove, contentDescription = null) },
                         onClick = {
@@ -199,7 +207,7 @@ private fun BarAction(
     onClick: () -> Unit,
     testTag: String,
 ) {
-    IconButton(onClick = onClick, modifier = Modifier.testTag(testTag)) {
+    MicroIconButton(onClick = onClick, modifier = Modifier.testTag(testTag)) {
         Icon(
             imageVector = icon,
             contentDescription = label,

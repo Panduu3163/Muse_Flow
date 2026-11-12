@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.utils.MicroIconButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,12 +17,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,13 +37,15 @@ import com.example.PlayerViewModel
 import com.example.Track
 import com.example.TrackActionsViewModel
 import com.example.TrackResult
+import com.example.downloadKey
+import com.example.playbackId
 import com.example.ui.component.TrackActionsHost
 import com.example.ui.component.TrackRow
 import com.example.ui.component.TrackSelectionHost
 import com.example.ui.component.rememberTrackSelection
 
 /**
- * Everything played, newest first, grouped by day.
+ * Every recorded play, newest first, grouped by day. Pre-event-log history remains aggregated.
  *
  * Distinct from Library's "Recent" tile, which is a capped, sortable slice of the same table meant
  * for getting back to something quickly. This is the full record, so it's the place that can also
@@ -54,13 +56,17 @@ fun HistoryScreen(
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit,
     playerViewModel: PlayerViewModel,
     onBack: () -> Unit,
+    modifier: Modifier = Modifier,
     onGoToArtist: (String) -> Unit = {},
     onGoToAlbum: (String) -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val viewModel: HistoryViewModel = viewModel()
     val actionsViewModel: TrackActionsViewModel = viewModel()
-    val days by viewModel.days.collectAsState()
+    // Drives the "now playing" equalizer badge on whichever row matches - see TrackRow's own doc.
+    val nowPlayingState by playerViewModel.state.collectAsStateWithLifecycle()
+    val days by viewModel.days.collectAsStateWithLifecycle()
+    val query by viewModel.query.collectAsStateWithLifecycle()
+    val source by viewModel.source.collectAsStateWithLifecycle()
     val selection = rememberTrackSelection()
     var confirmingClear by remember { mutableStateOf(false) }
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
@@ -69,6 +75,7 @@ fun HistoryScreen(
     // what followed it rather than stopping at that day's boundary.
     val allTracks = remember(days) { days.flatMap { day -> day.entries.map { it.track } } }
     val allResults = remember(allTracks) { allTracks.map { it.asTrackResult() } }
+    androidx.compose.runtime.LaunchedEffect(allResults) { selection.clear() }
 
     // Rows are drawn per day but selected against the flat list, so each day's rows need to know
     // where they start in it. Computed once here rather than per row, which would be quadratic.
@@ -77,6 +84,20 @@ fun HistoryScreen(
     }
 
     Column(modifier = modifier.fillMaxSize().statusBarsPadding().testTag("history_screen")) {
+        androidx.compose.material3.OutlinedTextField(
+            value = query, onValueChange = { viewModel.query.value = it },
+            placeholder = { Text("Search listening history") }, singleLine = true,
+            shape = androidx.compose.foundation.shape.CircleShape,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+        )
+        Row(Modifier.padding(horizontal = 24.dp)) {
+            listOf("All", "Online", "Local").forEach { label ->
+                androidx.compose.material3.FilterChip(selected = source == label,
+                    onClick = { viewModel.source.value = label; selection.clear() },
+                    label = { Text(label) }, modifier = Modifier.padding(end = 8.dp),
+                    shape = androidx.compose.foundation.shape.CircleShape)
+            }
+        }
         TrackSelectionHost(
             selection = selection,
             tracks = allResults,
@@ -84,10 +105,10 @@ fun HistoryScreen(
             actionsViewModel = actionsViewModel,
         )
 
-        LazyColumn(contentPadding = PaddingValues(bottom = 140.dp)) {
+        LazyColumn(state = com.example.rememberRestoredLazyListState("history:$query:$source", days.isNotEmpty()), contentPadding = PaddingValues(bottom = 200.dp)) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("history_back")) {
+                    MicroIconButton(onClick = onBack, modifier = Modifier.testTag("history_back")) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
@@ -101,7 +122,7 @@ fun HistoryScreen(
                         modifier = Modifier.weight(1f),
                     )
                     if (days.isNotEmpty()) {
-                        IconButton(
+                        MicroIconButton(
                             onClick = { confirmingClear = true },
                             modifier = Modifier.testTag("history_clear"),
                         ) {
@@ -156,7 +177,11 @@ fun HistoryScreen(
                             if (selection.active) {
                                 selection.toggle(flatIndex)
                             } else {
-                                onPlayTrack(track.asTrackResult(), allResults)
+                                // Each history row is a play event. Start with this event's
+                                // track and keep later rows in order, without repeated media IDs
+                                // that would otherwise make PlayerViewModel select the first
+                                // occurrence of a different event.
+                                onPlayTrack(track.asTrackResult(), allResults.drop(flatIndex).distinctBy { it.id })
                             }
                         },
                         onLongClick = {
@@ -172,6 +197,7 @@ fun HistoryScreen(
                         onOpenMenu = if (selection.active) null else {
                             { selectedTrack = track.asTrackResult() }
                         },
+                        isPlaying = track.playbackId() == nowPlayingState.currentPlaybackId,
                     )
                 }
             }

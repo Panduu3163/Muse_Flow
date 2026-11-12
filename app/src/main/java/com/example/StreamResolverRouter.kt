@@ -22,20 +22,25 @@ private const val TAG = "StreamResolverRouter"
  * genuinely broken extractor is cheap to escape from without hiding the breakage first.
  */
 object StreamResolverRouter {
+    private val resolutions = StreamResolutionMemoryCache()
 
     /**
      * Resolves to a URL **plus the User-Agent it must be fetched with** - YouTube's CDN answers
      * 403 when a stream URL is requested with a different User-Agent than the client that
      * resolved it, so the two can't be separated.
      */
-    suspend fun resolve(context: Context, videoId: String): StreamResolution? {
+    suspend fun resolve(context: Context, videoId: String,
+                        qualityOverride: AudioQualityMode? = null): StreamResolution? {
         val backend = activeBackend(context)
-        val url = when (backend) {
-            ExtractorBackend.INNERTUBE -> InnerTubeStreamResolver.resolve(videoId)
+        val quality = qualityOverride ?: runCatching {
+            AppSettingsRepository(context).state.first().audioQualityMode
+        }.getOrDefault(AudioQualityMode.BestAvailable)
+        val url = resolutions.resolve(StreamResolutionKey(videoId, backend, quality)) { when (backend) {
+            ExtractorBackend.INNERTUBE -> InnerTubeStreamResolver.resolve(videoId, quality)
             // The legacy pipeline's URLs are resolved with the default User-Agent already.
             ExtractorBackend.LEGACY ->
-                YouTubeStreamResolver.resolve(context, videoId)?.let { StreamResolution(url = it) }
-        }
+                YouTubeStreamResolver.resolve(context, videoId, quality)?.let { StreamResolution(url = it) }
+        } }
 
         if (url == null) {
             Log.w(
@@ -47,9 +52,11 @@ object StreamResolverRouter {
         return url
     }
 
-    /** Clears any cached resolution for [videoId] so a failed playback re-resolves from scratch.
-     * Only the legacy resolver caches; the InnerTube path resolves fresh each time. */
-    fun invalidate(videoId: String) = YouTubeStreamResolver.invalidate(videoId)
+    /** Both backends discard warmed resolutions on an explicit retry/refetch or playback error. */
+    fun invalidate(videoId: String) {
+        resolutions.invalidate(videoId)
+        YouTubeStreamResolver.invalidate(videoId)
+    }
 
     suspend fun activeBackend(context: Context): ExtractorBackend =
         runCatching { ExtractorPreference.observe(context).first() }

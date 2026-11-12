@@ -47,7 +47,11 @@ object ArtistReleaseNotificationHelper {
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
-        NotificationManagerCompat.from(context).notify(notificationId(artistId), notification)
+        try {
+            NotificationManagerCompat.from(context).notify(notificationId(artistId), notification)
+        } catch (_: SecurityException) {
+            // The user may revoke notification permission after the check above.
+        }
     }
 
     private fun hasPermission(context: Context): Boolean =

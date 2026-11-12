@@ -1,12 +1,16 @@
 package com.example
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.music.innertube.models.upgradeThumbnailSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Records every track that actually starts playing, so Home's "Recently Played" shelf can be
@@ -17,8 +21,28 @@ import kotlinx.coroutines.launch
  */
 class PlaybackHistoryRepository private constructor(context: Context) {
 
-    private val dao = MuseFlowDatabase.getInstance(context.applicationContext).playbackHistoryDao()
+    private val database = MuseFlowDatabase.getInstance(context.applicationContext)
+    private val dao = database.playbackHistoryDao()
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val writes = Mutex()
+    private val epoch = AtomicLong(0)
+    internal val generation: Long get() = epoch.get()
+
+    fun observeListeningSessions(): Flow<List<ListeningSessionEntity>> = dao.observeListeningSessions()
+
+    internal fun recordListeningSession(session: ListeningSessionEntity, generation: Long) {
+        repositoryScope.launch { writes.withLock {
+            if (generation != epoch.get()) return@withLock
+            database.withTransaction {
+                val previous = dao.listeningSession(session.id)
+                if (previous == null || session.listenedMs > previous.listenedMs ||
+                    (session.listenedMs == previous.listenedMs && previous.outcome == ListeningOutcome.OPEN.name)) {
+                    dao.saveListeningSession(session)
+                }
+                dao.trimListeningSessions()
+            }
+        } }
+    }
 
     fun observeRecent(limit: Int): Flow<List<PlaybackHistoryEntity>> = dao.observeRecent(limit)
 
@@ -27,22 +51,36 @@ class PlaybackHistoryRepository private constructor(context: Context) {
 
     /** Everything, for the History screen. */
     fun observeAll(): Flow<List<PlaybackHistoryEntity>> = dao.observeAll()
+    fun observeEvents(): Flow<List<PlaybackEventEntity>> = dao.observeEvents()
 
     /** Forgets one track. Its [Track.downloadKey] is the row's identity, the same key
      * [recordPlayed] writes under. */
     fun forget(track: Track) {
-        repositoryScope.launch { dao.deleteByKey(track.downloadKey()) }
+        epoch.incrementAndGet()
+        repositoryScope.launch { writes.withLock { database.withTransaction {
+            dao.deleteListeningSessions(track.downloadKey())
+            dao.deleteEvents(track.downloadKey())
+            dao.deleteByKey(track.downloadKey())
+        } } }
     }
 
     /** Forgets everything. Home's shelves and Library's Top 50 empty out with it - they are views
      * onto this one table, not separate records. */
     fun clear() {
-        repositoryScope.launch { dao.clearAll() }
+        epoch.incrementAndGet()
+        repositoryScope.launch { writes.withLock { database.withTransaction {
+            dao.clearListeningSessions(); dao.clearEvents(); dao.clearAll()
+        } } }
     }
 
     fun recordPlayed(track: Track) {
-        repositoryScope.launch {
+        val generation = epoch.get()
+        repositoryScope.launch { writes.withLock {
+          if (generation != epoch.get()) return@withLock
+          database.withTransaction {
             val key = track.downloadKey()
+            val now = System.currentTimeMillis()
+            dao.insertEvent(PlaybackEventEntity(trackKey = key, playedAt = now))
             // Increments the existing row's playCount rather than a plain REPLACE overwrite, so
             // "My Top 50" reflects how often a track has actually been played, not just whether
             // it's ever been played once.
@@ -57,15 +95,16 @@ class PlaybackHistoryRepository private constructor(context: Context) {
                     gradientIndex = track.gradientIndex,
                     imageUrl = track.imageUrl,
                     streamUrl = track.streamUrl,
-                    playedAt = System.currentTimeMillis(),
+                    playedAt = now,
                     sourceId = track.sourceId,
                     sourceType = track.sourceType?.name,
-                    playCount = existingCount + 1,
+                    playCount = (existingCount.toLong().coerceAtLeast(0) + 1).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
                     albumId = track.albumId,
                     artistId = track.artistId,
                 )
             )
-        }
+          }
+        } }
     }
 
     companion object {

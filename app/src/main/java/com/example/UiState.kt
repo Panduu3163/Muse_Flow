@@ -3,6 +3,9 @@ package com.example
 import android.util.Log
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 private const val TAG = "UiState"
 
@@ -31,8 +34,11 @@ suspend fun <T> loadAsUiState(
 ): UiState<T> = try {
     UiState.Success(withTimeout(timeoutMs) { block() })
 } catch (e: TimeoutCancellationException) {
+    currentCoroutineContext().ensureActive()
     Log.w(TAG, "Timed out after ${timeoutMs}ms: $errorMessage", e)
     UiState.Error(errorMessage)
+} catch (e: CancellationException) {
+    throw e
 } catch (e: Exception) {
     Log.e(TAG, "Failed: $errorMessage", e)
     UiState.Error(errorMessage)

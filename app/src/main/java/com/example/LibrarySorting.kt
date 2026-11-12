@@ -4,9 +4,10 @@ package com.example
  * whichever order the underlying query already returns (most recently liked/downloaded/played
  * first, depending on the section), not a client-side sort of its own. */
 enum class TrackSortOption(val label: String) {
-    DEFAULT("Default"),
-    TITLE("Title"),
-    ARTIST("Artist")
+    DEFAULT("Date added"),
+    TITLE("Name"),
+    ARTIST("Artist"),
+    DURATION("Play time"),
 }
 
 fun List<Track>.sortedByLibraryOption(option: TrackSortOption, ascending: Boolean): List<Track> {
@@ -14,6 +15,7 @@ fun List<Track>.sortedByLibraryOption(option: TrackSortOption, ascending: Boolea
     val comparator = when (option) {
         TrackSortOption.TITLE -> compareBy<Track> { it.title.lowercase() }
         TrackSortOption.ARTIST -> compareBy<Track> { it.artist.lowercase() }
+        TrackSortOption.DURATION -> compareBy<Track> { parseDurationToSeconds(it.duration) }
         TrackSortOption.DEFAULT -> return this
     }
     return if (ascending) sortedWith(comparator) else sortedWith(comparator.reversed())
@@ -44,25 +46,38 @@ fun List<PlaylistEntity>.sortedByLibraryOption(option: PlaylistSortOption, ascen
     return pinned.sortedWith(comparator) + rest.sortedWith(comparator)
 }
 
-/**
- * Sums [Track.duration] ("m:ss" strings) into a human label - "2 hr 14 min" past an hour, "14 min"
- * under one, "Less than a minute" for a handful of very short tracks. A track whose duration
- * didn't parse contributes zero rather than throwing or dropping the whole total.
- */
-fun List<Track>.totalDurationLabel(): String {
-    val totalSeconds = sumOf { track ->
-        val parts = track.duration.split(":")
-        val minutes = parts.getOrNull(0)?.toIntOrNull() ?: 0
-        val seconds = parts.getOrNull(1)?.toIntOrNull() ?: 0
-        minutes * 60 + seconds
+/** Summarizes known durations without presenting missing metadata as zero play time. */
+fun List<Track>.totalDurationLabel(): String = durationSummaryLabel(map { it.duration })
+
+internal fun durationSummaryLabel(durations: Iterable<String?>): String {
+    var count = 0
+    var known = 0
+    var totalSeconds = 0L
+    for (duration in durations) {
+        count++
+        val parts = duration?.trim()?.split(":").orEmpty()
+        if (parts.size !in 2..3 || parts.any { it.isEmpty() || it.any { c -> c !in '0'..'9' } }) continue
+        val values = parts.map { it.toLongOrNull() }
+        if (values.any { it == null } || values.last()!! > 59L ||
+            (parts.size == 3 && values[1]!! > 59L)) continue
+        val seconds = try {
+            values.fold(0L) { value, part -> Math.addExact(Math.multiplyExact(value, 60L), part!!) }
+        } catch (_: ArithmeticException) { continue }
+        totalSeconds = try { Math.addExact(totalSeconds, seconds) }
+            catch (_: ArithmeticException) { return "Duration unavailable" }
+        known++
     }
+    if (count == 0) return "0 min"
+    if (known == 0) return "Duration unavailable"
     val totalMinutes = totalSeconds / 60
     val hours = totalMinutes / 60
     val minutes = totalMinutes % 60
-    return when {
+    val label = when {
         hours > 0 && minutes > 0 -> "$hours hr $minutes min"
         hours > 0 -> "$hours hr"
         minutes > 0 -> "$minutes min"
+        known < count -> "$totalSeconds sec"
         else -> "Less than a minute"
     }
+    return if (known < count) "At least $label" else label
 }

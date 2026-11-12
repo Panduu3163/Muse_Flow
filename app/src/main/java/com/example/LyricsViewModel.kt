@@ -7,56 +7,139 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 
 /**
  * Fetches lyrics for whatever is playing.
  *
- * Three providers are tried in order: LRCLib first (it returns real line-by-line LRC timing, which
- * is what makes a scrolling view possible), then BetterLyrics (word-level KRC timing), then
- * YouTube Music's own lyrics tab as a last resort - it has no timing at all, only plain text, so
- * it's worse than either synced source but still better than "no lyrics found". A provider that
- * returns [LyricsResult.NotFound] is not treated as a failure - the next one is simply tried, and
- * only a genuine miss from all of them surfaces as "no lyrics".
+ * Six network providers - YouLyPlus, PaxSenix, BetterLyrics, SimpMusic, LRCLib, Kugou - are queried
+ * concurrently and equal-quality results respect the user's order (see
+ * [AppSettingsState.lyricsProviderOrder], reorderable from
+ * Settings > Lyrics > "Lyrics provider order"), with YouTube Music's own lyrics tab always tried
+ * last regardless of that order - it has no timing at all, only plain text, so it's strictly worse
+ * than any synced source and only worth reaching for once everything else has failed. A provider
+ * that returns [LyricsResult.NotFound] is not treated as a failure - the next one is simply tried,
+ * and only a genuine miss from all of them surfaces as "no lyrics".
  *
- * Results are cached per track for the session, so scrolling in and out of the lyrics view or
- * pausing doesn't refetch.
+ * Successful results are cached per track in memory and on disk, so offline reopen and
+ * scrolling in and out of the lyrics view do not refetch.
  */
 class LyricsViewModel(application: Application) : AndroidViewModel(application) {
 
+    private data class Request(val title: String, val artist: String, val durationSeconds: Int?, val videoId: String?)
+    private data class CacheKey(
+        val title: String,
+        val artist: String,
+        val durationSeconds: Int?,
+        val videoId: String?,
+        val provider: LyricsProviderId?,
+    )
+
     private val lrcLib = LrcLibProvider()
     private val betterLyrics = BetterLyricsProvider()
+    private val youLyPlus = YouLyPlusProvider()
+    private val paxSenix = PaxSenixProvider()
+    private val simpMusic = SimpMusicProvider()
+    private val kugou = KugouLyricsProvider()
     private val router = MusicSearchRouter(application)
+    private val settingsRepository = AppSettingsRepository(application)
+    private val diskCache = LyricsCacheStore(application)
 
     private val _state = MutableStateFlow<LyricsResult?>(null)
     val state: StateFlow<LyricsResult?> = _state.asStateFlow()
 
-    private val cache = mutableMapOf<String, LyricsResult>()
+    private val _selectedProvider = MutableStateFlow<LyricsProviderId?>(null)
+    val selectedProvider: StateFlow<LyricsProviderId?> = _selectedProvider.asStateFlow()
+    private val _resultSource = MutableStateFlow<String?>(null)
+    val resultSource: StateFlow<String?> = _resultSource.asStateFlow()
+
+    private val cache = LinkedHashMap<CacheKey, LyricsLookup>()
     private var loadJob: Job? = null
-    private var loadedKey: String? = null
+    private var loadedKey: CacheKey? = null
+    private var lastRequest: Request? = null
+
+    private fun cacheKey(request: Request) = CacheKey(
+        request.title.trim().lowercase(), request.artist.trim().lowercase(),
+        request.durationSeconds, request.videoId, _selectedProvider.value,
+    )
+
+    private fun diskKey(key: CacheKey): String = JSONArray()
+        .put(key.title).put(key.artist).put(key.durationSeconds).put(key.videoId)
+        .put(key.provider?.name).toString()
 
     /** Loads lyrics for [title]/[artist], reusing the cached result when the track hasn't changed.
      * [videoId], when supplied, must already be a confirmed real YouTube video id (see
      * [hasRealVideoId]) - the caller's job, since a fabricated "title|artist" stand-in id would
      * otherwise reach [MusicSearchRouter.getLyricsText] and resolve to nothing. */
     fun load(title: String, artist: String, durationSeconds: Int?, videoId: String? = null) {
-        if (title.isBlank()) return
-        val key = "${title.trim().lowercase()}::${artist.trim().lowercase()}"
+        if (title.isBlank()) {
+            lastRequest = null
+            clear()
+            return
+        }
+        val request = Request(title, artist, durationSeconds, videoId)
+        lastRequest = request
+        val key = cacheKey(request)
         if (key == loadedKey) return
 
         loadedKey = key
+        loadJob?.cancel()
         cache[key]?.let {
-            _state.value = it
+            _state.value = it.result
+            _resultSource.value = it.source
             return
         }
 
-        loadJob?.cancel()
         _state.value = null // null = loading, distinct from NotFound
+        _resultSource.value = null
         loadJob = viewModelScope.launch {
-            val result = fetchFirstUsable(title, artist, durationSeconds, videoId)
-            cache[key] = result
+            diskCache.get(diskKey(key))?.let { saved ->
+                cache[key] = saved
+                if (loadedKey == key) {
+                    _state.value = saved.result
+                    _resultSource.value = saved.source
+                }
+                return@launch
+            }
+            val lookup = fetchFirstUsable(title, artist, durationSeconds, videoId, key.provider)
+            if (lookup.result !is LyricsResult.Error && lookup.result !is LyricsResult.NotFound) {
+                cache[key] = lookup
+                if (cache.size > 12) cache.remove(cache.keys.first())
+            }
             // Guard against a stale response landing after the user skipped to another track.
-            if (loadedKey == key) _state.value = result
+            if (loadedKey == key) {
+                _state.value = lookup.result
+                _resultSource.value = lookup.source
+            }
+            if (lookup.result !is LyricsResult.Error && lookup.result !is LyricsResult.NotFound) {
+                diskCache.put(diskKey(key), lookup)
+            }
+        }
+    }
+
+    /** A session-level override. Auto returns to the user's configured priority order. */
+    fun selectProvider(provider: LyricsProviderId?) {
+        if (_selectedProvider.value == provider) return
+        _selectedProvider.value = provider
+        loadedKey = null
+        lastRequest?.let { load(it.title, it.artist, it.durationSeconds, it.videoId) }
+    }
+
+    fun retry() {
+        val request = lastRequest ?: return
+        val key = cacheKey(request)
+        loadJob?.cancel()
+        cache.remove(key)
+        loadedKey = null
+        _state.value = null
+        _resultSource.value = null
+        viewModelScope.launch {
+            diskCache.remove(diskKey(key))
+            if (lastRequest == request && cacheKey(request) == key && loadedKey == null) {
+                load(request.title, request.artist, request.durationSeconds, request.videoId)
+            }
         }
     }
 
@@ -65,47 +148,52 @@ class LyricsViewModel(application: Application) : AndroidViewModel(application) 
         artist: String,
         durationSeconds: Int?,
         videoId: String?,
-    ): LyricsResult {
-        val providers = buildList<suspend () -> LyricsResult> {
-            add { lrcLib.fetchLyrics(title, artist, durationSeconds) }
-            add { betterLyrics.fetchLyrics(title, artist, durationSeconds) }
-            if (videoId != null) {
-                add {
+        selectedProvider: LyricsProviderId?,
+    ): LyricsLookup {
+        // The disk cache is checked before this point. Without a saved result, searching online
+        // providers while offline would only wait for connection timeouts.
+        if (!isOnline(getApplication())) {
+            return LyricsLookup(LyricsResult.Error("Lyrics need an internet connection. Reconnect and retry."), null)
+        }
+
+        if (selectedProvider == LyricsProviderId.SimpMusic && videoId == null) {
+            return LyricsLookup(LyricsResult.Error("SimpMusic needs a YouTube track. Choose Auto or another source."), null)
+        }
+        val order = selectedProvider?.let(::listOf) ?: settingsRepository.state.first().lyricsProviderOrder
+        val providers = buildList<LyricsSourceRequest> {
+            for (id in order) {
+                when (id) {
+                    LyricsProviderId.YouLyPlus -> add(LyricsSourceRequest(id.label) { youLyPlus.fetchLyrics(title, artist, durationSeconds) })
+                    LyricsProviderId.PaxSenix -> add(LyricsSourceRequest(id.label) { paxSenix.fetchLyrics(title, artist, durationSeconds) })
+                    LyricsProviderId.BetterLyrics -> add(LyricsSourceRequest(id.label) { betterLyrics.fetchLyrics(title, artist, durationSeconds, videoId) })
+                    // SimpMusic is keyed by YouTube video id, not title/artist search - skipped
+                    // entirely (not just "tried and NotFound") when no confirmed real id is
+                    // available, same as the YouTube tab fallback below.
+                    LyricsProviderId.SimpMusic -> if (videoId != null) {
+                        add(LyricsSourceRequest(id.label) { simpMusic.fetchLyrics(videoId, durationSeconds) })
+                    }
+                    LyricsProviderId.LrcLib -> add(LyricsSourceRequest(id.label) { lrcLib.fetchLyrics(title, artist, durationSeconds) })
+                    LyricsProviderId.Kugou -> add(LyricsSourceRequest(id.label) { kugou.fetchLyrics(title, artist, durationSeconds) })
+                }
+            }
+            // Always last, regardless of the user's configured order - see class doc.
+            if (selectedProvider == null && videoId != null) {
+                add(LyricsSourceRequest("YouTube Music") {
                     router.getLyricsText(videoId)
                         ?.takeIf { it.isNotBlank() }
                         ?.let { LyricsResult.PlainOnly(it) }
                         ?: LyricsResult.NotFound
-                }
+                })
             }
         }
-
-        // Not simply "first Synced wins": LRCLib (tried first, for its broader coverage) only
-        // ever has line-level timing, never word-level - so returning on its result immediately
-        // would mean BetterLyrics's word-level KRC data (the only source that makes karaoke word
-        // sync possible) never gets a chance to run for any track LRCLib also covers, which in
-        // practice is most of them. A synced result WITH word timing is the only thing that
-        // short-circuits the loop; a synced result without it is kept as a candidate while later
-        // providers are still tried, in case one of them has the word-level version.
-        var bestSynced: LyricsResult.Synced? = null
-        var plainFallback: LyricsResult? = null
-        for (provider in providers) {
-            when (val result = runCatching { provider() }.getOrElse { LyricsResult.NotFound }) {
-                is LyricsResult.Synced -> {
-                    if (result.lines.any { it.words != null }) return result // Best case possible.
-                    if (bestSynced == null) bestSynced = result
-                }
-                is LyricsResult.PlainOnly -> if (plainFallback == null) plainFallback = result
-                is LyricsResult.Instrumental -> return result
-                else -> Unit
-            }
-        }
-        return bestSynced ?: plainFallback ?: LyricsResult.NotFound
+        return fetchBestLyrics(providers)
     }
 
     fun clear() {
         loadJob?.cancel()
         loadedKey = null
         _state.value = null
+        _resultSource.value = null
     }
 }
 

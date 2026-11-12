@@ -26,7 +26,7 @@ class ArtistReleaseCheckWorker(context: Context, params: WorkerParameters) : Cor
         val router = MusicSearchRouter(applicationContext)
 
         for (artist in repository.getAll()) {
-            runCatching {
+            try {
                 val tracklist = router.getArtistTracklist(artist.artistId)
                 val currentIds = tracklist.tracks.map { it.id }
                 val knownIds = artist.knownTrackIds.split(",").filter { it.isNotBlank() }.toSet()
@@ -44,7 +44,9 @@ class ArtistReleaseCheckWorker(context: Context, params: WorkerParameters) : Cor
                 if (currentIds.isNotEmpty()) {
                     repository.updateKnownTrackIds(artist.artistId, currentIds.toSet())
                 }
-            }.onFailure { Log.w(TAG, "release check failed for ${artist.name}", it) }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) { Log.w(TAG, "release check failed for ${artist.name}", error) }
         }
         return Result.success()
     }
@@ -53,10 +55,13 @@ class ArtistReleaseCheckWorker(context: Context, params: WorkerParameters) : Cor
         private const val UNIQUE_WORK_NAME = "artist_release_check"
 
         fun schedule(context: Context) {
-            val request = PeriodicWorkRequestBuilder<ArtistReleaseCheckWorker>(12, TimeUnit.HOURS).build()
+            val request = PeriodicWorkRequestBuilder<ArtistReleaseCheckWorker>(12, TimeUnit.HOURS)
+                .setConstraints(androidx.work.Constraints.Builder()
+                    .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).build())
+                .build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 UNIQUE_WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP,
+                ExistingPeriodicWorkPolicy.UPDATE,
                 request
             )
         }

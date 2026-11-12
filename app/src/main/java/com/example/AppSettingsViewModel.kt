@@ -4,7 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.core.edit
+
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-private val Context.appSettingsDataStore by preferencesDataStore(name = "app_settings_prefs")
+internal val Context.appSettingsDataStore by preferencesDataStore(name = "app_settings_prefs")
 
 private object AppSettingsKeys {
     val MINI_PLAYER_BACKGROUND_STYLE = stringPreferencesKey("mini_player_background_style")
@@ -29,11 +29,13 @@ private object AppSettingsKeys {
     val CROP_ALBUM_ART = booleanPreferencesKey("crop_album_art")
     val PLAYER_BUTTON_COLOR = stringPreferencesKey("player_button_color")
     val PLAYER_SLIDER_STYLE = stringPreferencesKey("player_slider_style")
-    val SWIPE_TO_CHANGE_SONG = booleanPreferencesKey("swipe_to_change_song")
+    val PLAYER_TRANSPORT_STYLE = stringPreferencesKey("player_transport_style")
+    val SWIPE_TO_CHANGE_SONG_ENABLED = booleanPreferencesKey("swipe_to_change_song")
     val SHOW_ANIMATED_CANVAS = booleanPreferencesKey("show_animated_canvas")
     val SKIP_SILENCE = booleanPreferencesKey("skip_silence")
     val PERSISTENT_QUEUE = booleanPreferencesKey("persistent_queue")
     val PRELOAD_NEXT_TRACK = booleanPreferencesKey("preload_next_track")
+    val AUDIO_QUALITY_MODE = stringPreferencesKey("audio_quality_mode")
     val AUDIO_NORMALIZATION_ENABLED = booleanPreferencesKey("audio_normalization_enabled")
     val CROSSFADE_ENABLED = booleanPreferencesKey("crossfade_enabled")
     val CROSSFADE_DURATION_MS = intPreferencesKey("crossfade_duration_ms")
@@ -46,6 +48,7 @@ private object AppSettingsKeys {
     val SHOW_CODEC_INFO = booleanPreferencesKey("show_codec_info")
     val MINI_PLAYER_SWIPE_SENSITIVITY = intPreferencesKey("mini_player_swipe_sensitivity")
 
+    val LYRICS_PROVIDER_ORDER = stringPreferencesKey("lyrics_provider_order")
     val LYRICS_TEXT_POSITION = stringPreferencesKey("lyrics_text_position")
     val WORD_ANIMATION_STYLE = stringPreferencesKey("word_animation_style")
     val GLOWING_LYRICS_EFFECT = booleanPreferencesKey("glowing_lyrics_effect")
@@ -65,12 +68,16 @@ private object AppSettingsKeys {
     val SWIPE_SONG_TO_REMOVE_FROM_PLAYLIST = booleanPreferencesKey("swipe_song_to_remove_from_playlist")
     val GRID_CELL_SIZE = stringPreferencesKey("grid_cell_size")
     val DISPLAY_DENSITY = stringPreferencesKey("display_density")
+    val FONT_STYLE = stringPreferencesKey("font_style")
 
     val SHOW_LIKED_PLAYLIST = booleanPreferencesKey("show_liked_playlist")
     val SHOW_DOWNLOADED_PLAYLIST = booleanPreferencesKey("show_downloaded_playlist")
     val SHOW_EXPORTED_PLAYLIST = booleanPreferencesKey("show_exported_playlist")
     val SHOW_TOP_PLAYLIST = booleanPreferencesKey("show_top_playlist")
     val SHOW_CACHED_PLAYLIST = booleanPreferencesKey("show_cached_playlist")
+    val SHOW_RECENTLY_PLAYED_SHORTCUT = booleanPreferencesKey("show_recently_played_shortcut")
+
+    val DISABLE_SCREENSHOTS = booleanPreferencesKey("disable_screenshots")
 }
 
 private inline fun <reified T : Enum<T>> Preferences.enumOrDefault(
@@ -83,6 +90,7 @@ private inline fun <reified T : Enum<T>> Preferences.enumOrDefault(
 internal class AppSettingsRepository(private val context: Context) {
     val state: Flow<AppSettingsState> = context.appSettingsDataStore.data.map { prefs ->
         AppSettingsState(
+            isLoaded = true,
             miniPlayerBackgroundStyle = prefs.enumOrDefault(AppSettingsKeys.MINI_PLAYER_BACKGROUND_STYLE, BackgroundStyle.Solid),
 
             playerBackgroundStyle = prefs.enumOrDefault(AppSettingsKeys.PLAYER_BACKGROUND_STYLE, BackgroundStyle.Solid),
@@ -91,13 +99,15 @@ internal class AppSettingsRepository(private val context: Context) {
             cropAlbumArt = prefs[AppSettingsKeys.CROP_ALBUM_ART] ?: true,
             playerButtonColor = prefs.enumOrDefault(AppSettingsKeys.PLAYER_BUTTON_COLOR, PlayerButtonColorOption.Primary),
             playerSliderStyle = prefs.enumOrDefault(AppSettingsKeys.PLAYER_SLIDER_STYLE, PlayerSliderStyle.Default),
-            swipeToChangeSong = prefs[AppSettingsKeys.SWIPE_TO_CHANGE_SONG] ?: false,
+            playerTransportStyle = prefs.enumOrDefault(AppSettingsKeys.PLAYER_TRANSPORT_STYLE, PlayerTransportStyle.Static),
+            swipeToChangeSongEnabled = prefs[AppSettingsKeys.SWIPE_TO_CHANGE_SONG_ENABLED] ?: true,
             showAnimatedCanvas = prefs[AppSettingsKeys.SHOW_ANIMATED_CANVAS] ?: false,
             rotatingThumbnailAnimation = prefs[AppSettingsKeys.ROTATING_THUMBNAIL_ANIMATION] ?: false,
             showCommentButton = prefs[AppSettingsKeys.SHOW_COMMENT_BUTTON] ?: false,
             showCodecInfo = prefs[AppSettingsKeys.SHOW_CODEC_INFO] ?: false,
             miniPlayerSwipeSensitivity = prefs[AppSettingsKeys.MINI_PLAYER_SWIPE_SENSITIVITY] ?: 50,
 
+            lyricsProviderOrder = LyricsProviderId.deserialize(prefs[AppSettingsKeys.LYRICS_PROVIDER_ORDER] ?: ""),
             lyricsTextPosition = prefs.enumOrDefault(AppSettingsKeys.LYRICS_TEXT_POSITION, LyricsTextPosition.Center),
             wordAnimationStyle = prefs.enumOrDefault(AppSettingsKeys.WORD_ANIMATION_STYLE, WordAnimationStyle.Fade),
             glowingLyricsEffect = prefs[AppSettingsKeys.GLOWING_LYRICS_EFFECT] ?: false,
@@ -114,6 +124,7 @@ internal class AppSettingsRepository(private val context: Context) {
             skipSilence = prefs[AppSettingsKeys.SKIP_SILENCE] ?: false,
             persistentQueue = prefs[AppSettingsKeys.PERSISTENT_QUEUE] ?: true,
             preloadNextTrack = prefs[AppSettingsKeys.PRELOAD_NEXT_TRACK] ?: true,
+            audioQualityMode = prefs.enumOrDefault(AppSettingsKeys.AUDIO_QUALITY_MODE, AudioQualityMode.BestAvailable),
             audioNormalizationEnabled = prefs[AppSettingsKeys.AUDIO_NORMALIZATION_ENABLED] ?: false,
             crossfadeEnabled = prefs[AppSettingsKeys.CROSSFADE_ENABLED] ?: false,
             crossfadeDurationMs = prefs[AppSettingsKeys.CROSSFADE_DURATION_MS] ?: 4000,
@@ -128,30 +139,60 @@ internal class AppSettingsRepository(private val context: Context) {
             swipeSongToRemoveFromPlaylist = prefs[AppSettingsKeys.SWIPE_SONG_TO_REMOVE_FROM_PLAYLIST] ?: false,
             gridCellSize = prefs.enumOrDefault(AppSettingsKeys.GRID_CELL_SIZE, GridCellSize.Medium),
             displayDensity = prefs.enumOrDefault(AppSettingsKeys.DISPLAY_DENSITY, DisplayDensity.Comfortable),
+            fontStyle = prefs.enumOrDefault(AppSettingsKeys.FONT_STYLE, AppFontStyle.System),
 
             showLikedPlaylist = prefs[AppSettingsKeys.SHOW_LIKED_PLAYLIST] ?: true,
             showDownloadedPlaylist = prefs[AppSettingsKeys.SHOW_DOWNLOADED_PLAYLIST] ?: true,
             showExportedPlaylist = prefs[AppSettingsKeys.SHOW_EXPORTED_PLAYLIST] ?: false,
             showTopPlaylist = prefs[AppSettingsKeys.SHOW_TOP_PLAYLIST] ?: true,
-            showCachedPlaylist = prefs[AppSettingsKeys.SHOW_CACHED_PLAYLIST] ?: false
+            showCachedPlaylist = prefs[AppSettingsKeys.SHOW_CACHED_PLAYLIST] ?: false,
+            showRecentlyPlayedShortcut = prefs[AppSettingsKeys.SHOW_RECENTLY_PLAYED_SHORTCUT] ?: true,
+
+            disableScreenshots = prefs[AppSettingsKeys.DISABLE_SCREENSHOTS] ?: false
         )
     }
 
     suspend fun <T> setValue(key: Preferences.Key<T>, value: T) {
-        context.appSettingsDataStore.edit { it[key] = value }
+        context.appSettingsDataStore.portableEdit { it[key] = value }
     }
 
     suspend fun <T : Enum<T>> setEnum(key: Preferences.Key<String>, value: T) {
-        context.appSettingsDataStore.edit { it[key] = value.name }
+        context.appSettingsDataStore.portableEdit { it[key] = value.name }
+    }
+
+    suspend fun resetAppearance() {
+        context.appSettingsDataStore.portableEdit { prefs ->
+            prefs.remove(AppSettingsKeys.GRID_CELL_SIZE)
+            prefs.remove(AppSettingsKeys.DISPLAY_DENSITY)
+            prefs.remove(AppSettingsKeys.FONT_STYLE)
+        }
+    }
+
+    suspend fun resetPlayer() {
+        context.appSettingsDataStore.portableEdit { prefs ->
+            listOf(
+                AppSettingsKeys.PLAYER_BACKGROUND_STYLE,
+                AppSettingsKeys.PLAYER_BUTTON_COLOR,
+                AppSettingsKeys.PLAYER_SLIDER_STYLE,
+                AppSettingsKeys.PLAYER_TRANSPORT_STYLE,
+            ).forEach(prefs::remove)
+            prefs.remove(AppSettingsKeys.HIDE_PLAYER_THUMBNAIL)
+            prefs.remove(AppSettingsKeys.THUMBNAIL_CORNER_RADIUS)
+            prefs.remove(AppSettingsKeys.CROP_ALBUM_ART)
+            prefs.remove(AppSettingsKeys.SWIPE_TO_CHANGE_SONG_ENABLED)
+            prefs.remove(AppSettingsKeys.ROTATING_THUMBNAIL_ANIMATION)
+            prefs.remove(AppSettingsKeys.SHOW_CODEC_INFO)
+        }
+    }
+
+    suspend fun resetMiniPlayer() {
+        context.appSettingsDataStore.portableEdit { it.remove(AppSettingsKeys.MINI_PLAYER_BACKGROUND_STYLE) }
     }
 }
 
 /**
- * Single source of truth for the extra Appearance preferences (Mini-player, Player, Lyrics,
- * Misc, Auto playlists). Scoped to the hosting Activity via `viewModel()`, same pattern as
- * [ThemeViewModel], and persisted to its own DataStore Preferences file so choices survive
- * relaunch. None of these (aside from the app background theme) drive real playback/lyrics
- * behavior yet - they only hold the user's selection.
+ * Single source of truth for the app's persisted UI and playback preferences. Scoped to the
+ * hosting Activity via `viewModel()` and backed by DataStore so choices survive relaunch.
  */
 class AppSettingsViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AppSettingsRepository(application)
@@ -172,11 +213,13 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
     fun setCropAlbumArt(value: Boolean) = set(AppSettingsKeys.CROP_ALBUM_ART, value)
     fun setPlayerButtonColor(value: PlayerButtonColorOption) = setEnum(AppSettingsKeys.PLAYER_BUTTON_COLOR, value)
     fun setPlayerSliderStyle(value: PlayerSliderStyle) = setEnum(AppSettingsKeys.PLAYER_SLIDER_STYLE, value)
-    fun setSwipeToChangeSong(value: Boolean) = set(AppSettingsKeys.SWIPE_TO_CHANGE_SONG, value)
+    fun setPlayerTransportStyle(value: PlayerTransportStyle) = setEnum(AppSettingsKeys.PLAYER_TRANSPORT_STYLE, value)
+    fun setSwipeToChangeSong(value: Boolean) = set(AppSettingsKeys.SWIPE_TO_CHANGE_SONG_ENABLED, value)
     fun setShowAnimatedCanvas(value: Boolean) = set(AppSettingsKeys.SHOW_ANIMATED_CANVAS, value)
     fun setSkipSilence(value: Boolean) = set(AppSettingsKeys.SKIP_SILENCE, value)
     fun setPersistentQueue(value: Boolean) = set(AppSettingsKeys.PERSISTENT_QUEUE, value)
     fun setPreloadNextTrack(value: Boolean) = set(AppSettingsKeys.PRELOAD_NEXT_TRACK, value)
+    fun setAudioQualityMode(value: AudioQualityMode) = setEnum(AppSettingsKeys.AUDIO_QUALITY_MODE, value)
     fun setAudioNormalizationEnabled(value: Boolean) = set(AppSettingsKeys.AUDIO_NORMALIZATION_ENABLED, value)
     fun setCrossfadeEnabled(value: Boolean) = set(AppSettingsKeys.CROSSFADE_ENABLED, value)
     fun setCrossfadeDurationMs(value: Int) = set(AppSettingsKeys.CROSSFADE_DURATION_MS, value)
@@ -190,6 +233,8 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
     fun setMiniPlayerSwipeSensitivity(value: Int) = set(AppSettingsKeys.MINI_PLAYER_SWIPE_SENSITIVITY, value)
 
     // Lyrics
+    fun setLyricsProviderOrder(value: List<LyricsProviderId>) =
+        set(AppSettingsKeys.LYRICS_PROVIDER_ORDER, LyricsProviderId.serialize(value))
     fun setLyricsTextPosition(value: LyricsTextPosition) = setEnum(AppSettingsKeys.LYRICS_TEXT_POSITION, value)
     fun setWordAnimationStyle(value: WordAnimationStyle) = setEnum(AppSettingsKeys.WORD_ANIMATION_STYLE, value)
     fun setGlowingLyricsEffect(value: Boolean) = set(AppSettingsKeys.GLOWING_LYRICS_EFFECT, value)
@@ -210,6 +255,7 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
     fun setSwipeSongToRemoveFromPlaylist(value: Boolean) = set(AppSettingsKeys.SWIPE_SONG_TO_REMOVE_FROM_PLAYLIST, value)
     fun setGridCellSize(value: GridCellSize) = setEnum(AppSettingsKeys.GRID_CELL_SIZE, value)
     fun setDisplayDensity(value: DisplayDensity) = setEnum(AppSettingsKeys.DISPLAY_DENSITY, value)
+    fun setFontStyle(value: AppFontStyle) = setEnum(AppSettingsKeys.FONT_STYLE, value)
 
     // Auto playlists
     fun setShowLikedPlaylist(value: Boolean) = set(AppSettingsKeys.SHOW_LIKED_PLAYLIST, value)
@@ -217,12 +263,20 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
     fun setShowExportedPlaylist(value: Boolean) = set(AppSettingsKeys.SHOW_EXPORTED_PLAYLIST, value)
     fun setShowTopPlaylist(value: Boolean) = set(AppSettingsKeys.SHOW_TOP_PLAYLIST, value)
     fun setShowCachedPlaylist(value: Boolean) = set(AppSettingsKeys.SHOW_CACHED_PLAYLIST, value)
+    fun setShowRecentlyPlayedShortcut(value: Boolean) = set(AppSettingsKeys.SHOW_RECENTLY_PLAYED_SHORTCUT, value)
+
+    // Privacy
+    fun setDisableScreenshots(value: Boolean) = set(AppSettingsKeys.DISABLE_SCREENSHOTS, value)
+
+    fun resetAppearance() = viewModelScope.launchSettingsWrite { repository.resetAppearance() }
+    fun resetPlayer() = viewModelScope.launchSettingsWrite { repository.resetPlayer() }
+    fun resetMiniPlayer() = viewModelScope.launchSettingsWrite { repository.resetMiniPlayer() }
 
     private fun <T> set(key: Preferences.Key<T>, value: T) {
-        viewModelScope.launch { repository.setValue(key, value) }
+        viewModelScope.launchSettingsWrite { repository.setValue(key, value) }
     }
 
     private fun <T : Enum<T>> setEnum(key: Preferences.Key<String>, value: T) {
-        viewModelScope.launch { repository.setEnum(key, value) }
+        viewModelScope.launchSettingsWrite { repository.setEnum(key, value) }
     }
 }

@@ -3,12 +3,13 @@ package com.example.ui.component
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import com.example.MusicSource
 import com.example.PlayerViewModel
 import com.example.Track
 import com.example.TrackActionsViewModel
@@ -16,6 +17,8 @@ import com.example.TrackResult
 import com.example.downloadKey
 import com.example.hasRealVideoId
 import com.example.toPlayableTrack
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 /**
  * The whole track context menu - the actions sheet plus the add-to-playlist dialog it opens - as
@@ -56,28 +59,51 @@ fun TrackActionsHost(
     showQueueActions: Boolean = true,
     showLikeAction: Boolean = true,
     showDownloadAction: Boolean = true,
+    queueItemIndex: Int? = null,
     /** Present only from Now Playing's menu, folding the lyrics panel's own former menu into this
      * one - see [TrackActionsSheet]. */
     onCopyLyrics: (() -> Unit)? = null,
     onSearchLyricsOnline: (() -> Unit)? = null,
+    lyricsSourceLabel: String? = null,
+    lyricsTimingLabel: String? = null,
+    onChooseLyricsSource: (() -> Unit)? = null,
+    onAdjustLyricsTiming: (() -> Unit)? = null,
+    onShareLyricsCard: (() -> Unit)? = null,
+    onFindLyrics: (() -> Unit)? = null,
+    onEqualizer: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
-    val likedKeys by actionsViewModel.likedKeys.collectAsState()
-    val downloadedKeys by actionsViewModel.downloadedKeys.collectAsState()
-    val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsState()
-    val playlists by actionsViewModel.playlists.collectAsState()
+    val likedKeys by actionsViewModel.likedKeys.collectAsStateWithLifecycle()
+    val downloadedKeys by actionsViewModel.downloadedKeys.collectAsStateWithLifecycle()
+    val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsStateWithLifecycle()
+    val playlists by actionsViewModel.playlists.collectAsStateWithLifecycle()
+    val currentQueueIndex by remember(playerViewModel) {
+        playerViewModel.state.map { state -> state.queue.firstOrNull { it.isCurrent }?.index ?: -1 }
+            .distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = -1)
 
     // Held outside the `track != null` branch on purpose: choosing "Add to playlist" closes the
     // sheet, so this state has to outlive the selection that created it.
     var pendingPlaylistTrack by remember { mutableStateOf<Track?>(null) }
     // Same reasoning: Details opens after the sheet dismisses, not inside it.
     var detailsTrack by remember { mutableStateOf<TrackResult?>(null) }
+    var sleepDialog by remember { mutableStateOf(false) }
+    var ambient by remember { mutableStateOf(false) }
+    if (sleepDialog) {
+        val sleepRemainingMs by playerViewModel.sleepTimerRemainingMs.collectAsStateWithLifecycle()
+        SleepTimerDialog(
+            remainingMs = sleepRemainingMs,
+            onStart = { minutes -> playerViewModel.startSleepTimer(minutes); sleepDialog = false },
+            onCancel = { playerViewModel.cancelSleepTimer(); sleepDialog = false },
+            onDismiss = { sleepDialog = false },
+        )
+    }
+    if (ambient) AmbientPlayer(playerViewModel, onDismiss = { ambient = false })
 
     track?.let { selected ->
         val asTrack = selected.toPlayableTrack(selected.id.hashCode())
         val key = asTrack.downloadKey()
-        // Radio and Share are omitted unless the id is real - see [hasRealVideoId], which exists
-        // because a stored track with no sourceId still reports itself as a YouTube one.
+        // Radio needs a real video id. Sharing a local song sends its title and artist only.
         val hasVideoId = selected.hasRealVideoId()
 
         TrackActionsSheet(
@@ -86,9 +112,21 @@ fun TrackActionsHost(
             imageUrl = selected.imageUrl,
             albumLabel = selected.source,
             isLiked = likedKeys.contains(key),
+            // A local file already on the device - see TrackActionsSheet's own doc for why liking
+            // one is disabled rather than offered and broken. Still available if it's already
+            // liked from before this existed, though, so that can be undone - permanently hiding
+            // this would leave an already-liked local file stuck in Liked with no way back out.
+            likeAvailable = selected.sourceType != MusicSource.LOCAL_DEVICE || likedKeys.contains(key),
             isDownloaded = downloadedKeys.contains(key),
             downloadProgress = downloadsInProgress[key],
-            onPlayNext = { playerViewModel.playNext(selected) },
+            onPlayNext = {
+                if (queueItemIndex != null) {
+                    val currentIndex = playerViewModel.state.value.queue.firstOrNull { it.isCurrent }?.index ?: 0
+                    val targetIndex = if (queueItemIndex < currentIndex) currentIndex
+                        else (currentIndex + 1).coerceAtMost(playerViewModel.state.value.queue.lastIndex)
+                    playerViewModel.moveQueueItem(queueItemIndex, targetIndex)
+                } else playerViewModel.playNext(selected)
+            },
             onAddToQueue = { playerViewModel.addToQueue(selected) },
             onToggleLike = { actionsViewModel.toggleLike(asTrack) },
             onDownload = { actionsViewModel.download(asTrack) },
@@ -104,9 +142,7 @@ fun TrackActionsHost(
             } else null,
             onRemoveFromPlaylist = onRemoveFromPlaylist?.let { remove -> { remove(asTrack) } },
             onDeleteDownload = { actionsViewModel.deleteDownload(asTrack) },
-            onShare = if (hasVideoId) {
-                { context.shareTrack(selected) }
-            } else null,
+            onShare = { context.shareTrack(selected) },
             onRemoveFromHistory = onRemoveFromHistory?.let { remove -> { remove(asTrack) } },
             onShowDetails = { detailsTrack = selected },
             onGoToArtist = if (onGoToArtist != null && selected.artistId != null) {
@@ -116,16 +152,30 @@ fun TrackActionsHost(
                 { onGoToAlbum(selected.albumId) }
             } else null,
             showQueueActions = showQueueActions,
+            showPlayNext = queueItemIndex == null || queueItemIndex != currentQueueIndex,
             showLikeAction = showLikeAction,
             showDownloadAction = showDownloadAction,
+            queueContext = queueItemIndex != null,
+            durationLabel = selected.duration,
+            onRefetch = queueItemIndex?.let { index -> { playerViewModel.refetchQueueItem(index) } },
             onCopyLyrics = onCopyLyrics,
             onSearchLyricsOnline = onSearchLyricsOnline,
+            lyricsSourceLabel = lyricsSourceLabel,
+            lyricsTimingLabel = lyricsTimingLabel,
+            onChooseLyricsSource = onChooseLyricsSource,
+            onAdjustLyricsTiming = onAdjustLyricsTiming,
+            onShareLyricsCard = onShareLyricsCard,
+            onFindLyrics = onFindLyrics,
+            onSleepTimer = if (onEqualizer != null) ({ sleepDialog = true }) else null,
+            onEqualizer = onEqualizer,
+            onAmbient = if (onEqualizer != null) ({ ambient = true }) else null,
         )
     }
 
     pendingPlaylistTrack?.let { pending ->
         AddToPlaylistDialog(
             playlists = playlists,
+            subject = pending.title,
             onPick = { playlistId ->
                 actionsViewModel.addToPlaylist(playlistId, pending)
                 pendingPlaylistTrack = null
@@ -160,7 +210,9 @@ private fun android.content.Context.shareTrack(track: TrackResult) {
         type = "text/plain"
         putExtra(
             Intent.EXTRA_TEXT,
-            "${track.title} - ${track.artist}\nhttps://music.youtube.com/watch?v=${track.id}",
+            if (track.hasRealVideoId())
+                "${track.title} - ${track.artist}\nhttps://music.youtube.com/watch?v=${track.id}"
+            else "${track.title} - ${track.artist}",
         )
     }
     startActivity(Intent.createChooser(intent, "Share track"))

@@ -3,7 +3,7 @@ package com.example.ui.component
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -91,13 +91,13 @@ fun TrackSelectionHost(
     tracks: List<TrackResult>,
     playerViewModel: PlayerViewModel,
     actionsViewModel: TrackActionsViewModel,
+    modifier: Modifier = Modifier,
     /** Supplied only by a screen that owns the tracks' membership - a playlist's detail screen. */
     onRemoveFromPlaylist: ((List<Track>) -> Unit)? = null,
-    modifier: Modifier = Modifier,
 ) {
-    val likedKeys by actionsViewModel.likedKeys.collectAsState()
-    val downloadedKeys by actionsViewModel.downloadedKeys.collectAsState()
-    val playlists by actionsViewModel.playlists.collectAsState()
+    val likedKeys by actionsViewModel.likedKeys.collectAsStateWithLifecycle()
+    val downloadedKeys by actionsViewModel.downloadedKeys.collectAsStateWithLifecycle()
+    val playlists by actionsViewModel.playlists.collectAsStateWithLifecycle()
 
     // Outlives the selection it came from: picking "Add to playlist" leaves the bar up, but
     // creating a playlist clears the selection the moment it is applied.
@@ -170,6 +170,7 @@ fun TrackSelectionHost(
     pendingPlaylistTracks?.let { pending ->
         AddToPlaylistDialog(
             playlists = playlists,
+            subject = "${pending.size} selected songs",
             onPick = { playlistId ->
                 actionsViewModel.addToPlaylist(playlistId, pending)
                 pendingPlaylistTracks = null

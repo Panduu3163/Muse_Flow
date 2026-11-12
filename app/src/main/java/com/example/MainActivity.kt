@@ -1,5 +1,7 @@
 package com.example
 
+import dev.chrisbanes.haze.hazeSource
+
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -8,12 +10,22 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.core.net.toUri
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -23,24 +35,34 @@ import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -52,23 +74,43 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.ui.component.LocalSettingsFocus
+import com.example.ui.component.LocalSettingsRoute
 import com.example.ui.component.LyricsView
+import com.example.ui.component.LyricsSourceDialog
+import com.example.ui.component.LyricsTimingDialog
+import com.example.ui.component.LyricCardDialog
+import com.example.ui.theme.Motion
 import com.example.ui.component.MiniPlayer
 import com.example.ui.component.MuseFlowNavBar
+import com.example.ui.component.LocalPlaybackActive
 import com.example.ui.component.TrackActionsHost
+import com.example.ui.screens.AboutScreen
+import com.example.ui.screens.ImportSharedPlaylistScreen
+import com.example.ui.screens.UpdatesScreen
 import com.example.ui.screens.AlbumScreen
+import com.example.ui.screens.AppearanceSettingsScreen
 import com.example.ui.screens.ArtistScreen
+import com.example.ui.screens.AudioSettingsScreen
 import com.example.ui.screens.BackupSettingsScreen
 import com.example.ui.screens.ChartsScreen
 import com.example.ui.screens.CrashLogsScreen
 import com.example.ui.screens.BrowseScreen
 import com.example.ui.screens.EqualizerScreen
 import com.example.ui.screens.ExploreScreen
+import com.example.ui.screens.GeneralSettingsScreen
+import com.example.ui.screens.LibrarySectionsSettingsScreen
+import com.example.ui.screens.LyricsProviderPriorityScreen
+import com.example.ui.screens.LyricsSettingsScreen
+import com.example.ui.screens.MiniPlayerSettingsScreen
 import com.example.ui.screens.NewReleasesScreen
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.asTrackResult
 import com.example.ui.screens.LibraryScreen
+import com.example.ui.screens.PlaybackSettingsScreen
+import com.example.ui.screens.PlayerSettingsScreen
+import com.example.ui.screens.PrivacySettingsScreen
 import com.example.ui.screens.StatsScreen
 import com.example.ui.screens.NowPlayingScreen
 import com.example.ui.screens.OnboardingDialog
@@ -76,13 +118,38 @@ import com.example.ui.screens.PlaylistDetailScreen
 import com.example.ui.screens.RemotePlaylistScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.StorageSettingsScreen
+import com.example.ui.screens.DownloadsScreen
 import com.example.ui.theme.MuseFlowTheme
+import com.example.ui.theme.LocalReducedMotion
+import com.example.ui.theme.rememberReducedMotion
+import androidx.compose.foundation.isSystemInDarkTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent { MuseFlowApp() }
+        // No-arg enableEdgeToEdge() draws AndroidX's own default theme-aware scrim over the
+        // navigation-bar area (for legibility against arbitrary content) - a fixed translucent
+        // overlay independent of whatever this app itself draws underneath. Against a colourful,
+        // continuously-animated background there (Live Mesh/Blur mini-player), that scrim reads as
+        // a visible seam/colour mismatch right at the nav-bar boundary. This app already handles
+        // its own bottom-bar contrast (MiniPlayer/MuseFlowNavBar are opaque floating cards with
+        // their own scrims), so the system's extra scrim is redundant - making both bar styles
+        // fully transparent lets this app's own Compose background paint through uninterrupted.
+        enableEdgeToEdge(
+            statusBarStyle = androidx.activity.SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ),
+            navigationBarStyle = androidx.activity.SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ),
+        )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
+        setContent { SettingsRecoveryGate { MuseFlowApp() } }
     }
 }
 
@@ -96,7 +163,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MuseFlowApp() {
     val themeViewModel: ThemeViewModel = viewModel()
-    val theme by themeViewModel.themeState.collectAsState()
+    val theme by themeViewModel.themeState.collectAsStateWithLifecycle()
 
     // DataStore's first emission is asynchronous - for one frame `theme` is the StateFlow's
     // `initialValue`, not the user's real saved seed colour. Without this gate, that one frame
@@ -110,38 +177,59 @@ fun MuseFlowApp() {
     }
 
     val appSettingsViewModel: AppSettingsViewModel = viewModel()
-    val appSettings by appSettingsViewModel.state.collectAsState()
+    val appSettings by appSettingsViewModel.state.collectAsStateWithLifecycle()
+    // Navigation's start destination is created once. Wait for DataStore before constructing it,
+    // or a saved Default tab can be replaced by the ViewModel's temporary Home default.
+    if (!appSettings.isLoaded) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+        return
+    }
+
+    // Applied reactively (not just read once at startup), so toggling "Disable screenshots" in
+    // Settings takes effect on the window immediately - no relaunch needed either way.
+    val activity = LocalActivity.current
+    LaunchedEffect(appSettings.disableScreenshots, activity) {
+        val window = activity?.window ?: return@LaunchedEffect
+        if (appSettings.disableScreenshots) {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
 
     // Hoisted to the root so both the player background and the app-wide accent read one palette.
     val paletteViewModel: AlbumPaletteViewModel = viewModel()
-    val albumPalette by paletteViewModel.palette.collectAsState()
+    val albumPalette by paletteViewModel.palette.collectAsStateWithLifecycle()
 
     RequestNotificationPermissionOnce()
 
     // "Colour from album art": the artwork's dominant colour becomes the MaterialKolor seed, so the
     // whole generated palette follows what's playing. Falls back to the user's chosen accent
     // whenever nothing is playing or no palette could be extracted.
-    val seedColor = if (theme.dynamicAlbumColor) {
-        albumPalette?.dominant ?: theme.seedColor
-    } else {
-        theme.seedColor
-    }
+    val seedColor = themeSeedColor(theme.seedColor, albumPalette?.accent, theme.dynamicAlbumColor)
 
     // Display density scales every dp in the app at once by overriding LocalDensity, rather than
     // each screen having to know about the preference.
-    val densityScale = when (appSettings.displayDensity) {
-        DisplayDensity.Compact -> 0.88f
-        DisplayDensity.Native -> 1.0f
-        DisplayDensity.Comfortable -> 1.08f
-    }
+    val densityScale = appSettings.displayDensity.scale
     val baseDensity = LocalDensity.current
 
+    val systemDark = isSystemInDarkTheme()
+    val useDarkTheme = theme.mode.isDark(systemDark)
+    LaunchedEffect(useDarkTheme, systemDark, activity) {
+        val window = activity?.window ?: return@LaunchedEffect
+        val bars = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        bars.isAppearanceLightStatusBars = !useDarkTheme
+        bars.isAppearanceLightNavigationBars = !useDarkTheme
+    }
+
     MuseFlowTheme(
-        darkTheme = theme.darkTheme,
-        pureBlack = theme.pureBlack,
+        darkTheme = useDarkTheme,
+        pureBlack = theme.mode == ThemeMode.Amoled,
         themeColor = seedColor,
+        fontStyle = appSettings.fontStyle,
     ) {
       CompositionLocalProvider(
+          LocalReducedMotion provides rememberReducedMotion(),
           LocalDensity provides Density(
               density = baseDensity.density * densityScale,
               // fontScale is left alone: it's the user's accessibility setting, and quietly
@@ -149,16 +237,64 @@ fun MuseFlowApp() {
               fontScale = baseDensity.fontScale,
           )
       ) {
+        val actionSnackbar = remember { androidx.compose.material3.SnackbarHostState() }
+        LaunchedEffect(actionSnackbar) {
+            ActionFeedback.events.collect { message -> actionSnackbar.showSnackbar(message, withDismissAction = true) }
+        }
         val navController = rememberNavController()
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = backStackEntry?.destination?.route
+        val navigationBackdrop = dev.chrisbanes.haze.rememberHazeState()
+        val showNavigation = TopLevelDestination.forRoute(currentRoute) != null
 
         // Activity-scoped, so the mini-player and every screen that triggers playback share one
         // MediaController connection to PlaybackService.
         val playerViewModel: PlayerViewModel = viewModel()
-        val nowPlaying by playerViewModel.state.collectAsState()
+        val nowPlaying by playerViewModel.state.collectAsStateWithLifecycle()
+        val artworkRetryRevision by playerViewModel.artworkRetryRevision.collectAsStateWithLifecycle()
+        val appContext = LocalContext.current.applicationContext
+        // Surfaces a playback failure as a toast wherever the user is - previously silent, which
+        // made "I tapped a song and nothing happened" indistinguishable from "nothing happened
+        // because it's still loading" or a genuine bug elsewhere.
+        LaunchedEffect(playerViewModel, currentRoute) {
+            playerViewModel.playbackErrors.collect { message ->
+                if (currentRoute != Routes.NOW_PLAYING) {
+                    android.widget.Toast.makeText(appContext, message, android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        val online by remember(appContext) { observeOnline(appContext) }
+            .collectAsStateWithLifecycle(initialValue = isOnline(appContext))
+        // A transient notice, not a persistent one: it used to stay on screen for as long as the
+        // device remained offline, which meant it never went away on a longer offline stretch.
+        // Re-armed on every false->... transition (LaunchedEffect's key), so going offline again
+        // later shows it again rather than only ever once.
+        var showOfflineBanner by remember { mutableStateOf(false) }
+        // The reverse notice - only fires on an actual offline->online transition *during this
+        // session* (hasBeenOffline), not on a cold start that was already online, which would
+        // otherwise pop up on every normal launch for no reason.
+        var showBackOnlineBanner by remember { mutableStateOf(false) }
+        var hasBeenOffline by remember { mutableStateOf(false) }
+        LaunchedEffect(online) {
+            if (!online) {
+                hasBeenOffline = true
+                showOfflineBanner = true
+                kotlinx.coroutines.delay(3000)
+                showOfflineBanner = false
+            } else {
+                showOfflineBanner = false
+                if (hasBeenOffline) {
+                    hasBeenOffline = false
+                    showBackOnlineBanner = true
+                    kotlinx.coroutines.delay(3000)
+                    showBackOnlineBanner = false
+                }
+            }
+        }
 
-        LaunchedEffect(nowPlaying.artworkUrl) { paletteViewModel.load(nowPlaying.artworkUrl) }
+        LaunchedEffect(nowPlaying.artworkUrl, artworkRetryRevision) {
+            paletteViewModel.load(nowPlaying.artworkUrl, artworkRetryRevision)
+        }
 
         // A full-bleed content Box with MiniPlayer/MuseFlowNavBar overlaid on top as a floating
         // layer, not Scaffold's docked `bottomBar` - a docked bottomBar reserves its own measured
@@ -170,16 +306,86 @@ fun MuseFlowApp() {
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
-                .navigationBarsPadding(),
+                .then(if (currentRoute == Routes.NOW_PLAYING) Modifier else Modifier.navigationBarsPadding()),
         ) {
-            MuseFlowNavHost(
-                navController = navController,
-                onPlayTrack = playerViewModel::play,
-                playerViewModel = playerViewModel,
-                appSettings = appSettings,
-                albumPalette = albumPalette,
-                modifier = Modifier.fillMaxSize(),
-            )
+            CompositionLocalProvider(LocalPlaybackActive provides nowPlaying.isPlaying) {
+                MuseFlowNavHost(
+                    navController = navController,
+                    onPlayTrack = playerViewModel::play,
+                    playerViewModel = playerViewModel,
+                    appSettings = appSettings,
+                    albumPalette = albumPalette,
+                    modifier = Modifier.fillMaxSize().then(
+                        if (showNavigation && android.os.Build.VERSION.SDK_INT >= 31)
+                            Modifier.hazeSource(navigationBackdrop) else Modifier,
+                    ),
+                )
+            }
+
+            // Connectivity is app state, not an error discovered only after a spinner times out.
+            // Shown briefly on the transition to offline (see showOfflineBanner above) rather than
+            // for as long as the device stays offline.
+            if (showOfflineBanner) {
+                Surface(
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.inverseSurface,
+                    contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+                    tonalElevation = 6.dp,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = 8.dp)
+                        .testTag("offline_status"),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudOff,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            text = "Offline · downloads and local music",
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+                }
+            }
+
+            if (showBackOnlineBanner) {
+                Surface(
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    tonalElevation = 6.dp,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = 8.dp)
+                        .testTag("back_online_status"),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudDone,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            text = "Online · enjoy limitless music",
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+                }
+            }
 
             // The system-nav-bar inset is applied once on the outer Box above (so content itself
             // never draws into the gesture-nav zone), plus a small extra gap here so the floating
@@ -194,8 +400,16 @@ fun MuseFlowApp() {
                 // mini-player entirely because it was wired to the same condition as the nav
                 // bar below. Excluded only on Now Playing itself, where it would sit behind
                 // the full player it mirrors.
-                if (nowPlaying.hasMedia && currentRoute != Routes.NOW_PLAYING) {
-                    MiniPlayer(
+                androidx.compose.material3.SnackbarHost(actionSnackbar, modifier = Modifier.padding(horizontal = 16.dp))
+                val reducedMotion = LocalReducedMotion.current
+                AnimatedVisibility(
+                    visible = nowPlaying.hasMedia && currentRoute != Routes.NOW_PLAYING,
+                    enter = if (reducedMotion) fadeIn(tween(0))
+                        else slideInVertically(Motion.quickFade(200)) { it / 2 } + fadeIn(Motion.quickFade(200)),
+                    exit = if (reducedMotion) fadeOut(tween(0))
+                        else slideOutVertically(Motion.quickFade(180)) { it / 2 } + fadeOut(Motion.quickFade(180)),
+                ) {
+                    key(artworkRetryRevision) { MiniPlayer(
                         state = nowPlaying,
                         onTogglePlayPause = playerViewModel::togglePlayPause,
                         onPrevious = { playerViewModel.previous() },
@@ -203,15 +417,16 @@ fun MuseFlowApp() {
                         onClick = { navController.navigate(Routes.NOW_PLAYING) },
                         backgroundStyle = appSettings.miniPlayerBackgroundStyle,
                         palette = albumPalette,
-                    )
+                    ) }
                 }
                 // Hidden on destinations that aren't one of the four tabs (a playlist detail,
                 // Now Playing), so those screens get the full height rather than a bar that
                 // highlights nothing.
-                if (TopLevelDestination.forRoute(currentRoute) != null) {
+                if (showNavigation) {
                     MuseFlowNavBar(
                         destinations = TopLevelDestination.entries,
                         currentRoute = currentRoute,
+                        backdrop = navigationBackdrop,
                         onNavigate = { destination ->
                             navController.navigateToTab(destination.route)
                         },
@@ -221,9 +436,52 @@ fun MuseFlowApp() {
         }
 
         val onboardingViewModel: OnboardingViewModel = viewModel()
-        val showOnboarding by onboardingViewModel.shouldShow.collectAsState()
-        if (showOnboarding) {
-            OnboardingDialog(onContinue = onboardingViewModel::markSeen)
+        val onboardingKind by onboardingViewModel.onboardingKind.collectAsStateWithLifecycle()
+        when (onboardingKind) {
+            OnboardingKind.FreshInstall -> OnboardingDialog(onContinue = onboardingViewModel::markSeen)
+            OnboardingKind.Updated -> com.example.ui.screens.ChangelogDialog(onContinue = onboardingViewModel::markSeen)
+            OnboardingKind.None -> Unit
+        }
+
+        // Independent of the two dialogs above (see UpdateChecker's own doc) - a newer GitHub
+        // release existing at all, not this build's own first run. Held off while either of those
+        // is showing so a fresh install/update never sees two stacked dialogs on the very first
+        // frame.
+        val availableUpdate by UpdateChecker.availableUpdate.collectAsStateWithLifecycle()
+        if (availableUpdate != null && onboardingKind == OnboardingKind.None) {
+            val update = availableUpdate!!
+            var isDownloadingUpdate by remember { mutableStateOf(false) }
+            var updateDownloadJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+            val updateScope = rememberCoroutineScope()
+            val updateContext = LocalContext.current
+            com.example.ui.screens.UpdateAvailableDialog(
+                update = update,
+                isDownloading = isDownloadingUpdate,
+                onContinue = {
+                    if (update.apkDownloadUrl != null) {
+                        isDownloadingUpdate = true
+                        updateDownloadJob = updateScope.launch {
+                            val started = try { InAppUpdater.downloadAndInstall(updateContext, update) }
+                                finally { isDownloadingUpdate = false }
+                            if (started is UpdateInstallOutcome.InstallerOpened) UpdateChecker.dismissForNow() else {
+                                android.widget.Toast.makeText(
+                                    updateContext,
+                                    started.userMessage,
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        }
+                    } else {
+                        runCatching {
+                            updateContext.startActivity(
+                                Intent(Intent.ACTION_VIEW, (update.releaseUrl).toUri())
+                            )
+                        }
+                        UpdateChecker.dismissForNow()
+                    }
+                },
+                onDismiss = { updateDownloadJob?.cancel(); UpdateChecker.dismissForNow() },
+            )
         }
       }
     }
@@ -277,20 +535,101 @@ private fun MuseFlowNavHost(
         navController.navigate(Routes.remotePlaylist(id, title, subtitle, imageUrl))
     }
 
+    val reducedMotion = LocalReducedMotion.current
     NavHost(
         navController = navController,
         startDestination = startDestination,
         modifier = modifier,
+        // Direction-aware slide+fade for the whole NavHost, keyed on each tab's position in
+        // TopLevelDestination - the same left/right-of-current-tab comparison Echo-Music's own
+        // MainActivity.kt uses (verified against its source, not approximated). A push destination
+        // (Artist/Album/Playlist/...) has no entry in TopLevelDestination, so indexOfFirst returns
+        // -1 for it - the "not a tab" branch below - which naturally reads as "slide in from the
+        // right" for a push and "slide out to the right" when popped back out of, with no separate
+        // tab-vs-push branch needed. Now Playing is the one deliberate exception: it isn't a tab and
+        // has no meaningful left/right position, so it always gets a vertical slide instead, reading
+        // as a sheet coming up over whatever's beneath it.
+        enterTransition = {
+            if (reducedMotion) return@NavHost fadeIn(tween(0))
+            val currentRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == targetState.destination.route }
+            val previousRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == initialState.destination.route }
+            when {
+                targetState.destination.route == Routes.NOW_PLAYING ->
+                    slideInVertically(animationSpec = Motion.quickFade(200)) { it } + fadeIn(Motion.quickFade(200))
+                currentRouteIndex == -1 || currentRouteIndex > previousRouteIndex ->
+                    slideInHorizontally(animationSpec = Motion.quickFade(200)) { it / 8 } + fadeIn(Motion.quickFade(200))
+                else ->
+                    slideInHorizontally(animationSpec = Motion.quickFade(200)) { -it / 8 } + fadeIn(Motion.quickFade(200))
+            }
+        },
+        exitTransition = {
+            if (reducedMotion) return@NavHost fadeOut(tween(0))
+            val currentRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == initialState.destination.route }
+            val targetRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == targetState.destination.route }
+            when {
+                initialState.destination.route == Routes.NOW_PLAYING ->
+                    slideOutVertically(animationSpec = Motion.quickFade(180)) { it } + fadeOut(Motion.quickFade(180))
+                targetRouteIndex == -1 || targetRouteIndex > currentRouteIndex ->
+                    slideOutHorizontally(animationSpec = Motion.quickFade(200)) { -it / 8 } + fadeOut(Motion.quickFade(180))
+                else ->
+                    slideOutHorizontally(animationSpec = Motion.quickFade(200)) { it / 8 } + fadeOut(Motion.quickFade(180))
+            }
+        },
+        popEnterTransition = {
+            if (reducedMotion) return@NavHost fadeIn(tween(0))
+            val currentRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == targetState.destination.route }
+            val previousRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == initialState.destination.route }
+            when {
+                targetState.destination.route == Routes.NOW_PLAYING ->
+                    slideInVertically(animationSpec = Motion.quickFade(200)) { it } + fadeIn(Motion.quickFade(200))
+                previousRouteIndex != -1 && previousRouteIndex < currentRouteIndex ->
+                    slideInHorizontally(animationSpec = Motion.quickFade(200)) { it / 8 } + fadeIn(Motion.quickFade(200))
+                else ->
+                    slideInHorizontally(animationSpec = Motion.quickFade(200)) { -it / 8 } + fadeIn(Motion.quickFade(200))
+            }
+        },
+        popExitTransition = {
+            if (reducedMotion) return@NavHost fadeOut(tween(0))
+            val currentRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == initialState.destination.route }
+            val targetRouteIndex = TopLevelDestination.entries.indexOfFirst { it.route == targetState.destination.route }
+            when {
+                initialState.destination.route == Routes.NOW_PLAYING ->
+                    slideOutVertically(animationSpec = Motion.quickFade(180)) { it } + fadeOut(Motion.quickFade(180))
+                currentRouteIndex != -1 && currentRouteIndex < targetRouteIndex ->
+                    slideOutHorizontally(animationSpec = Motion.quickFade(200)) { -it / 8 } + fadeOut(Motion.quickFade(180))
+                else ->
+                    slideOutHorizontally(animationSpec = Motion.quickFade(200)) { it / 8 } + fadeOut(Motion.quickFade(180))
+            }
+        },
     ) {
         topLevelGraph(
+            onOpenBrowse = { id, params -> navController.navigate(Routes.browse(id, params)) },
+            onOpenTogether = { navController.navigate(Routes.LISTEN_TOGETHER) },
             onPlayTrack = onPlayTrack,
             playerViewModel = playerViewModel,
             onOpenPlaylist = { navController.navigate(Routes.playlist(it)) },
+            onOpenLibraryCollection = { navController.navigate(Routes.libraryCollection(it)) },
             onOpenLibraryStats = { navController.navigate(Routes.LIBRARY_STATS) },
             onOpenEqualizer = { navController.navigate(Routes.EQUALIZER) },
             onOpenHistory = { navController.navigate(Routes.HISTORY) },
             onOpenBackup = { navController.navigate(Routes.BACKUP) },
             onOpenCrashLogs = { navController.navigate(Routes.CRASH_LOGS) },
+            onOpenStorage = { navController.navigate(Routes.STORAGE) },
+            onOpenAbout = { navController.navigate(Routes.ABOUT) },
+            onOpenUpdates = { navController.navigate(Routes.UPDATES) },
+            onImportSharedPlaylist = { navController.navigate(Routes.IMPORT_SHARED_PLAYLIST) },
+            onOpenSettingsAppearance = { navController.navigate(Routes.SETTINGS_APPEARANCE) },
+            onOpenSettingsMiniPlayer = { navController.navigate(Routes.SETTINGS_MINI_PLAYER) },
+            onOpenSettingsPlayer = { navController.navigate(Routes.SETTINGS_PLAYER) },
+            onOpenSettingsLyrics = { navController.navigate(Routes.SETTINGS_LYRICS) },
+            onOpenSettingsAudio = { navController.navigate(Routes.SETTINGS_AUDIO) },
+            onOpenSettingsPlayback = { navController.navigate(Routes.SETTINGS_PLAYBACK) },
+            onOpenSettingsGeneral = { navController.navigate(Routes.SETTINGS_GENERAL) },
+            onOpenSettingsPrivacy = { navController.navigate(Routes.SETTINGS_PRIVACY) },
+            onOpenSettingsLibrarySections = { navController.navigate(Routes.SETTINGS_LIBRARY_SECTIONS) },
+            onOpenSettingsSearchResult = { entry ->
+                navController.navigate(Routes.focusedSetting(entry.route, entry.id))
+            },
             onOpenCharts = { navController.navigate(Routes.CHARTS) },
             onOpenNewReleases = { navController.navigate(Routes.NEW_RELEASES) },
             onOpenExplore = { navController.navigate(Routes.EXPLORE) },
@@ -298,11 +637,62 @@ private fun MuseFlowNavHost(
             onGoToAlbum = onGoToAlbum,
             onGoToRemotePlaylist = onGoToRemotePlaylist,
         )
-        composable(Routes.BACKUP) {
+        settingsDestination(Routes.BACKUP) {
             BackupSettingsScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.CRASH_LOGS) {
             CrashLogsScreen(onBack = { navController.popBackStack() })
+        }
+        settingsDestination(Routes.STORAGE) {
+            StorageSettingsScreen(onBack = { navController.popBackStack() }, onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) })
+        }
+        settingsDestination(Routes.DOWNLOADS) {
+            DownloadsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.ABOUT) {
+            AboutScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.UPDATES) {
+            UpdatesScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.IMPORT_SHARED_PLAYLIST) {
+            ImportSharedPlaylistScreen(onBack = { navController.popBackStack() })
+        }
+        settingsDestination(Routes.SETTINGS_APPEARANCE) {
+            AppearanceSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        settingsDestination(Routes.SETTINGS_MINI_PLAYER) {
+            MiniPlayerSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        settingsDestination(Routes.SETTINGS_PLAYER) {
+            PlayerSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        settingsDestination(Routes.SETTINGS_LYRICS) {
+            LyricsSettingsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenProviderOrder = { navController.navigate(Routes.SETTINGS_LYRICS_PROVIDER_ORDER) },
+            )
+        }
+        composable(Routes.SETTINGS_LYRICS_PROVIDER_ORDER) {
+            LyricsProviderPriorityScreen(onBack = { navController.popBackStack() })
+        }
+        settingsDestination(Routes.SETTINGS_AUDIO) {
+            AudioSettingsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenEqualizer = { navController.navigate(Routes.EQUALIZER) },
+            )
+        }
+        settingsDestination(Routes.SETTINGS_PLAYBACK) {
+            PlaybackSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        settingsDestination(Routes.SETTINGS_GENERAL) {
+            GeneralSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        settingsDestination(Routes.SETTINGS_PRIVACY) {
+            PrivacySettingsScreen(onBack = { navController.popBackStack() })
+        }
+        settingsDestination(Routes.SETTINGS_LIBRARY_SECTIONS) {
+            LibrarySectionsSettingsScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.CHARTS) {
             ChartsScreen(
@@ -315,8 +705,11 @@ private fun MuseFlowNavHost(
         }
         composable(Routes.NEW_RELEASES) {
             NewReleasesScreen(
-                onOpenAlbum = onGoToAlbum,
+                onPlayTrack = onPlayTrack,
+                playerViewModel = playerViewModel,
                 onBack = { navController.popBackStack() },
+                onGoToArtist = onGoToArtist,
+                onGoToAlbum = onGoToAlbum,
             )
         }
         composable(Routes.EXPLORE) {
@@ -369,7 +762,31 @@ private fun MuseFlowNavHost(
             StatsScreen(
                 onBack = { navController.popBackStack() },
                 onGoToArtist = onGoToArtist,
+                onPlayTrack = onPlayTrack,
             )
+        }
+        composable(
+            route = Routes.LIBRARY_COLLECTION,
+            arguments = listOf(navArgument(Routes.LIBRARY_COLLECTION_ARG) { type = NavType.StringType }),
+        ) { entry ->
+            val section = entry.arguments?.getString(Routes.LIBRARY_COLLECTION_ARG)
+                ?.let { runCatching { LibrarySection.valueOf(it) }.getOrNull() }
+                ?: return@composable
+            LibraryScreen(
+                onPlayTrack = onPlayTrack,
+                playerViewModel = playerViewModel,
+                onOpenPlaylist = { navController.navigate(Routes.playlist(it)) },
+                onOpenHistory = { navController.navigate(Routes.HISTORY) },
+                onOpenStats = { navController.navigate(Routes.LIBRARY_STATS) },
+                onOpenStorage = { navController.navigate(Routes.STORAGE) },
+                onGoToArtist = onGoToArtist,
+                onGoToAlbum = onGoToAlbum,
+                detailSection = section,
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(Routes.LISTEN_TOGETHER) {
+            com.example.ui.screens.ListenTogetherComingSoonScreen(onBack = { navController.popBackStack() })
         }
         composable(
             route = Routes.PLAYLIST,
@@ -445,6 +862,7 @@ private fun MuseFlowNavHost(
             )
         }
         playerGraph(
+            onOpenEqualizer = { navController.navigate(Routes.EQUALIZER) },
             playerViewModel = playerViewModel,
             appSettings = appSettings,
             albumPalette = albumPalette,
@@ -458,6 +876,7 @@ private fun MuseFlowNavHost(
 /** The full-screen player, kept out of [topLevelGraph] because it isn't a tab - the bottom bar
  * hides while it's open (see [TopLevelDestination.forRoute]). */
 private fun NavGraphBuilder.playerGraph(
+    onOpenEqualizer: () -> Unit,
     playerViewModel: PlayerViewModel,
     appSettings: AppSettingsState,
     albumPalette: AlbumPalette?,
@@ -467,29 +886,98 @@ private fun NavGraphBuilder.playerGraph(
 ) {
     composable(Routes.NOW_PLAYING) {
         val context = LocalContext.current
-        val state by playerViewModel.state.collectAsState()
+        val artistLookupScope = rememberCoroutineScope()
+        val state by playerViewModel.state.collectAsStateWithLifecycle()
         val actionsViewModel: TrackActionsViewModel = viewModel()
-        val likedKeys by actionsViewModel.likedKeys.collectAsState()
-        val downloadedKeys by actionsViewModel.downloadedKeys.collectAsState()
-        val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsState()
+        val likedKeys by actionsViewModel.likedKeys.collectAsStateWithLifecycle()
+        val downloadedKeys by actionsViewModel.downloadedKeys.collectAsStateWithLifecycle()
+        val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsStateWithLifecycle()
 
         // The controller only exposes metadata, so the track is reconstructed from it to reach
-        // the same title/artist download key the repositories index by.
-        val currentTrack = playerViewModel.currentTrackForActions()
-        val key = currentTrack?.downloadKey()
-        val sleepTimerRemainingMs by playerViewModel.sleepTimerRemainingMs.collectAsState()
+        // the same title/artist download key the repositories index by. Remembered on the same
+        // (title, artist) key the LaunchedEffect below already uses to mean "the track changed" -
+        // without this, `currentTrackForActions()` re-runs (and hands NowPlayingScreen a new Track
+        // instance) on every recomposition of this route, which defeats every callback below that's
+        // itself remembered on `currentTrack` for stability.
+        val currentTrack = remember(state.queue, state.currentPlaybackId) {
+            playerViewModel.currentTrackForActions()
+        }
+        val key = remember(currentTrack) { currentTrack?.downloadKey() }
+        val sleepTimerRemainingMs by playerViewModel.sleepTimerRemainingMs.collectAsStateWithLifecycle()
         var menuTrack by remember { mutableStateOf<TrackResult?>(null) }
+        var queueMenuIndex by remember { mutableStateOf<Int?>(null) }
 
         // Hoisted out of the lyrics slot (rather than kept lazy behind "lyrics panel open") so the
         // main player menu's "Copy lyrics"/"Search lyrics online" - folded in from the lyrics
         // panel's own former menu - can offer them without requiring the panel to have been opened
         // first.
         val lyricsViewModel: LyricsViewModel = viewModel()
-        val lyrics by lyricsViewModel.state.collectAsState()
-        val lyricsPositionMs by playerViewModel.lyricsPositionMs.collectAsState()
-        val clipboard = LocalClipboardManager.current
+        val lyrics by lyricsViewModel.state.collectAsStateWithLifecycle()
+        val selectedLyricsProvider by lyricsViewModel.selectedProvider.collectAsStateWithLifecycle()
+        val lyricsPositionMs = state.positionMs
+        val playbackFailure by playerViewModel.playbackFailure.collectAsStateWithLifecycle()
+        val artworkRetryRevision by playerViewModel.artworkRetryRevision.collectAsStateWithLifecycle()
+        val currentMediaId = state.queue.firstOrNull { it.isCurrent }?.mediaId
+        var lyricsOffsetMs by remember(state.currentTrackKey, currentMediaId) { mutableIntStateOf(0) }
+        val activeLyricIndex = remember(lyrics, lyricsPositionMs, lyricsOffsetMs) {
+            (lyrics as? LyricsResult.Synced)?.lines
+                ?.activeLineIndex((lyricsPositionMs + lyricsOffsetMs).coerceAtLeast(0L))
+                ?.coerceAtLeast(0) ?: 0
+        }
+        var showLyricsSource by remember { mutableStateOf(false) }
+        var showLyricsTiming by remember { mutableStateOf(false) }
+        var showLyricsCard by remember { mutableStateOf(false) }
+        val clipboard = LocalClipboard.current
 
-        LaunchedEffect(state.title, state.artist) {
+        // Every callback below is remembered on the same key its closure actually captures, so
+        // NowPlayingScreen (and everything it passes these on to, e.g. transport buttons wrapped in
+        // bounceClick) sees a stable reference across recompositions instead of a fresh lambda every
+        // time - a fresh lambda identity is indistinguishable from "this callback actually changed"
+        // to Compose's skip check, which was silently defeating recomposition-skipping on this
+        // screen's own most frequently-recomposing subtree (transport controls, tracked in
+        // `docs/nowplaying-jank-investigation.md`).
+        val onTogglePlayPause = remember(playerViewModel) { playerViewModel::togglePlayPause }
+        val onNext = remember(playerViewModel) { { playerViewModel.next(); Unit } }
+        val onPrevious = remember(playerViewModel) { { playerViewModel.previous(); Unit } }
+        val onSeek = remember(playerViewModel) { playerViewModel::seekTo }
+        val onToggleShuffle = remember(playerViewModel) { playerViewModel::toggleShuffle }
+        val onCycleRepeat = remember(playerViewModel) { playerViewModel::cycleRepeatMode }
+        val onPlayQueueItem = remember(playerViewModel) { playerViewModel::playQueueItem }
+        val onMoveQueueItem = remember(playerViewModel) { playerViewModel::moveQueueItem }
+        val onRemoveQueueItem = remember(playerViewModel) { playerViewModel::removeQueueItem }
+        val onUndoRemoveQueueItem = remember(playerViewModel) { playerViewModel::undoLastQueueRemoval }
+        val onClearUpcomingQueue = remember(playerViewModel) { playerViewModel::clearUpcomingQueue }
+        val onAddRadio = remember(playerViewModel) { playerViewModel::addRadioFromCurrent }
+        val onSaveQueueAsPlaylist = remember(playerViewModel) { playerViewModel::saveRemainingQueueAsPlaylist }
+        val onToggleLike = remember(currentTrack, actionsViewModel) {
+            { currentTrack?.let(actionsViewModel::toggleLike); Unit }
+        }
+        val onDownload = remember(currentTrack, actionsViewModel) {
+            { currentTrack?.let(actionsViewModel::download); Unit }
+        }
+        val onStartSleepTimer = remember(playerViewModel) { playerViewModel::startSleepTimer }
+        val onCancelSleepTimer = remember(playerViewModel) { playerViewModel::cancelSleepTimer }
+        val onSetPlaybackSpeed = remember(playerViewModel) { playerViewModel::setPlaybackSpeed }
+        val onOpenMenu = remember(currentTrack) { { queueMenuIndex = null; menuTrack = currentTrack?.asTrackResult() } }
+        val onOpenQueueTrackMenu: (QueueItem) -> Unit = { item ->
+            queueMenuIndex = item.index
+            menuTrack = TrackResult(
+                id = item.mediaId, title = item.title, artist = item.artist,
+                duration = item.durationMs.takeIf { it > 0 }?.asPlaybackTime(),
+                source = item.album.orEmpty(),
+                sourceType = if (item.mediaId.startsWith("content://")) MusicSource.LOCAL_DEVICE else MusicSource.YOUTUBE_MUSIC,
+                directStreamUrl = item.mediaId.takeIf { it.startsWith("content://") },
+                imageUrl = item.artworkUrl, albumId = item.albumId, artistId = item.artistId,
+            )
+        }
+        val onLyricsSeekTo = remember(playerViewModel) { { timestampMs: Long -> playerViewModel.seekToMs(timestampMs) } }
+        val buttonColor = when (appSettings.playerButtonColor) {
+            PlayerButtonColorOption.Primary -> MaterialTheme.colorScheme.primary
+            PlayerButtonColorOption.Secondary -> MaterialTheme.colorScheme.secondary
+            PlayerButtonColorOption.Tertiary -> MaterialTheme.colorScheme.tertiary
+        }
+
+        LaunchedEffect(state.title, state.artist, state.durationMs, currentMediaId) {
             // Only a confirmed real YouTube id, never the "title|artist" stand-in a stored track
             // without one reports itself as - see hasRealVideoId's own reasoning. A fabricated id
             // here would just make the YouTube-tab fallback fail instead of being skipped.
@@ -506,55 +994,74 @@ private fun NavGraphBuilder.playerGraph(
 
         NowPlayingScreen(
             state = state,
-            onTogglePlayPause = playerViewModel::togglePlayPause,
-            onNext = { playerViewModel.next() },
-            onPrevious = { playerViewModel.previous() },
-            onSeek = playerViewModel::seekTo,
-            onToggleShuffle = playerViewModel::toggleShuffle,
-            onCycleRepeat = playerViewModel::cycleRepeatMode,
-            onPlayQueueItem = playerViewModel::playQueueItem,
-            onMoveQueueItem = playerViewModel::moveQueueItem,
-            onRemoveQueueItem = playerViewModel::removeQueueItem,
+            playbackFailure = playbackFailure,
+            artworkRetryRevision = artworkRetryRevision,
+            onRetryPlayback = playerViewModel::retryCurrent,
+            onTogglePlayPause = onTogglePlayPause,
+            onNext = onNext,
+            onPrevious = onPrevious,
+            onSeek = onSeek,
+            onToggleShuffle = onToggleShuffle,
+            onCycleRepeat = onCycleRepeat,
+            onPlayQueueItem = onPlayQueueItem,
+            onMoveQueueItem = onMoveQueueItem,
+            onRemoveQueueItem = onRemoveQueueItem,
+            onUndoRemoveQueueItem = onUndoRemoveQueueItem,
+            onClearUpcomingQueue = onClearUpcomingQueue,
+            onAddRadio = onAddRadio,
+            onSaveQueueAsPlaylist = onSaveQueueAsPlaylist,
             onCollapse = onCollapse,
             isLiked = key != null && likedKeys.contains(key),
             isDownloaded = key != null && downloadedKeys.contains(key),
             downloadProgress = key?.let { downloadsInProgress[it] },
-            onToggleLike = { currentTrack?.let(actionsViewModel::toggleLike) },
-            onDownload = { currentTrack?.let(actionsViewModel::download) },
+            onToggleLike = onToggleLike,
+            onDownload = onDownload,
             hideArtwork = appSettings.hidePlayerThumbnail,
             artworkCornerRadius = appSettings.thumbnailCornerRadius,
             cropArtwork = appSettings.cropAlbumArt,
+            rotatingArtwork = appSettings.rotatingThumbnailAnimation,
             wavySlider = appSettings.playerSliderStyle == PlayerSliderStyle.Wavy,
             slimSlider = appSettings.playerSliderStyle == PlayerSliderStyle.Slim,
+            squigglySlider = appSettings.playerSliderStyle == PlayerSliderStyle.Squiggly,
+            transportStyle = appSettings.playerTransportStyle,
+            swipeToChangeSongEnabled = appSettings.swipeToChangeSongEnabled,
+            showCodecInfo = appSettings.showCodecInfo,
             backgroundStyle = appSettings.playerBackgroundStyle,
             palette = albumPalette,
-            buttonColor = when (appSettings.playerButtonColor) {
-                PlayerButtonColorOption.Primary -> MaterialTheme.colorScheme.primary
-                PlayerButtonColorOption.Secondary -> MaterialTheme.colorScheme.secondary
-                PlayerButtonColorOption.Tertiary -> MaterialTheme.colorScheme.tertiary
-            },
+            buttonColor = buttonColor,
             sleepTimerRemainingMs = sleepTimerRemainingMs,
-            onStartSleepTimer = playerViewModel::startSleepTimer,
-            onCancelSleepTimer = playerViewModel::cancelSleepTimer,
-            onSetPlaybackSpeed = playerViewModel::setPlaybackSpeed,
-            onOpenMenu = { menuTrack = currentTrack?.asTrackResult() },
+            onStartSleepTimer = onStartSleepTimer,
+            onCancelSleepTimer = onCancelSleepTimer,
+            onSetPlaybackSpeed = onSetPlaybackSpeed,
+            onOpenMenu = onOpenMenu,
+            onOpenQueueTrackMenu = onOpenQueueTrackMenu,
+            onGoToArtist = onGoToArtist,
+            onResolveArtistName = { name ->
+                artistLookupScope.launch {
+                    val id = playerViewModel.resolveArtistId(name, state.title)
+                    if (id != null) onGoToArtist(id)
+                    else Toast.makeText(context, "Artist page unavailable", Toast.LENGTH_SHORT).show()
+                }
+            },
             lyricsContent = { slotModifier ->
-                LyricsView(
-                    result = lyrics,
-                    positionMs = lyricsPositionMs,
-                    // Named param: `it` here would bind to the enclosing composable() lambda's
-                    // NavBackStackEntry, not the timestamp.
-                    onSeekTo = { timestampMs -> playerViewModel.seekToMs(timestampMs) },
-                    modifier = slotModifier,
-                    textSizeSp = appSettings.lyricsTextSize,
-                    lineSpacing = appSettings.lyricsLineSpacing,
-                    textPosition = appSettings.lyricsTextPosition,
-                    blurInactive = appSettings.blurInactiveLines,
-                    glow = appSettings.glowingLyricsEffect,
-                    autoScroll = appSettings.autoScrollLyrics,
-                    tapToSeek = appSettings.changeLyricsOnClick,
-                    wordAnimationStyle = appSettings.wordAnimationStyle,
-                )
+                    val preciseLyricsPosition by playerViewModel.lyricsPositionMs.collectAsStateWithLifecycle()
+                    LyricsView(
+                        result = lyrics,
+                        positionMs = (preciseLyricsPosition + lyricsOffsetMs).coerceAtLeast(0L),
+                        isPlaying = state.isPlaying,
+                        playbackSpeed = state.speed,
+                        positionRevision = state.positionRevision + lyricsOffsetMs,
+                        onSeekTo = { timestamp -> onLyricsSeekTo(timestamp - lyricsOffsetMs) },
+                        modifier = slotModifier.fillMaxWidth(),
+                        textSizeSp = appSettings.lyricsTextSize,
+                        lineSpacing = appSettings.lyricsLineSpacing,
+                        textPosition = appSettings.lyricsTextPosition,
+                        blurInactive = appSettings.blurInactiveLines,
+                        glow = appSettings.glowingLyricsEffect,
+                        autoScroll = appSettings.autoScrollLyrics,
+                        tapToSeek = appSettings.changeLyricsOnClick,
+                        wordAnimationStyle = appSettings.wordAnimationStyle,
+                    )
             },
         )
 
@@ -568,7 +1075,7 @@ private fun NavGraphBuilder.playerGraph(
         // keeps TrackActionsHost itself permanently composed, so its dialogs outlive the sheet.
         TrackActionsHost(
             track = menuTrack,
-            onDismiss = { menuTrack = null },
+            onDismiss = { menuTrack = null; queueMenuIndex = null },
             playerViewModel = playerViewModel,
             actionsViewModel = actionsViewModel,
             onGoToArtist = onGoToArtist,
@@ -577,9 +1084,17 @@ private fun NavGraphBuilder.playerGraph(
             // screen - repeating them here for the track that's already playing was confusing more
             // than useful (some read as broken since acting on "the currently playing track"
             // doesn't do anything visibly different).
-            showQueueActions = false,
+            showQueueActions = queueMenuIndex != null,
             showLikeAction = false,
-            showDownloadAction = false,
+            showDownloadAction = true,
+            queueItemIndex = queueMenuIndex,
+            onEqualizer = onOpenEqualizer,
+            lyricsSourceLabel = selectedLyricsProvider?.label ?: "Auto · preferred order",
+            lyricsTimingLabel = if (lyricsOffsetMs == 0) "Synchronized" else "%+.2fs".format(lyricsOffsetMs / 1000f),
+            onChooseLyricsSource = { showLyricsSource = true },
+            onAdjustLyricsTiming = { showLyricsTiming = true },
+            onShareLyricsCard = { showLyricsCard = true },
+            onFindLyrics = lyricsViewModel::retry,
             // Folds the lyrics panel's own former "⋮" menu into this one - one menu button on the
             // whole screen instead of two stacked on top of each other. Always present (not gated
             // on lyrics already being loaded) - "Search lyrics online" never needed lyrics text at
@@ -589,8 +1104,10 @@ private fun NavGraphBuilder.playerGraph(
             onCopyLyrics = {
                 val text = lyrics.asCopyableText()
                 if (text != null) {
-                    clipboard.setText(AnnotatedString(text))
-                    Toast.makeText(context, "Lyrics copied", Toast.LENGTH_SHORT).show()
+                    artistLookupScope.launch {
+                        clipboard.setClipEntry(androidx.compose.ui.platform.ClipEntry(android.content.ClipData.newPlainText("Lyrics", text)))
+                        Toast.makeText(context, "Lyrics copied", Toast.LENGTH_SHORT).show()
+                    }
                 } else {
                     Toast.makeText(context, "No lyrics to copy yet", Toast.LENGTH_SHORT).show()
                 }
@@ -602,6 +1119,25 @@ private fun NavGraphBuilder.playerGraph(
                 }
             },
         )
+        if (showLyricsSource) LyricsSourceDialog(
+            selected = selectedLyricsProvider,
+            onSelect = lyricsViewModel::selectProvider,
+            onDismiss = { showLyricsSource = false },
+        )
+        if (showLyricsTiming) LyricsTimingDialog(
+            offsetMs = lyricsOffsetMs,
+            onOffsetChange = { lyricsOffsetMs = it },
+            onDismiss = { showLyricsTiming = false },
+        )
+        if (showLyricsCard) LyricCardDialog(
+            result = lyrics,
+            activeIndex = activeLyricIndex,
+            title = state.title,
+            artist = state.artist,
+            artworkUrl = state.artworkUrl,
+            palette = albumPalette,
+            onDismiss = { showLyricsCard = false },
+        )
     }
 }
 
@@ -609,6 +1145,8 @@ private fun NavGraphBuilder.playerGraph(
  * (playlist detail, Now Playing, settings sub-screens) can be added as sibling functions instead
  * of growing one monolithic `NavHost` block. */
 private fun NavGraphBuilder.topLevelGraph(
+    onOpenBrowse: (String, String?) -> Unit,
+    onOpenTogether: () -> Unit,
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit,
     // Passed rather than resolved with viewModel() inside each screen: the track context menu's
     // queue actions have to reach the same activity-scoped controller the mini-player uses, and a
@@ -616,11 +1154,26 @@ private fun NavGraphBuilder.topLevelGraph(
     // a second MediaController connection queueing into a player nobody can see.
     playerViewModel: PlayerViewModel,
     onOpenPlaylist: (Long) -> Unit,
+    onOpenLibraryCollection: (LibrarySection) -> Unit,
     onOpenLibraryStats: () -> Unit,
     onOpenEqualizer: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenBackup: () -> Unit,
     onOpenCrashLogs: () -> Unit,
+    onOpenStorage: () -> Unit,
+    onOpenAbout: () -> Unit,
+    onOpenUpdates: () -> Unit,
+    onImportSharedPlaylist: () -> Unit,
+    onOpenSettingsAppearance: () -> Unit,
+    onOpenSettingsMiniPlayer: () -> Unit,
+    onOpenSettingsPlayer: () -> Unit,
+    onOpenSettingsLyrics: () -> Unit,
+    onOpenSettingsAudio: () -> Unit,
+    onOpenSettingsPlayback: () -> Unit,
+    onOpenSettingsGeneral: () -> Unit,
+    onOpenSettingsPrivacy: () -> Unit,
+    onOpenSettingsLibrarySections: () -> Unit,
+    onOpenSettingsSearchResult: (SettingsSearchEntry) -> Unit,
     onOpenCharts: () -> Unit,
     onOpenNewReleases: () -> Unit,
     onOpenExplore: () -> Unit,
@@ -630,6 +1183,9 @@ private fun NavGraphBuilder.topLevelGraph(
 ) {
     composable(Routes.HOME) {
         HomeScreen(
+            onOpenTogether = onOpenTogether,
+            onOpenStats = onOpenLibraryStats,
+            onOpenHistory = onOpenHistory,
             onPlayTrack = onPlayTrack,
             onOpenPlaylist = onOpenPlaylist,
             onOpenRemotePlaylist = onGoToRemotePlaylist,
@@ -637,7 +1193,8 @@ private fun NavGraphBuilder.topLevelGraph(
     }
     composable(Routes.SEARCH) {
         SearchScreen(
-            onPlayTrack = onPlayTrack,
+            onOpenBrowse = onOpenBrowse,
+            onPlayTrack = playerViewModel::playFromSearch,
             playerViewModel = playerViewModel,
             onGoToArtist = onGoToArtist,
             onGoToAlbum = onGoToAlbum,
@@ -652,17 +1209,32 @@ private fun NavGraphBuilder.topLevelGraph(
             onPlayTrack = onPlayTrack,
             playerViewModel = playerViewModel,
             onOpenPlaylist = onOpenPlaylist,
+            onOpenCollection = onOpenLibraryCollection,
             onOpenHistory = onOpenHistory,
             onOpenStats = onOpenLibraryStats,
+            onOpenStorage = onOpenStorage,
+            onImportSharedPlaylist = onImportSharedPlaylist,
             onGoToArtist = onGoToArtist,
             onGoToAlbum = onGoToAlbum,
         )
     }
     composable(Routes.SETTINGS) {
         SettingsScreen(
-            onOpenEqualizer = onOpenEqualizer,
+            onOpenAppearance = onOpenSettingsAppearance,
+            onOpenMiniPlayer = onOpenSettingsMiniPlayer,
+            onOpenPlayer = onOpenSettingsPlayer,
+            onOpenLyrics = onOpenSettingsLyrics,
+            onOpenAudio = onOpenSettingsAudio,
+            onOpenPlayback = onOpenSettingsPlayback,
+            onOpenGeneral = onOpenSettingsGeneral,
+            onOpenPrivacy = onOpenSettingsPrivacy,
+            onOpenLibrarySections = onOpenSettingsLibrarySections,
             onOpenBackup = onOpenBackup,
+            onOpenStorage = onOpenStorage,
             onOpenCrashLogs = onOpenCrashLogs,
+            onOpenAbout = onOpenAbout,
+            onOpenUpdates = onOpenUpdates,
+            onOpenSettingsSearchResult = onOpenSettingsSearchResult,
         )
     }
 }
@@ -677,15 +1249,17 @@ private fun LyricsResult?.asCopyableText(): String? = when (this) {
     else -> null
 }
 
-/**
- * Switches to a top-level tab the way a bottom bar is expected to behave: pops back to the start
- * destination rather than stacking tabs on top of each other, keeps each tab's own scroll/state
- * across switches, and never creates a second copy of a tab already on top.
- */
-private fun NavHostController.navigateToTab(route: String) {
-    navigate(route) {
-        popUpTo(graph.startDestinationId) { saveState = true }
-        launchSingleTop = true
-        restoreState = true
+/** Optional search target is supplied to the shared preference rows on a settings destination. */
+private fun NavGraphBuilder.settingsDestination(route: String, content: @Composable () -> Unit) {
+    composable(
+        route = "$route?focus={focus}",
+        arguments = listOf(navArgument("focus") { type = NavType.StringType; defaultValue = "" }),
+    ) { entry ->
+        CompositionLocalProvider(
+            LocalSettingsFocus provides entry.arguments?.getString("focus").orEmpty(),
+            LocalSettingsRoute provides route,
+        ) {
+            content()
+        }
     }
 }

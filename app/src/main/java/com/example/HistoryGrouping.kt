@@ -6,12 +6,8 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * One track in the history, with how many times it has been played.
- *
- * The history table holds one row per track - [PlaybackHistoryRepository.recordPlayed] upserts by
- * key and increments a counter - so a track appears once, under the day it was *last* played, not
- * once per play. Carrying the count is what makes that legible rather than looking like plays have
- * gone missing.
+ * One history row. New playback events have a count of one; legacy aggregate rows retain the
+ * earlier play count because the old database did not store individual timestamps.
  */
 data class HistoryEntry(
     val track: Track,
@@ -23,6 +19,16 @@ data class HistoryDay(
     val label: String,
     val entries: List<HistoryEntry>,
 )
+
+/** Every new play gets its own chronological row. Legacy rows keep their last-known date. */
+fun chronologicalHistory(history: List<PlaybackHistoryEntity>, events: List<PlaybackEventEntity>): List<HistoryDay> {
+    val byKey = history.associateBy { it.key }
+    val eventRows = events.mapNotNull { event ->
+        byKey[event.trackKey]?.copy(playedAt = event.playedAt, playCount = 1)
+    }
+    val eventKeys = events.map { it.trackKey }.toSet()
+    return groupHistoryByDay(eventRows + history.filter { it.key !in eventKeys })
+}
 
 /**
  * Buckets history into days, newest first.

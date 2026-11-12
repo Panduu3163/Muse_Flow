@@ -1,14 +1,16 @@
 package com.example
 
 import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.core.edit
+
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-private val Context.equalizerDataStore by preferencesDataStore(name = "equalizer_prefs")
+internal val Context.equalizerDataStore by preferencesDataStore(name = "equalizer_prefs")
 
 private object EqualizerKeys {
     val ENABLED = booleanPreferencesKey("eq_enabled")
@@ -34,10 +36,10 @@ data class EqualizerSettings(
  * [AppSettingsViewModel]), so the service doesn't need a direct reference to the settings screen
  * or vice versa.
  */
-class EqualizerRepository private constructor(context: Context) {
-    private val appContext = context.applicationContext
+class EqualizerRepository internal constructor(private val store: DataStore<Preferences>) {
+    private constructor(context: Context) : this(context.applicationContext.equalizerDataStore)
 
-    val settings: Flow<EqualizerSettings> = appContext.equalizerDataStore.data.map { prefs ->
+    val settings: Flow<EqualizerSettings> = store.data.map { prefs ->
         EqualizerSettings(
             enabled = prefs[EqualizerKeys.ENABLED] ?: false,
             bandLevelsMillibel = prefs[EqualizerKeys.BAND_LEVELS]
@@ -48,13 +50,13 @@ class EqualizerRepository private constructor(context: Context) {
     }
 
     suspend fun setEnabled(enabled: Boolean) {
-        appContext.equalizerDataStore.edit { it[EqualizerKeys.ENABLED] = enabled }
+        store.portableEdit { it[EqualizerKeys.ENABLED] = enabled }
     }
 
     /** Sets [bandIndex]'s level, growing the stored band list (padded with 0/flat for any
      * lower-indexed band never touched before) as needed. */
     suspend fun setBandLevel(bandIndex: Int, levelMillibel: Int) {
-        appContext.equalizerDataStore.edit { prefs ->
+        store.portableEdit { prefs ->
             val current = prefs[EqualizerKeys.BAND_LEVELS]
                 ?.split(",")
                 ?.mapNotNull { it.toIntOrNull() }
@@ -67,7 +69,18 @@ class EqualizerRepository private constructor(context: Context) {
     }
 
     suspend fun resetToFlat() {
-        appContext.equalizerDataStore.edit { it.remove(EqualizerKeys.BAND_LEVELS) }
+        store.portableEdit { it.remove(EqualizerKeys.BAND_LEVELS) }
+    }
+
+    /** One preference transaction and one observable curve, including its enabled state. */
+    suspend fun setCurve(levels: List<Int>) {
+        require(levels.size == com.example.audio.EQ_BAND_FREQUENCIES.size)
+        val max = (com.example.audio.EQ_MAX_GAIN_DB * 100).toInt()
+        val encoded = levels.map { it.coerceIn(-max, max) }.joinToString(",")
+        store.portableEdit {
+            it[EqualizerKeys.BAND_LEVELS] = encoded
+            it[EqualizerKeys.ENABLED] = true
+        }
     }
 
     companion object {

@@ -38,12 +38,35 @@ class DownloadService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var wakeLock: PowerManager.WakeLock? = null
+    private var stopping = false
 
     override fun onCreate() {
         super.onCreate()
-        DownloadRepository.getInstance(applicationContext).inProgress
+        val repository = DownloadRepository.getInstance(applicationContext)
+        // The OS requires startForeground() within a short grace window right after
+        // Context.startForegroundService() - it must not wait on repository.inProgress emitting
+        // a non-empty map, since that update happens inside a coroutine dispatched off this
+        // thread and can lag behind badly on throttled devices (seen in production as
+        // ForegroundServiceDidNotStartInTimeException on a Xiaomi/MIUI device). Call it here,
+        // synchronously, unconditionally, using whatever count is already known; the flow below
+        // only keeps the notification's content and the service's lifetime in sync afterward.
+        try { ServiceCompat.startForeground(
+            this,
+            FOREGROUND_NOTIFICATION_ID,
+            buildNotification(repository.inProgress.value.size.coerceAtLeast(1)),
+            foregroundServiceType()
+        ) } catch (error: Exception) {
+            stopping = true
+            repository.interruptAll("Android could not keep downloads running. Open MuseFlow and retry.")
+            android.util.Log.w("DownloadService", "Could not enter foreground", error)
+            stopSelf()
+            return
+        }
+        repository.inProgress
             .onEach { inProgress ->
+                if (stopping) return@onEach
                 if (inProgress.isEmpty()) {
+                    stopping = true
                     releaseWakeLock()
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
@@ -53,7 +76,7 @@ class DownloadService : Service() {
                         this,
                         FOREGROUND_NOTIFICATION_ID,
                         buildNotification(inProgress.size),
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                        foregroundServiceType()
                     )
                 }
             }
@@ -66,6 +89,10 @@ class DownloadService : Service() {
      * [releaseWakeLock] is somehow never reached - re-acquired on the next progress tick if the
      * download is still legitimately running past that.
      */
+    private fun foregroundServiceType(): Int = if (android.os.Build.VERSION.SDK_INT >= 29) {
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+    } else 0
+
     private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return
         val powerManager = getSystemService(POWER_SERVICE) as? PowerManager ?: return
@@ -92,7 +119,20 @@ class DownloadService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopping = true
+        serviceScope.cancel()
+        DownloadRepository.getInstance(applicationContext).interruptAll("Android stopped the download service at its time limit. Open MuseFlow and retry.")
+        releaseWakeLock()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onDestroy() {
+        val repository = DownloadRepository.getInstance(applicationContext)
+        if (repository.inProgress.value.isNotEmpty()) {
+            repository.interruptAll("The download service stopped. Open MuseFlow and retry.")
+        }
         releaseWakeLock()
         serviceScope.cancel()
         super.onDestroy()

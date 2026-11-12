@@ -67,10 +67,12 @@ object YouTubeStreamResolver {
      * [RESOLVE_TIMEOUT_MS]. Serves a cached URL (see class doc) when one is still live, skipping
      * the whole pipeline. Safe to call from any thread - internally dispatches to
      * [Dispatchers.IO]. */
-    suspend fun resolve(context: Context, videoId: String): String? = withContext(Dispatchers.IO) {
-        urlCache.get(videoId)?.let { return@withContext it }
+    suspend fun resolve(context: Context, videoId: String,
+                        quality: AudioQualityMode = AudioQualityMode.BestAvailable): String? = withContext(Dispatchers.IO) {
+        val cacheKey = "$videoId:${quality.name}"
+        urlCache.get(cacheKey)?.let { return@withContext it }
         try {
-            withTimeout(RESOLVE_TIMEOUT_MS) { resolveInternal(context, videoId) }
+            withTimeout(RESOLVE_TIMEOUT_MS) { resolveInternal(context, videoId, quality, cacheKey) }
         } catch (e: TimeoutCancellationException) {
             Log.w(TAG, "[$videoId] resolve() timed out after ${RESOLVE_TIMEOUT_MS}ms")
             null
@@ -85,10 +87,11 @@ object YouTubeStreamResolver {
      * from cache, in case the cached URL is the reason it failed (expired early, rejected by the
      * CDN for an unrelated reason, ...) - see [PlayerViewModel]'s YouTube retry path. */
     fun invalidate(videoId: String) {
-        urlCache.invalidate(videoId)
+        AudioQualityMode.entries.forEach { urlCache.invalidate("$videoId:${it.name}") }
     }
 
-    private suspend fun resolveInternal(context: Context, videoId: String): String? {
+    private suspend fun resolveInternal(context: Context, videoId: String,
+                                        quality: AudioQualityMode, cacheKey: String): String? {
         return try {
             YtCipherDeobfuscator.initialize(context)
 
@@ -122,7 +125,7 @@ object YouTubeStreamResolver {
                 return null
             }
 
-            val format = pickBestAudioFormat(playerResponse)
+            val format = pickBestAudioFormat(playerResponse, quality)
                 ?: run { Log.w(TAG, "[$videoId] no audio format in adaptiveFormats"); return null }
 
             val directUrl = format.optString("url").takeIf { it.isNotBlank() }
@@ -144,7 +147,7 @@ object YouTubeStreamResolver {
             val expiresInSeconds = playerResponse.optJSONObject("streamingData")
                 ?.optString("expiresInSeconds")
                 ?.toLongOrNull()
-            urlCache.put(videoId, streamUrl, expiresInSeconds)
+            urlCache.put(cacheKey, streamUrl, expiresInSeconds)
 
             streamUrl
         } catch (e: Exception) {
@@ -173,7 +176,7 @@ object YouTubeStreamResolver {
             .build()
         val body = httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return null
-            response.body?.string()
+            response.body.string()
         } ?: return null
 
         val jsonText = body.removePrefix(")]}'").trimStart('\n')
@@ -234,24 +237,19 @@ object YouTubeStreamResolver {
             .build()
 
         return httpClient.newCall(request).execute().use { response ->
-            JSONObject(response.body?.string() ?: error("Empty /player response (HTTP ${response.code})"))
+            JSONObject(response.body.string() ?: error("Empty /player response (HTTP ${response.code})"))
         }
     }
 
-    private fun pickBestAudioFormat(playerResponse: JSONObject): JSONObject? {
+    private fun pickBestAudioFormat(playerResponse: JSONObject, quality: AudioQualityMode): JSONObject? {
         val formats = playerResponse.optJSONObject("streamingData")?.optJSONArray("adaptiveFormats") ?: return null
-        var best: JSONObject? = null
-        var bestBitrate = -1
+        val candidates = mutableListOf<JSONObject>()
         for (i in 0 until formats.length()) {
             val format = formats.optJSONObject(i) ?: continue
             if (!format.optString("mimeType").startsWith("audio/")) continue
-            val bitrate = format.optInt("bitrate")
-            if (bitrate > bestBitrate) {
-                bestBitrate = bitrate
-                best = format
-            }
+            candidates += format
         }
-        return best
+        return selectByBitrate(candidates, quality) { it.optInt("bitrate") }
     }
 
     private const val WEB_REMIX_CLIENT_VERSION = "1.20260114.03.00"

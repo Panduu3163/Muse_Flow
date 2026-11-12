@@ -4,119 +4,124 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
-/** Where an import has got to. Matching is the slow part - one search per track - so it reports
- * progress rather than leaving the user watching a spinner of unknown length. */
 sealed interface ImportState {
     data object Idle : ImportState
+    data object Reading : ImportState
     data class Matching(val done: Int, val total: Int, val current: String) : ImportState
-    data class Done(
-        val playlistName: String,
-        val imported: Int,
-        /** Tracks with no confident YouTube match, named so the user can add them by hand. */
-        val unmatched: List<String>,
-    ) : ImportState
-
+    data object Saving : ImportState
+    data class Done(val playlistName: String, val imported: Int, val unmatched: List<String>,
+                    val playlistCreated: Boolean = imported > 0, val duplicates: Int = 0, val invalidRows: Int = 0) : ImportState
     data class Failed(val message: String) : ImportState
+    val isWorking: Boolean get() = this is Reading || this is Matching || this is Saving
 }
 
-/**
- * Imports a playlist exported from another service as a CSV.
- *
- * The file supplies names only, so every track is searched on YouTube Music and matched by
- * [isLikelyMatch] - the same comparison the app already uses to reconcile results across sources.
- * A track that doesn't match confidently is reported rather than guessed at: silently importing
- * the wrong song is worse than saying which ones need a look.
- */
-class PlaylistImportViewModel(application: Application) : AndroidViewModel(application) {
+internal const val MAX_PLAYLIST_IMPORT_BYTES = 8 * 1024 * 1024
+internal const val MAX_PLAYLIST_IMPORT_TRACKS = 5_000
 
-    private val router = MusicSearchRouter(application)
-    private val playlistRepository = PlaylistRepository.getInstance(application)
+internal class PlaylistImportOperations(
+    val read: suspend (Uri) -> String,
+    val match: suspend (CsvTrack) -> TrackResult?,
+    val save: suspend (String, List<Track>) -> Long,
+)
 
+/** Matching never writes a playlist. Only the final, non-cancellable Room transaction commits. */
+class PlaylistImportViewModel internal constructor(application: Application, private val operations: PlaylistImportOperations) : AndroidViewModel(application) {
+    constructor(application: Application) : this(application, playlistImportOperations(application))
     private val _state = MutableStateFlow<ImportState>(ImportState.Idle)
-    val state: StateFlow<ImportState> = _state.asStateFlow()
-
+    val state = _state.asStateFlow()
     private var importJob: Job? = null
+    private var generation = 0L
 
     fun cancel() {
+        // Once Saving is visible the transaction finishes; never report committed changes undone.
+        if (_state.value is ImportState.Saving) return
+        generation++
         importJob?.cancel()
+        importJob = null
         _state.value = ImportState.Idle
     }
 
-    fun dismiss() {
-        _state.value = ImportState.Idle
-    }
+    fun dismiss() { if (!_state.value.isWorking) _state.value = ImportState.Idle }
 
     fun importFrom(uri: Uri, fallbackName: String) {
         if (importJob?.isActive == true) return
-
+        val operation = ++generation
+        _state.value = ImportState.Reading
         importJob = viewModelScope.launch {
-            val tracks = try {
-                val text = withContext(Dispatchers.IO) {
-                    getApplication<Application>().contentResolver.openInputStream(uri)
-                        ?.use { it.readBytes().decodeToString() }
-                        ?: error("Couldn't open that file")
+            try {
+                val parsed = withContext(Dispatchers.IO) {
+                    val text = operations.read(uri)
+                    check(text.toByteArray(Charsets.UTF_8).size <= MAX_PLAYLIST_IMPORT_BYTES) { "That playlist is too large. Choose a file up to 8 MiB." }
+                    (if (isM3uFileName(fallbackName)) PlaylistParseResult(parsePlaylistM3u(text)) else parsePlaylistCsvReport(text)).also {
+                        check(it.tracks.size <= MAX_PLAYLIST_IMPORT_TRACKS) { "That playlist has too many tracks. Split it into files of up to 5,000 tracks." }
+                    }
                 }
-                parsePlaylistCsv(text)
-            } catch (e: CsvFormatException) {
-                _state.value = ImportState.Failed(e.message ?: "That file couldn't be read.")
-                return@launch
-            } catch (e: Exception) {
-                _state.value = ImportState.Failed(e.message ?: "That file couldn't be read.")
-                return@launch
-            }
-
-            if (tracks.isEmpty()) {
-                _state.value = ImportState.Failed("No tracks found in that file.")
-                return@launch
-            }
-
-            val name = fallbackName.substringBeforeLast('.').ifBlank { "Imported playlist" }
-            val playlistId = playlistRepository.create(name)
-
-            val unmatched = mutableListOf<String>()
-            val matched = mutableListOf<Track>()
-
-            tracks.forEachIndexed { index, csvTrack ->
-                _state.value = ImportState.Matching(index, tracks.size, csvTrack.title)
-
-                val match = findMatch(csvTrack)
-                if (match == null) {
-                    unmatched += "${csvTrack.title} — ${csvTrack.artist}"
-                } else {
-                    matched += match.toPlayableTrack(match.id.hashCode())
+                ensureActive()
+                val name = fallbackName.substringBeforeLast('.').ifBlank { "Imported playlist" }.take(512)
+                val tracks = parsed.tracks
+                if (tracks.isEmpty()) {
+                    check(parsed.skippedRows > 0) { "No tracks found in that file." }
+                    _state.value = ImportState.Done(name, 0, emptyList(), invalidRows = parsed.skippedRows)
+                    return@launch
                 }
+                val unmatched = mutableListOf<String>()
+                val matched = mutableListOf<Track>()
+                tracks.forEachIndexed { index, track ->
+                    ensureActive()
+                    _state.value = ImportState.Matching(index, tracks.size, track.title)
+                    val match = operations.match(track)
+                    ensureActive()
+                    if (match == null) unmatched += "${track.title} — ${track.artist}"
+                    else matched += match.toPlayableTrack(match.id.hashCode())
+                }
+                ensureActive()
+                if (operation != generation) return@launch
+                val unique = matched.distinctBy { it.downloadKey() }
+                if (unique.isNotEmpty()) {
+                    _state.value = ImportState.Saving
+                    withContext(NonCancellable) { operations.save(name, unique) }
+                }
+                _state.value = ImportState.Done(name, unique.size, unmatched.toList(), duplicates = matched.size - unique.size, invalidRows = parsed.skippedRows)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (operation == generation) _state.value = ImportState.Failed(error.message ?: "Import failed. Check your connection or storage and retry.")
             }
-
-            // One write at the end rather than per track: the playlist appears complete instead of
-            // filling in a row at a time behind the progress dialog.
-            playlistRepository.addTracks(playlistId, matched)
-
-            _state.value = ImportState.Done(name, matched.size, unmatched)
         }
     }
+}
 
-    /**
-     * Finds the YouTube track a CSV row refers to.
-     *
-     * Searched as "title artist" because that's what a person would type, then confirmed with
-     * [isLikelyMatch] against every result rather than trusting the first hit - YouTube happily
-     * returns covers, live versions and reaction videos above the actual track.
-     */
-    private suspend fun findMatch(csvTrack: CsvTrack): TrackResult? {
-        val results = runCatching {
-            router.searchTracks("${csvTrack.title} ${csvTrack.artist}")
-        }.getOrNull().orEmpty()
+private fun playlistImportOperations(application: Application): PlaylistImportOperations {
+    val router = MusicSearchRouter(application)
+    return PlaylistImportOperations(
+        read = { uri -> withContext(Dispatchers.IO) {
+            application.contentResolver.openInputStream(uri)?.use { readPlaylistImportText(it) }
+                ?: error("Couldn't open that file. Select it again.")
+        } },
+        match = { track ->
+            check(isOnline(application)) { "You are offline. Connect and retry; no playlist was created." }
+            // Search failures abort before commit, rather than masquerading as unmatched songs.
+            router.searchTracks("${track.title} ${track.artist}").firstOrNull {
+                isLikelyMatch(track.title, track.artist, it.title, it.artist)
+            }
+        },
+        save = { name, tracks -> PlaylistRepository.getInstance(application).createWithTracks(name, tracks) },
+    )
+}
 
-        return results.firstOrNull { candidate ->
-            isLikelyMatch(csvTrack.title, csvTrack.artist, candidate.title, candidate.artist)
-        }
+internal suspend fun readPlaylistImportText(input: java.io.InputStream): String {
+    val bytes = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(8_192)
+    while (true) {
+        currentCoroutineContext().ensureActive()
+        val count = input.read(buffer)
+        if (count < 0) break
+        check(count <= MAX_PLAYLIST_IMPORT_BYTES - bytes.size()) { "That playlist is too large. Choose a file up to 8 MiB." }
+        bytes.write(buffer, 0, count)
     }
+    return try { bytes.toByteArray().decodeToString(throwOnInvalidSequence = true) }
+        catch (_: java.nio.charset.CharacterCodingException) { error("This file is not valid UTF-8 text. Export it as UTF-8 and retry.") }
 }

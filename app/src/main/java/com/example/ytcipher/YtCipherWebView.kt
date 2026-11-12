@@ -261,7 +261,10 @@ class YtCipherWebView private constructor(
             return withTimeout(CREATE_TIMEOUT_MS) {
                 withContext(Dispatchers.Main) {
                     suspendCancellableCoroutine { cont ->
-                        val instance = YtCipherWebView(context, sigInfo, nInfo, cont)
+                        val instance = YtCipherWebView(context.applicationContext, sigInfo, nInfo, cont)
+                        cont.invokeOnCancellation {
+                            android.os.Handler(android.os.Looper.getMainLooper()).post { instance.close() }
+                        }
                         instance.loadPlayerJs(cacheDir)
                     }
                 }

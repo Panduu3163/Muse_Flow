@@ -32,7 +32,7 @@ object YtPlayerJsFetcher {
         val request = Request.Builder().url(IFRAME_API_URL).header("User-Agent", USER_AGENT).build()
         val body = httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return null
-            response.body?.string()
+            response.body.string()
         } ?: return null
         // The iframe_api bootstrap embeds the player path with escaped slashes, e.g.
         // "\/s\/player\/<hash>\/...", so the extractor's generic hash patterns won't match this
@@ -48,7 +48,7 @@ object YtPlayerJsFetcher {
             .build()
         return httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return null
-            response.body?.string()
+            response.body.string()
         }
     }
 }

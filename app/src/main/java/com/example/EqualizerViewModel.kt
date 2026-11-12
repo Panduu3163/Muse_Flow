@@ -106,15 +106,15 @@ class EqualizerViewModel(application: Application) : AndroidViewModel(applicatio
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), EqualizerSettings())
 
     fun setEnabled(enabled: Boolean) {
-        viewModelScope.launch { repository.setEnabled(enabled) }
+        viewModelScope.launchSettingsWrite { repository.setEnabled(enabled) }
     }
 
     fun setBandLevel(bandIndex: Int, levelMillibel: Int) {
-        viewModelScope.launch { repository.setBandLevel(bandIndex, levelMillibel) }
+        viewModelScope.launchSettingsWrite { repository.setBandLevel(bandIndex, levelMillibel) }
     }
 
     fun resetToFlat() {
-        viewModelScope.launch { repository.resetToFlat() }
+        viewModelScope.launchSettingsWrite { repository.resetToFlat() }
     }
 
     /**
@@ -127,10 +127,7 @@ class EqualizerViewModel(application: Application) : AndroidViewModel(applicatio
      */
     fun applyPreset(presetIndex: Int) {
         val levels = presetCurve(presetIndex) ?: return
-        viewModelScope.launch {
-            levels.forEachIndexed { band, level -> repository.setBandLevel(band, level) }
-            repository.setEnabled(true)
-        }
+        viewModelScope.launchSettingsWrite { repository.setCurve(levels) }
     }
 
     /**

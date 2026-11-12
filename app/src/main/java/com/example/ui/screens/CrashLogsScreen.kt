@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.utils.MicroIconButton
 import android.content.ClipData
 import android.content.Intent
 import androidx.compose.foundation.background
@@ -27,7 +28,6 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -80,7 +80,7 @@ fun CrashLogsScreen(
             .testTag("crash_logs_screen"),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack, modifier = Modifier.testTag("crash_logs_back")) {
+            MicroIconButton(onClick = onBack, modifier = Modifier.testTag("crash_logs_back")) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
@@ -94,7 +94,7 @@ fun CrashLogsScreen(
                 modifier = Modifier.weight(1f),
             )
             if (logs.isNotEmpty()) {
-                IconButton(
+                MicroIconButton(
                     onClick = { confirmingClear = true },
                     modifier = Modifier.testTag("crash_logs_clear"),
                 ) {
@@ -169,7 +169,7 @@ fun CrashLogsScreen(
             },
             confirmButton = {
                 Row {
-                    IconButton(
+                    MicroIconButton(
                         onClick = {
                             coroutineScope.launch {
                                 clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Crash log", text)))
@@ -179,7 +179,7 @@ fun CrashLogsScreen(
                     ) {
                         Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
                     }
-                    IconButton(
+                    MicroIconButton(
                         onClick = {
                             val intent = Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
@@ -191,7 +191,7 @@ fun CrashLogsScreen(
                     ) {
                         Icon(Icons.Default.Share, contentDescription = "Share")
                     }
-                    IconButton(
+                    MicroIconButton(
                         onClick = {
                             CrashLogs.delete(file)
                             logs = CrashLogs.list(context)

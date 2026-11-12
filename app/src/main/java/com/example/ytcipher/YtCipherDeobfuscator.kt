@@ -33,7 +33,16 @@ object YtCipherDeobfuscator {
     // other's pending request, so every decipher/transform goes through this one at a time.
     private val mutex = Mutex()
 
-    private var webView: YtCipherWebView? = null
+    private val resourceScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
+    private val retained = com.example.IdleResource<YtCipherWebView>(resourceScope) { holder ->
+        mutex.withLock {
+            if (holder.isUnused()) withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) {
+                holder.value?.close()
+                holder.value = null
+                webViewPlayerHash = null
+            }
+        }
+    }
     private var webViewPlayerHash: String? = null
 
     private val recoveryPolicy = WebViewRecoveryPolicy()
@@ -44,6 +53,8 @@ object YtCipherDeobfuscator {
      * into the final, playable URL. Returns null if any step fails.
      */
     suspend fun deobfuscateStreamUrl(signatureCipher: String): String? = withContext(Dispatchers.IO) {
+        retained.acquire()
+        try {
         mutex.withLock {
             val params = parseQueryParams(signatureCipher)
             val obfuscatedSig = params["s"] ?: run { Log.w(TAG, "no 's' param in signatureCipher"); return@withLock null }
@@ -60,11 +71,14 @@ object YtCipherDeobfuscator {
             val separator = if ("?" in baseUrl) "&" else "?"
             "$baseUrl$separator$sigParamName=${Uri.encode(deobfuscatedSig)}"
         }
+        } finally { retained.release() }
     }
 
     /** Transforms the `n` query parameter of [url] in place (throttling avoidance), returning
      * [url] unchanged if there's no `n` param or the transform can't be performed. */
     suspend fun transformNParamInUrl(url: String): String = withContext(Dispatchers.IO) {
+        retained.acquire()
+        try {
         mutex.withLock {
             val nMatch = Regex("""[?&]n=([^&]+)""").find(url) ?: return@withLock url
             val nValue = Uri.decode(nMatch.groupValues[1])
@@ -74,13 +88,14 @@ object YtCipherDeobfuscator {
 
             url.replaceFirst(Regex("""([?&])n=[^&]+"""), "$1n=${Uri.encode(transformed)}")
         }
+        } finally { retained.release() }
     }
 
     private suspend fun getOrCreateWebView(): YtCipherWebView? {
         val playerJs = YtPlayerJsFetcher.getPlayerJs() ?: run { Log.w(TAG, "getPlayerJs() returned null"); return null }
         Log.d(TAG, "playerJs hash=${playerJs.hash} size=${playerJs.source.length}")
 
-        if (webView != null && webViewPlayerHash == playerJs.hash) return webView
+        if (retained.value != null && webViewPlayerHash == playerJs.hash) return retained.value
 
         if (!recoveryPolicy.shouldAttempt()) {
             Log.w(TAG, "skipping WebView (re)creation - in cooldown after repeated failures")
@@ -91,8 +106,8 @@ object YtCipherDeobfuscator {
         // WebView method. This function itself now always runs on Dispatchers.IO (see the public
         // entry points above), so without this explicit switch back, close() would run on IO and
         // throw the first time a player.js rotation mid-session actually triggers a rebuild.
-        webView?.let { stale -> withContext(Dispatchers.Main) { stale.close() } }
-        webView = null
+        retained.value?.let { stale -> withContext(Dispatchers.Main) { stale.close() } }
+        retained.value = null
 
         val sigInfo = YtCipherFunctionExtractor.extractSigInfo(playerJs.source, appContext, playerJs.hash)
         val nInfo = YtCipherFunctionExtractor.extractNInfo(playerJs.source, appContext, playerJs.hash)
@@ -111,7 +126,7 @@ object YtCipherDeobfuscator {
             return null
         }
         recoveryPolicy.onSuccess()
-        webView = created
+        retained.value = created
         webViewPlayerHash = playerJs.hash
         return created
     }

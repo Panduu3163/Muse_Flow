@@ -1,5 +1,7 @@
 package com.example
 
+import androidx.core.net.toUri
+
 import android.net.Uri
 
 /**
@@ -17,7 +19,7 @@ private const val YOUTUBE_RESOLVE_HOST = "museflow.invalid"
 private const val YOUTUBE_RESOLVE_PATH_PREFIX = "/yt-resolve/"
 
 fun youTubeResolvePlaceholderUri(videoId: String): Uri =
-    Uri.parse("https://$YOUTUBE_RESOLVE_HOST$YOUTUBE_RESOLVE_PATH_PREFIX$videoId")
+    ("https://$YOUTUBE_RESOLVE_HOST$YOUTUBE_RESOLVE_PATH_PREFIX$videoId").toUri()
 
 /** Extracts the video id back out of a placeholder built by [youTubeResolvePlaceholderUri], or
  * null if [uri] isn't one. */

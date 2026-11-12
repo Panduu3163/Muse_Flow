@@ -182,6 +182,11 @@ object YouTube {
             }
         }
 
+        // `shelfSummaries` above only ever captures the "Top result" card - the rest of the page
+        // (Songs/Videos/Albums/Artists/Playlists) arrives as plain `itemSectionRenderer` content
+        // with no shelf title of its own, so it has to be classified and grouped here instead.
+        // Removing this entirely (a previous version of this did, to chase the bug noted below)
+        // took the whole rest of the page down with it - only "Top result" was left to show.
         val flatItems = contents
             .mapNotNull { it.itemSectionRenderer }
             .flatMap { it.contents.orEmpty() }
@@ -205,6 +210,13 @@ object YouTube {
             groupedSummaries.add(SearchSummary(title = "Albums", items = flatAlbums))
         }
 
+        // A same-name-as-the-song filter lived here briefly to chase a report of a bogus "artist"
+        // appearing - reverted: Echo-Music's own upstream code (which this was ported from) runs
+        // this exact same classification unmodified, and the filter's one clear, reproducible
+        // effect turned out to be hiding a real, correctly-matched artist whenever their own name
+        // happened to coincide with any song title in the same results - a worse failure than the
+        // one it was meant to fix. If the original "wrong-named artist" report reproduces again,
+        // it needs an actual captured response to diagnose, not another guessed heuristic here.
         val flatArtists = flatItems.filterIsInstance<ArtistItem>()
         if (flatArtists.isNotEmpty()) {
             groupedSummaries.add(SearchSummary(title = "Artists", items = flatArtists))
@@ -726,10 +738,33 @@ object YouTube {
         // "_albums" suffix, no params) - confirmed from the raw explore page response, where it's a
         // plain musicNavigationButtonRenderer, not a carousel shelf with a "more" button.
         // "FEmusic_new_releases_albums" (the old guess, and a still-plausible-looking id) 404s.
+        //
+        // The page itself wraps its albums in a musicCarouselShelfRenderer, not a gridRenderer -
+        // confirmed against a live response (single section, 24 musicTwoRowItemRenderer items).
+        // gridRenderer is kept as a fallback in case the layout varies by region/session.
         val response = innerTube.browse(WEB_REMIX, browseId = "FEmusic_new_releases").body<BrowseResponse>()
-        response.contents?.singleColumnBrowseResultsRenderer?.tabs?.firstOrNull()?.tabRenderer?.content?.sectionListRenderer?.contents?.firstOrNull()?.gridRenderer?.items
+        val firstSection = response.contents?.singleColumnBrowseResultsRenderer?.tabs?.firstOrNull()
+            ?.tabRenderer?.content?.sectionListRenderer?.contents?.firstOrNull()
+        val items = firstSection?.musicCarouselShelfRenderer?.contents?.mapNotNull { it.musicTwoRowItemRenderer }
+            ?: firstSection?.gridRenderer?.items?.mapNotNull { it.musicTwoRowItemRenderer }
+        items?.mapNotNull(NewReleaseAlbumPage::fromMusicTwoRowItemRenderer).orEmpty()
+    }
+
+    /**
+     * `FEmusic_new_releases` no longer serves a distinct "new albums" shelf for an unauthenticated
+     * client - confirmed against a live response, which returns a single "Music videos"/"New
+     * releases" carousel of individual songs (musicTwoRowItemRenderer.isSong), not albums. Real
+     * songs are still real, playable data though, so this sources actual "new releases" content
+     * from what YouTube genuinely returns rather than continuing to ask for an "albums" shape that
+     * doesn't exist on this page anymore.
+     */
+    suspend fun newReleaseSongs(): Result<List<SongItem>> = runCatching {
+        val response = innerTube.browse(WEB_REMIX, browseId = "FEmusic_new_releases").body<BrowseResponse>()
+        response.contents?.singleColumnBrowseResultsRenderer?.tabs?.firstOrNull()
+            ?.tabRenderer?.content?.sectionListRenderer?.contents?.firstOrNull()
+            ?.musicCarouselShelfRenderer?.contents
             ?.mapNotNull { it.musicTwoRowItemRenderer }
-            ?.mapNotNull(NewReleaseAlbumPage::fromMusicTwoRowItemRenderer)
+            ?.mapNotNull { convertMusicTwoRowItem(it) as? SongItem }
             .orEmpty()
     }
 
@@ -950,24 +985,38 @@ object YouTube {
         val response = httpResponse.body<BrowseResponse>()
 
         val sections = mutableListOf<ChartsPage.ChartSection>()
-    
+        // FEmusic_charts no longer inlines individual song items directly - its "Video charts"
+        // carousel now only holds *links* to chart playlists (musicTwoRowItemRenderer.isPlaylist,
+        // e.g. "Top 100 Music Videos Global"), confirmed against a live response. A handful of
+        // those chart-playlist browse calls are resolved eagerly so getChartsTracks() still gets
+        // real playable songs instead of silently filtering everything to zero. Capped so a future
+        // page layout with many more playlist tiles can't turn one Charts load into a request storm.
+        var playlistsResolved = 0
+        val maxPlaylistsToResolve = 3
+
         response.contents?.singleColumnBrowseResultsRenderer?.tabs?.firstOrNull()
             ?.tabRenderer?.content?.sectionListRenderer?.contents?.forEach { content ->
-            
+
                 content.musicCarouselShelfRenderer?.let { renderer ->
                     val title = renderer.header?.musicCarouselShelfBasicHeaderRenderer?.title?.runs?.firstOrNull()?.text
                         ?: return@forEach
-                
-                    val items = renderer.contents.mapNotNull { item ->
+
+                    val items = renderer.contents.flatMap { item ->
                         when {
-                            item.musicResponsiveListItemRenderer != null -> 
-                                convertToChartItem(item.musicResponsiveListItemRenderer)
-                            item.musicTwoRowItemRenderer != null -> 
-                                convertMusicTwoRowItem(item.musicTwoRowItemRenderer)
-                            else -> null
+                            item.musicTwoRowItemRenderer?.isPlaylist == true && playlistsResolved < maxPlaylistsToResolve -> {
+                                val browseId = item.musicTwoRowItemRenderer.navigationEndpoint.browseEndpoint?.browseId
+                                    ?: return@flatMap emptyList()
+                                playlistsResolved++
+                                playlist(browseId.removePrefix("VL")).getOrNull()?.songs.orEmpty()
+                            }
+                            item.musicResponsiveListItemRenderer != null ->
+                                listOfNotNull(convertToChartItem(item.musicResponsiveListItemRenderer))
+                            item.musicTwoRowItemRenderer != null ->
+                                listOfNotNull(convertMusicTwoRowItem(item.musicTwoRowItemRenderer))
+                            else -> emptyList()
                         }
-                    }.filterNotNull()
-                
+                    }
+
                     if (items.isNotEmpty()) {
                         sections.add(
                             ChartsPage.ChartSection(
@@ -1001,10 +1050,6 @@ object YouTube {
                 }
             }
 
-        android.util.Log.d(
-            "NewReleasesDiag",
-            "charts sections=${sections.size}, itemTypes=${sections.flatMap { it.items }.map { it::class.simpleName }.groupingBy { it }.eachCount()}"
-        )
         ChartsPage(
             sections = sections,
             continuation = response.continuationContents?.sectionListContinuation?.continuations?.getContinuation()

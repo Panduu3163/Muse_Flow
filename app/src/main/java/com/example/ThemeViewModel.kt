@@ -4,8 +4,9 @@ import android.app.Application
 import android.content.Context
 import androidx.compose.ui.graphics.Color
 import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.core.edit
+
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -17,24 +18,47 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-private val Context.themeDataStore by preferencesDataStore(name = "theme_prefs")
+internal val Context.themeDataStore by preferencesDataStore(name = "theme_prefs")
 
 private object ThemePreferenceKeys {
     val SEED_COLOR = intPreferencesKey("seed_color")
     val PURE_BLACK = booleanPreferencesKey("pure_black")
     val DARK_THEME = booleanPreferencesKey("dark_theme")
     val DYNAMIC_ALBUM_COLOR = booleanPreferencesKey("dynamic_album_color")
+    val THEME_MODE = stringPreferencesKey("theme_mode")
 }
+
+enum class ThemeMode(val label: String) {
+    System("Follow system"),
+    Light("Light"),
+    Dark("Dark"),
+    Amoled("AMOLED"),
+}
+
+internal fun resolveThemeMode(saved: String?, legacyDark: Boolean?, legacyPureBlack: Boolean?): ThemeMode =
+    saved?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: when {
+        legacyPureBlack == true -> ThemeMode.Amoled
+        legacyDark == false -> ThemeMode.Light
+        else -> ThemeMode.Dark
+    }
+
+fun ThemeMode.isDark(systemDark: Boolean): Boolean = when (this) {
+    ThemeMode.System -> systemDark
+    ThemeMode.Light -> false
+    ThemeMode.Dark, ThemeMode.Amoled -> true
+}
+
+internal fun themeSeedColor(savedSeed: Color, albumAccent: Color?, fromAlbum: Boolean): Color =
+    if (fromAlbum) albumAccent ?: savedSeed else savedSeed
 
 /**
  * The user's persisted theme choices. [seedColor] is the single colour the entire Material 3
- * palette is generated from (see `ui/theme/Theme.kt`) - leaving it at [DefaultThemeColor] on
- * Android 12+ hands theming over to the system wallpaper palette instead.
+ * palette is generated from (see `ui/theme/Theme.kt`). Album-art colour temporarily supplies
+ * another seed while a track with artwork is playing; the saved colour remains available.
  */
 data class ThemeState(
     val seedColor: Color = DefaultThemeColor,
-    val pureBlack: Boolean = false,
-    val darkTheme: Boolean = true,
+    val mode: ThemeMode = ThemeMode.Dark,
     /** Re-seed the palette from the current track's album art while something is playing. */
     val dynamicAlbumColor: Boolean = false,
     /** False only for the single frame before DataStore's first real read completes - lets the
@@ -51,27 +75,23 @@ private class ThemeRepository(private val context: Context) {
     val themeState: Flow<ThemeState> = context.themeDataStore.data.map { prefs ->
         ThemeState(
             seedColor = prefs[ThemePreferenceKeys.SEED_COLOR]?.let { Color(it) } ?: DefaultThemeColor,
-            pureBlack = prefs[ThemePreferenceKeys.PURE_BLACK] ?: false,
-            darkTheme = prefs[ThemePreferenceKeys.DARK_THEME] ?: true,
+            mode = resolveThemeMode(prefs[ThemePreferenceKeys.THEME_MODE],
+                prefs[ThemePreferenceKeys.DARK_THEME], prefs[ThemePreferenceKeys.PURE_BLACK]),
             dynamicAlbumColor = prefs[ThemePreferenceKeys.DYNAMIC_ALBUM_COLOR] ?: false,
             isLoaded = true,
         )
     }
 
     suspend fun setSeedColor(color: Color) {
-        context.themeDataStore.edit { it[ThemePreferenceKeys.SEED_COLOR] = color.toArgbInt() }
+        context.themeDataStore.portableEdit { it[ThemePreferenceKeys.SEED_COLOR] = color.toArgbInt() }
     }
 
-    suspend fun setPureBlack(enabled: Boolean) {
-        context.themeDataStore.edit { it[ThemePreferenceKeys.PURE_BLACK] = enabled }
-    }
-
-    suspend fun setDarkTheme(enabled: Boolean) {
-        context.themeDataStore.edit { it[ThemePreferenceKeys.DARK_THEME] = enabled }
+    suspend fun setMode(mode: ThemeMode) {
+        context.themeDataStore.portableEdit { it[ThemePreferenceKeys.THEME_MODE] = mode.name }
     }
 
     suspend fun setDynamicAlbumColor(enabled: Boolean) {
-        context.themeDataStore.edit { it[ThemePreferenceKeys.DYNAMIC_ALBUM_COLOR] = enabled }
+        context.themeDataStore.portableEdit { it[ThemePreferenceKeys.DYNAMIC_ALBUM_COLOR] = enabled }
     }
 }
 
@@ -94,11 +114,10 @@ class ThemeViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = ThemeState()
     )
 
-    fun setSeedColor(color: Color) = viewModelScope.launch { repository.setSeedColor(color) }
-    fun setPureBlack(enabled: Boolean) = viewModelScope.launch { repository.setPureBlack(enabled) }
-    fun setDarkTheme(enabled: Boolean) = viewModelScope.launch { repository.setDarkTheme(enabled) }
+    fun setSeedColor(color: Color) = viewModelScope.launchSettingsWrite { repository.setSeedColor(color) }
+    fun setMode(mode: ThemeMode) = viewModelScope.launchSettingsWrite { repository.setMode(mode) }
     fun setDynamicAlbumColor(enabled: Boolean) =
-        viewModelScope.launch { repository.setDynamicAlbumColor(enabled) }
+        viewModelScope.launchSettingsWrite { repository.setDynamicAlbumColor(enabled) }
 
-    fun resetToDefaultSeed() = viewModelScope.launch { repository.setSeedColor(DefaultThemeColor) }
+    fun resetToDefaultSeed() = viewModelScope.launchSettingsWrite { repository.setSeedColor(DefaultThemeColor) }
 }

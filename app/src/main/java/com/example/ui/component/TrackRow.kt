@@ -1,35 +1,59 @@
 package com.example.ui.component
 
+import com.example.ui.utils.contentMotion
+import com.example.ui.utils.MotionIcon
+import com.example.ui.utils.feedbackClickable
+import com.example.ui.utils.MicroIconButton
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import coil3.compose.AsyncImage
+
+/** Playback state for artwork badges throughout the NavHost. The badge's visibility is separate. */
+val LocalPlaybackActive = staticCompositionLocalOf { false }
 
 /**
  * The one song row every list in the app uses - search results, playlists, downloads, liked songs.
@@ -51,8 +75,19 @@ fun TrackRow(
     onLongClick: (() -> Unit)? = null,
     isLiked: Boolean = false,
     isDownloaded: Boolean = false,
+    /** A file already on the device (On Device section, or an on-device track that's since been
+     * liked/added to a playlist) - shown with its own glyph rather than [isDownloaded]'s, since
+     * "Download" is a meaningless action/status for something that was never fetched through the
+     * app's own download feature in the first place. Takes priority when both are somehow true. */
+    isLocalDevice: Boolean = false,
     /** 0-100 while downloading, -1 for "started, no percentage yet", null when not downloading. */
     downloadProgress: Int? = null,
+    /** True when this row's track is the one currently loaded in the player (playing or paused) -
+     * shows a small animated equalizer over the cover art so the currently-playing song is
+     * identifiable at a glance in a long list, the same way Spotify/YouTube Music mark it. Callers
+     * compare their own track's `playbackId()` against the player's current recording ID to
+     * compute this. A title/artist download key cannot distinguish different versions. */
+    isPlaying: Boolean = false,
     /** Ticked in multi-select mode. Tints the row and replaces the artwork with a checkmark. */
     selected: Boolean = false,
     /**
@@ -63,25 +98,29 @@ fun TrackRow(
      */
     onOpenMenu: (() -> Unit)? = null,
 ) {
+    val playbackActive = LocalPlaybackActive.current
+    val reduced = com.example.ui.theme.LocalReducedMotion.current
+    val selectionColor by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+        tween(if (reduced) 0 else 160), label = "row_selection",
+    )
     Row(
         modifier = modifier
             .fillMaxWidth()
             // Before the click handler so the press ripple draws over the tint rather than under
             // it. Both cues together on purpose: the row tint alone is easy to miss at a glance,
             // and the artwork check alone doesn't read as "this whole row".
-            .background(
-                if (selected) {
-                    MaterialTheme.colorScheme.secondaryContainer
-                } else {
-                    androidx.compose.ui.graphics.Color.Transparent
-                },
-            )
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .background(selectionColor)
+            .semantics {
+                if (isPlaying) stateDescription = if (playbackActive) "Playing" else "Paused"
+                if (selected) stateDescription = "Selected"
+            }
+            .feedbackClickable(onClick = onClick, onLongClick = onLongClick, role = androidx.compose.ui.semantics.Role.Button)
+            .padding(horizontal = com.example.ui.theme.MuseFlowSpacing.medium, vertical = com.example.ui.theme.MuseFlowSpacing.small)
             .testTag("track_row_${title.lowercase().replace(" ", "_")}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Artwork(imageUrl = imageUrl, selected = selected)
+        Artwork(imageUrl = imageUrl, selected = selected, isPlaying = isPlaying)
 
         Column(
             modifier = Modifier
@@ -92,7 +131,7 @@ fun TrackRow(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
+                maxLines = if (androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.2f) 2 else 1,
                 overflow = TextOverflow.Ellipsis,
             )
             // Duration sits beside the artist rather than out at the row's trailing edge - with
@@ -133,24 +172,27 @@ fun TrackRow(
                 modifier = Modifier.size(16.dp),
             )
         }
-        if (isDownloaded) {
-            Icon(
-                imageVector = Icons.Default.DownloadDone,
-                contentDescription = "Downloaded",
+        Box(Modifier.contentMotion(when {
+            isLocalDevice -> "local"
+            isDownloaded -> "downloaded"
+            downloadProgress != null -> "downloading"
+            else -> "none"
+        })) {
+        if (isLocalDevice || isDownloaded) {
+            MotionIcon(
+                imageVector = if (isLocalDevice) Icons.Default.Storage else Icons.Default.DownloadDone,
+                contentDescription = if (isLocalDevice) "On this device" else "Downloaded",
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .padding(start = 6.dp)
-                    .size(16.dp),
+                modifier = Modifier.padding(start = 6.dp).size(16.dp),
             )
         } else if (downloadProgress != null) {
-            DownloadProgressRing(
-                percent = downloadProgress,
-                modifier = Modifier.padding(start = 6.dp),
-            )
+            DownloadProgressRing(downloadProgress, Modifier.padding(start = 6.dp))
+        }
+
         }
 
         onOpenMenu?.let { openMenu ->
-            IconButton(
+            MicroIconButton(
                 onClick = openMenu,
                 modifier = Modifier.testTag("track_row_menu_${title.lowercase().replace(" ", "_")}"),
             ) {
@@ -173,14 +215,19 @@ fun TrackRow(
  */
 @Composable
 private fun DownloadProgressRing(percent: Int, modifier: Modifier = Modifier) {
+    val reduced = com.example.ui.theme.LocalReducedMotion.current
+    val progress by animateFloatAsState(percent.coerceIn(0, 100) / 100f,
+        tween(if (reduced) 0 else 160), label = "download_progress")
     if (percent >= 0) {
         CircularProgressIndicator(
-            progress = { percent / 100f },
+            progress = { progress },
             modifier = modifier.size(18.dp),
             strokeWidth = 2.dp,
             color = MaterialTheme.colorScheme.primary,
             trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
         )
+    } else if (reduced) {
+        Icon(Icons.Default.Download, "Downloading", modifier.size(18.dp), MaterialTheme.colorScheme.primary)
     } else {
         CircularProgressIndicator(
             modifier = modifier.size(18.dp),
@@ -195,6 +242,7 @@ private fun DownloadProgressRing(percent: Int, modifier: Modifier = Modifier) {
 private fun Artwork(
     imageUrl: String?,
     selected: Boolean = false,
+    isPlaying: Boolean = false,
     size: androidx.compose.ui.unit.Dp = 52.dp,
 ) {
     Box(
@@ -236,6 +284,56 @@ private fun Artwork(
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(24.dp),
+            )
+        }
+
+        // Overlaid rather than replacing the art (unlike the selected checkmark above) - the cover
+        // is still worth seeing; this only needs to be noticeable, not exclusive.
+        if (isPlaying) {
+            Box(
+                modifier = Modifier
+                    .size(size)
+                    .background(Color.Black.copy(alpha = 0.45f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                NowPlayingIndicator()
+            }
+        }
+    }
+}
+
+/** A small animated equalizer (three bars bouncing out of phase) marking whichever row's track is
+ * currently loaded in the player - the same "this one's playing" convention Spotify/YouTube Music
+ * use, so a long list of songs doesn't require opening Now Playing just to tell which one it is.
+ * Not `private`: also used directly by grid-view cells (e.g. `LibraryScreen`'s `TrackGridCell`),
+ * which render their own artwork box rather than going through [TrackRow]'s. */
+@Composable
+fun NowPlayingIndicator() {
+    val active = LocalPlaybackActive.current && !com.example.ui.theme.LocalReducedMotion.current
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.Bottom,
+        modifier = Modifier.height(18.dp),
+    ) {
+        repeat(3) { index ->
+            val height = remember { Animatable(listOf(.45f, .95f, .65f)[index]) }
+            var rising by remember { mutableStateOf(index != 1) }
+            LaunchedEffect(active) {
+                // Cancelling animateTo retains its current value. On resume, the bar continues
+                // toward the same target instead of restarting or jumping to another frame.
+                while (active) {
+                    height.animateTo(
+                        targetValue = if (rising) 1f else .25f,
+                        animationSpec = tween(480 + index * 130, easing = LinearEasing),
+                    )
+                    rising = !rising
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(18.dp * height.value)
+                    .background(Color.White, RoundedCornerShape(1.dp)),
             )
         }
     }

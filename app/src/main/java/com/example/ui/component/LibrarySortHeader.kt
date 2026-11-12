@@ -1,5 +1,8 @@
 package com.example.ui.component
 
+import com.example.ui.utils.MotionIcon
+import com.example.ui.utils.MotionLabel
+import com.example.ui.utils.MicroIconButton
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,7 +19,6 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -55,6 +57,7 @@ fun <T : Enum<T>> LibrarySortHeader(
     var menuExpanded by remember { mutableStateOf(false) }
     val arrowRotation by animateFloatAsState(
         targetValue = if (ascending) 180f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(if (com.example.ui.theme.LocalReducedMotion.current) 0 else 180),
         label = "sort_direction",
     )
 
@@ -98,7 +101,7 @@ fun <T : Enum<T>> LibrarySortHeader(
             }
         }
 
-        IconButton(
+        MicroIconButton(
             onClick = onToggleDirection,
             modifier = Modifier.testTag("library_sort_direction"),
         ) {
@@ -114,18 +117,21 @@ fun <T : Enum<T>> LibrarySortHeader(
 
         Box(modifier = Modifier.weight(1f))
 
-        Text(
+        MotionLabel(
             text = countLabel,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
         )
 
         if (isGrid != null && onToggleGrid != null) {
-            IconButton(
+            MicroIconButton(
                 onClick = onToggleGrid,
                 modifier = Modifier.testTag("library_view_toggle"),
             ) {
-                Icon(
+                MotionIcon(
                     imageVector = if (isGrid) {
                         Icons.AutoMirrored.Filled.List
                     } else {

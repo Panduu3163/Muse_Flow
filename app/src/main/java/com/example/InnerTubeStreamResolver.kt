@@ -31,20 +31,24 @@ object InnerTubeStreamResolver {
      * are deliberately excluded - minting one is exactly the MuseFlow machinery this path exists
      * to avoid depending on. */
     private val CLIENT_CHAIN: List<YouTubeClient> = listOf(
+        YouTubeClient.VISIONOS,
+        YouTubeClient.TVHTML5,
         YouTubeClient.ANDROID_VR_1_43_32,
         YouTubeClient.ANDROID_VR_1_61_48,
         YouTubeClient.ANDROID_VR_NO_AUTH,
-        YouTubeClient.TVHTML5_SIMPLY_EMBEDDED_PLAYER,
         YouTubeClient.ANDROID_CREATOR,
         YouTubeClient.IPADOS,
         YouTubeClient.IOS,
         YouTubeClient.MOBILE,
-        YouTubeClient.VISIONOS,
         YouTubeClient.ANDROID_NO_SDK,
     )
 
-    /** Audio-only itags, best first: 251/250/249 are Opus, 140/141/139 are AAC. */
-    private val AUDIO_ITAG_PREFERENCE = listOf(251, 140, 250, 141, 249, 139, 171, 172)
+    /** Audio-only itags, best first, ranked by actual bitrate within each codec (251 ~160kbps
+     * Opus > 141 ~256kbps AAC > 140 ~128kbps AAC > 250 ~70kbps Opus > 249 ~50kbps Opus >
+     * 139 ~48kbps AAC > 172 ~192kbps Vorbis > 171 ~128kbps Vorbis) - this is the fallback used
+     * only when [resolveViaNewPipeOnly] has no bitrate metadata to rank by directly. */
+    private val AUDIO_ITAG_PREFERENCE = listOf(251, 141, 140, 250, 249, 139, 172, 171)
+    private val DATA_SAVER_ITAG_PREFERENCE = listOf(250, 249, 139, 140, 251, 171, 172, 141)
 
     /**
      * Highest-quality audio-only stream, or null if nothing playable came back.
@@ -54,12 +58,13 @@ object InnerTubeStreamResolver {
      * answers 403 to anything else. The winning client's User-Agent therefore has to travel with
      * the URL all the way to the HTTP request that finally fetches it.
      */
-    suspend fun resolve(videoId: String): StreamResolution? {
+    suspend fun resolve(videoId: String,
+                        quality: AudioQualityMode = AudioQualityMode.BestAvailable): StreamResolution? {
         // NewPipe first, deliberately. The `player()` endpoint hands back URLs whose `n` query
         // parameter is still obfuscated; YouTube answers 403 to those unless it has been
         // transformed by the player JS. NewPipeExtractor performs that transform itself, so its
         // URLs are actually fetchable - whereas a "successful" player() response often isn't.
-        resolveViaNewPipeOnly(videoId)?.let { return it }
+        resolveViaNewPipeOnly(videoId, quality)?.let { return it }
 
         for (client in CLIENT_CHAIN) {
             val response = YouTube.player(videoId = videoId, client = client)
@@ -74,7 +79,9 @@ object InnerTubeStreamResolver {
                 continue
             }
 
-            response.bestAudioUrl()?.let { url ->
+            response.bestAudioFormat(quality)?.let { format ->
+                val url = format.url!!
+                if (!validateStream(url, client.userAgent, format.contentLength)) return@let
                 Log.i(TAG, "$videoId resolved via ${client.clientName}")
                 return StreamResolution(url = url, userAgent = client.userAgent)
             }
@@ -82,8 +89,10 @@ object InnerTubeStreamResolver {
             // Playable, but the URLs are signature-obfuscated - let NewPipe decipher them.
             runCatching { YouTube.newPipePlayer(videoId, response) }
                 .getOrNull()
-                ?.bestAudioUrl()
-                ?.let { url ->
+                ?.bestAudioFormat(quality)
+                ?.let { format ->
+                    val url = format.url!!
+                    if (!validateStream(url, client.userAgent, format.contentLength)) return@let
                     Log.i(TAG, "$videoId resolved via ${client.clientName} + NewPipe deobfuscation")
                     return StreamResolution(url = url, userAgent = client.userAgent)
                 }
@@ -93,8 +102,24 @@ object InnerTubeStreamResolver {
         return null
     }
 
+    private val probeClient = okhttp3.OkHttpClient.Builder()
+        .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
+
+    /** Echo Music reference: range probes reject preview-only URLs before playback starts.
+     * Match the playback user agent; never forward account cookies to CDN probes. */
+    private suspend fun validateStream(url: String, userAgent: String?, length: Long?): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val range = if (length != null && length > 0) "bytes=${length - 1}-${length - 1}" else "bytes=0-0"
+            val request = okhttp3.Request.Builder().url(url).head().header("Range", range)
+                .apply { userAgent?.let { header("User-Agent", it) } }.build()
+            probeClient.newCall(request).execute().use { it.isSuccessful || it.code == 405 }
+        } catch (_: java.io.IOException) { true }
+    }
+
     /** NewPipe URLs aren't tied to one of our client User-Agents, so none is attached here. */
-    private suspend fun resolveViaNewPipeOnly(videoId: String): StreamResolution? = withContext(Dispatchers.IO) {
+    private suspend fun resolveViaNewPipeOnly(videoId: String,
+                                              quality: AudioQualityMode): StreamResolution? = withContext(Dispatchers.IO) {
         val streams = runCatching { YouTube.getNewPipeStreamUrls(videoId) }
             .onFailure { Log.w(TAG, "NewPipe extraction failed for $videoId", it) }
             .getOrNull()
@@ -105,9 +130,12 @@ object InnerTubeStreamResolver {
             return@withContext null
         }
 
-        val byItag = streams.toMap()
-        val url = AUDIO_ITAG_PREFERENCE.firstNotNullOfOrNull { byItag[it] }
-            ?: streams.first().second // Any stream beats none.
+        val itagOrder = if (quality == AudioQualityMode.DataSaver) DATA_SAVER_ITAG_PREFERENCE else AUDIO_ITAG_PREFERENCE
+        val ordered = streams.distinctBy { it.second }.sortedBy { (itag, _) ->
+            itagOrder.indexOf(itag).takeIf { it >= 0 } ?: Int.MAX_VALUE
+        }
+        val url = ordered.firstOrNull { (_, candidate) -> validateStream(candidate, null, null) }?.second
+            ?: return@withContext null
 
         Log.i(TAG, "$videoId resolved via NewPipe standalone extraction")
         StreamResolution(url = url)
@@ -119,12 +147,11 @@ object InnerTubeStreamResolver {
  * and ranked by bitrate; the muxed [PlayerResponse.StreamingData.formats] list is used only if no
  * adaptive audio format carries a URL - those carry video too, but a playable stream beats none.
  */
-private fun PlayerResponse.bestAudioUrl(): String? {
+private fun PlayerResponse.bestAudioFormat(quality: AudioQualityMode): PlayerResponse.StreamingData.Format? {
     val streaming = streamingData ?: return null
 
-    return streaming.adaptiveFormats
-        .filter { it.isAudio && it.url != null }
-        .maxByOrNull { it.bitrate }
-        ?.url
-        ?: streaming.formats?.firstOrNull { it.url != null }?.url
+    val audioFormats = streaming.adaptiveFormats
+        .filter { it.isAudio && it.isOriginal && it.url != null }
+    return selectByBitrate(audioFormats, quality) { it.bitrate }
+        ?: streaming.formats?.firstOrNull { it.url != null }
 }

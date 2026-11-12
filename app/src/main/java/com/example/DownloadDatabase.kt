@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Context
+import androidx.compose.runtime.Immutable
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -14,7 +15,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
-enum class DownloadStatus { DOWNLOADING, COMPLETED, FAILED }
+enum class DownloadStatus { DOWNLOADING, COMPLETED, FAILED, MISSING }
 
 /**
  * A track downloaded for offline playback. Keyed by [Track.downloadKey] (title/artist) rather
@@ -47,6 +48,8 @@ data class DownloadedTrackEntity(
 
 @Dao
 interface DownloadedTrackDao {
+    @Query("SELECT * FROM downloaded_tracks")
+    suspend fun snapshot(): List<DownloadedTrackEntity>
     @Query("SELECT * FROM downloaded_tracks WHERE status = 'COMPLETED'")
     fun observeCompleted(): Flow<List<DownloadedTrackEntity>>
 
@@ -58,6 +61,11 @@ interface DownloadedTrackDao {
 
     @Query("DELETE FROM downloaded_tracks WHERE key = :key")
     suspend fun deleteByKey(key: String)
+
+    /** For Storage settings' "Clear downloads" - the row side of the wipe, the actual files are
+     * deleted separately by [DownloadRepository.deleteAllDownloads]. */
+    @Query("DELETE FROM downloaded_tracks")
+    suspend fun clearAll()
 }
 
 /**
@@ -93,6 +101,43 @@ data class PlaybackHistoryEntity(
 
 @Dao
 interface PlaybackHistoryDao {
+    @Query("SELECT * FROM playback_history ORDER BY playedAt DESC, `key` ASC")
+    suspend fun backupHistory(): List<PlaybackHistoryEntity>
+
+    @Query("SELECT * FROM playback_events ORDER BY playedAt ASC, id ASC")
+    suspend fun backupEvents(): List<PlaybackEventEntity>
+
+    @Query("SELECT * FROM listening_sessions ORDER BY startedAt DESC, id ASC LIMIT 2000")
+    suspend fun backupSessions(): List<ListeningSessionEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveListeningSession(session: ListeningSessionEntity)
+
+    @Query("SELECT * FROM listening_sessions WHERE id = :id")
+    suspend fun listeningSession(id: String): ListeningSessionEntity?
+
+    @Query("SELECT * FROM listening_sessions ORDER BY startedAt DESC, id ASC LIMIT 2000")
+    fun observeListeningSessions(): Flow<List<ListeningSessionEntity>>
+
+    @Query("DELETE FROM listening_sessions WHERE trackKey = :key")
+    suspend fun deleteListeningSessions(key: String)
+
+    @Query("DELETE FROM listening_sessions")
+    suspend fun clearListeningSessions()
+
+    @Query("DELETE FROM listening_sessions WHERE id NOT IN (SELECT id FROM listening_sessions ORDER BY startedAt DESC, id ASC LIMIT 2000)")
+    suspend fun trimListeningSessions()
+    @Insert
+    suspend fun insertEvent(event: PlaybackEventEntity)
+
+    @Query("SELECT * FROM playback_events ORDER BY playedAt DESC")
+    fun observeEvents(): Flow<List<PlaybackEventEntity>>
+
+    @Query("DELETE FROM playback_events WHERE trackKey = :key")
+    suspend fun deleteEvents(key: String)
+
+    @Query("DELETE FROM playback_events")
+    suspend fun clearEvents()
     @Query("SELECT * FROM playback_history ORDER BY playedAt DESC LIMIT :limit")
     fun observeRecent(limit: Int): Flow<List<PlaybackHistoryEntity>>
 
@@ -148,6 +193,9 @@ data class LikedSongEntity(
 
 @Dao
 interface LikedSongDao {
+    @Query("SELECT * FROM liked_songs ORDER BY likedAt DESC, `key` ASC")
+    suspend fun backupSnapshot(): List<LikedSongEntity>
+
     @Query("SELECT * FROM liked_songs ORDER BY likedAt DESC")
     fun observeAll(): Flow<List<LikedSongEntity>>
 
@@ -159,6 +207,12 @@ interface LikedSongDao {
 
     @Query("DELETE FROM liked_songs WHERE key = :key")
     suspend fun unlike(key: String)
+
+    /** For [LikedSongsRepository]'s one-time artistId/albumId backfill - a like made before that
+     * plumbing was wired correctly has these permanently null otherwise, since nothing else ever
+     * rewrites an existing row's these two fields. */
+    @Query("UPDATE liked_songs SET artistId = :artistId, albumId = :albumId WHERE key = :key")
+    suspend fun updateArtistAndAlbumId(key: String, artistId: String?, albumId: String?)
 }
 
 /** A playlist the user has created (or imported from an online source), for Library's real
@@ -168,6 +222,7 @@ interface LikedSongDao {
  * separate field, not a repurposing of [coverImageUrl]: a user explicitly picking a cover (see
  * [PlaylistRepository.setCustomCover]) should win over the auto mosaic, where an *imported*
  * playlist's own incidental cover deliberately doesn't (see `PlaylistGridCover`'s fallback order). */
+@Immutable
 @Entity(tableName = "playlists")
 data class PlaylistEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -180,15 +235,32 @@ data class PlaylistEntity(
     /** Added in [MIGRATION_13_14]. A `content://` URI from the system picker, persisted with a
      * read permission grant (see `PlaylistDetailScreen`'s cover picker) so it survives reboot. */
     val customCoverUri: String? = null,
+    val remoteId: String? = null,
 )
 
 @Dao
 interface PlaylistDao {
+    @Query("SELECT * FROM playlists ORDER BY isPinned DESC, createdAt DESC, id ASC")
+    suspend fun backupSnapshot(): List<PlaylistEntity>
+
+    @Query("SELECT * FROM playlists WHERE remoteId = :remoteId LIMIT 1")
+    suspend fun findRemote(remoteId: String): PlaylistEntity?
     // Pinned first, then whatever the table's own creation order already gave: pin is an override
     // on top of sort, not a sort option of its own, so it applies before every other ordering this
     // query feeds into.
     @Query("SELECT * FROM playlists ORDER BY isPinned DESC, createdAt DESC")
     fun observeAll(): Flow<List<PlaylistEntity>>
+
+    /** Playlists with at least one downloaded track. Derived from the existing
+     * playlist/download tables, so older installs gain downloaded-playlist grouping immediately
+     * without a second source of truth or a destructive migration. */
+    @Query(
+        "SELECT p.* FROM playlists p " +
+            "WHERE EXISTS (SELECT 1 FROM playlist_tracks pt JOIN downloaded_tracks d ON d.key = pt.key " +
+            "WHERE pt.playlistId = p.id AND d.status = 'COMPLETED') " +
+            "ORDER BY p.isPinned DESC, p.createdAt DESC"
+    )
+    fun observeWithDownloads(): Flow<List<PlaylistEntity>>
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(entity: PlaylistEntity): Long
@@ -231,6 +303,9 @@ data class PlaylistTrackEntity(
 
 @Dao
 interface PlaylistTrackDao {
+    @Query("SELECT * FROM playlist_tracks WHERE playlistId = :playlistId ORDER BY addedAt ASC, `key` ASC")
+    suspend fun backupSnapshot(playlistId: Long): List<PlaylistTrackEntity>
+
     @Query("SELECT * FROM playlist_tracks WHERE playlistId = :playlistId ORDER BY addedAt ASC")
     fun observeForPlaylist(playlistId: Long): Flow<List<PlaylistTrackEntity>>
 
@@ -245,12 +320,24 @@ interface PlaylistTrackDao {
      * orphaned in the table forever. */
     @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId")
     suspend fun deleteAllForPlaylist(playlistId: Long)
+
+    /** One-shot (not observed), across every playlist - only [PlaylistRepository]'s one-time
+     * artistId/albumId backfill needs the whole table at once. */
+    @Query("SELECT * FROM playlist_tracks")
+    suspend fun getAll(): List<PlaylistTrackEntity>
+
+    /** By key alone (not scoped to one playlistId) - the same track can be duplicated across
+     * several playlists sharing the same key, and a backfilled artistId/albumId is correct for
+     * every one of them at once. */
+    @Query("UPDATE playlist_tracks SET artistId = :artistId, albumId = :albumId WHERE key = :key")
+    suspend fun updateArtistAndAlbumId(key: String, artistId: String?, albumId: String?)
 }
 
 /** A followed artist (see [FollowedArtistsRepository]) - [knownTrackIds] is the comma-joined
  * baseline [ArtistReleaseCheckWorker] diffs a fresh tracklist fetch against (see
  * [newReleaseTrackIds]) to detect a genuinely new release, empty until the first successful
  * check. */
+@Immutable
 @Entity(tableName = "followed_artists")
 data class FollowedArtistEntity(
     @PrimaryKey val artistId: String,
@@ -425,10 +512,29 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
     }
 }
 
+@Entity(tableName = "playback_events", indices = [androidx.room.Index("playedAt"), androidx.room.Index("trackKey")])
+data class PlaybackEventEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val trackKey: String,
+    val playedAt: Long,
+)
+
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE playlists ADD COLUMN remoteId TEXT")
+        db.execSQL("CREATE TABLE IF NOT EXISTS playback_events (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, trackKey TEXT NOT NULL, playedAt INTEGER NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_playback_events_playedAt ON playback_events(playedAt)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_playback_events_trackKey ON playback_events(trackKey)")
+        // Historical lifetime counts cannot be assigned invented timestamps.
+    }
+}
+
 @Database(
     entities = [
         DownloadedTrackEntity::class,
         PlaybackHistoryEntity::class,
+        PlaybackEventEntity::class,
+        ListeningSessionEntity::class,
         LikedSongEntity::class,
         PlaylistEntity::class,
         PlaylistTrackEntity::class,
@@ -436,12 +542,16 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
         SearchHistoryEntity::class,
         FollowedArtistEntity::class,
         ArtistPageCacheEntity::class,
-        AlbumPageCacheEntity::class
+        AlbumPageCacheEntity::class,
+        SettingsRestoreJournal::class,
+        DownloadRequestEntity::class
     ],
-    version = 14,
+    version = 19,
     exportSchema = false
 )
 abstract class MuseFlowDatabase : RoomDatabase() {
+    abstract fun downloadRequestDao(): DownloadRequestDao
+    abstract fun settingsRestoreJournalDao(): SettingsRestoreJournalDao
     abstract fun downloadedTrackDao(): DownloadedTrackDao
     abstract fun playbackHistoryDao(): PlaybackHistoryDao
     abstract fun likedSongDao(): LikedSongDao
@@ -466,7 +576,7 @@ abstract class MuseFlowDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
                         MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
-                        MIGRATION_12_13, MIGRATION_13_14
+                        MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19
                     )
                     .build().also { instance = it }
             }

@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.utils.MicroIconButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,11 +27,11 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,7 +50,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.example.AlbumDetails
 import com.example.AlbumPageCacheEntity
 import com.example.MuseFlowDatabase
@@ -58,6 +59,8 @@ import com.example.PlayerViewModel
 import com.example.TrackActionsViewModel
 import com.example.TrackResult
 import com.example.UiState
+import com.example.downloadKey
+import com.example.playbackId
 import com.example.loadAsUiState
 import com.example.parseAlbumDetailsJson
 import com.example.toJson
@@ -86,20 +89,25 @@ fun AlbumScreen(
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit,
     playerViewModel: PlayerViewModel,
     onBack: () -> Unit,
+    modifier: Modifier = Modifier,
     onGoToArtist: (String) -> Unit = {},
     onGoToAlbum: (String) -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val router = remember { MusicSearchRouter(context) }
     val pageCacheDao = remember { MuseFlowDatabase.getInstance(context).albumPageCacheDao() }
     val actionsViewModel: TrackActionsViewModel = viewModel()
+    // Drives the "now playing" equalizer badge on whichever row matches - see TrackRow's own doc.
+    val nowPlayingState by playerViewModel.state.collectAsStateWithLifecycle()
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
     var state by remember { mutableStateOf<UiState<AlbumDetails>>(UiState.Loading) }
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val listState = com.example.rememberRestoredLazyListState("album:$albumId", state is UiState.Success)
 
-    LaunchedEffect(albumId) {
+    var retryAttempt by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    var refreshError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(albumId, retryAttempt) {
+        refreshError = null
         val cached = runCatching { pageCacheDao.get(albumId) }.getOrNull()
             ?.let { parseAlbumDetailsJson(it.detailsJson) }
         state = if (cached != null) UiState.Success(cached) else UiState.Loading
@@ -119,7 +127,9 @@ fun AlbumScreen(
                 }
             }
             // Network failed but the cache already rendered something - keep showing it.
-            is UiState.Error -> if (cached == null) state = fresh
+            is UiState.Error -> {
+                if (state !is UiState.Success) state = fresh else refreshError = "Showing saved content. " + fresh.message
+            }
             is UiState.Loading -> Unit
         }
     }
@@ -151,12 +161,7 @@ fun AlbumScreen(
                 modifier = Modifier.fillMaxSize().padding(32.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = current.message,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
+                com.example.ui.component.FeedbackMessage(current.message, isError = true, onRetry = { retryAttempt++ })
             }
 
             is UiState.Success -> {
@@ -164,12 +169,15 @@ fun AlbumScreen(
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     state = listState,
-                    contentPadding = PaddingValues(bottom = 140.dp),
+                    contentPadding = PaddingValues(bottom = 200.dp),
                 ) {
                     item(key = "cover") {
                         AlbumCover(imageUrl = details.imageUrl)
                     }
 
+                    if (refreshError != null) item(key = "refresh_status") {
+                        com.example.ui.component.FeedbackMessage(refreshError!!, modifier = Modifier.padding(16.dp), onRetry = { retryAttempt++ })
+                    }
                     item(key = "identity") {
                         Column(
                             modifier = Modifier
@@ -177,22 +185,7 @@ fun AlbumScreen(
                                 .padding(horizontal = 24.dp, vertical = 8.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            Text(
-                                text = details.title ?: "Album",
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.onBackground,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center,
-                            )
-                            if (details.artist != null) {
-                                Text(
-                                    text = details.artist,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(top = 4.dp),
-                                )
-                            }
+                            com.example.ui.component.CollectionIdentityHeader(details.title ?: "Album", "Album", details.artist)
 
                             if (details.tracks.isNotEmpty()) {
                                 AlbumInfoCapsule(
@@ -249,6 +242,7 @@ fun AlbumScreen(
                                 duration = track.duration,
                                 onClick = { onPlayTrack(track, details.tracks) },
                                 onOpenMenu = { selectedTrack = track },
+                                isPlaying = track.playbackId() == nowPlayingState.currentPlaybackId,
                             )
                         }
                     }
@@ -266,7 +260,7 @@ fun AlbumScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (topBarVisibility > 0.01f) {
-                IconButton(
+                MicroIconButton(
                     onClick = onBack,
                     modifier = Modifier
                         .graphicsLayer {
@@ -288,7 +282,7 @@ fun AlbumScreen(
             Spacer(modifier = Modifier.weight(1f))
             if (state is UiState.Success && topBarVisibility > 0.01f) {
                 val details = (state as UiState.Success<AlbumDetails>).data
-                IconButton(
+                MicroIconButton(
                     onClick = { menuOpen = true },
                     modifier = Modifier
                         .graphicsLayer {

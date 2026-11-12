@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import com.example.ui.utils.MicroIconButton
+import com.example.ui.utils.contentMotion
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,35 +18,45 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.ui.utils.bounceClick
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.AlbumResult
 import com.example.ArtistResult
@@ -57,8 +70,10 @@ import com.example.TrackActionsViewModel
 import com.example.TrackResult
 import com.example.UiState
 import com.example.downloadKey
+import com.example.playbackId
 import com.example.toPlayableTrack
 import com.example.ui.component.CollectionRow
+import com.example.ui.component.ListPlaceholder
 import com.example.ui.component.TrackActionsHost
 import com.example.ui.component.TrackRow
 import com.example.ui.component.TrackSelection
@@ -75,8 +90,11 @@ import com.example.ui.component.rememberTrackSelection
  * Long-pressing a song opens its actions sheet (like / download / add to playlist); rows show
  * heart and download glyphs so their state is readable without opening the sheet.
  */
+private val LocalSearchResultKey = androidx.compose.runtime.staticCompositionLocalOf { "search" }
+
 @Composable
 fun SearchScreen(
+    modifier: Modifier = Modifier,
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit = { _, _ -> },
     playerViewModel: PlayerViewModel,
     onGoToArtist: (String) -> Unit = {},
@@ -87,48 +105,56 @@ fun SearchScreen(
     onOpenCharts: () -> Unit = {},
     onOpenNewReleases: () -> Unit = {},
     onOpenExplore: () -> Unit = {},
-    modifier: Modifier = Modifier,
+    onOpenBrowse: (String, String?) -> Unit,
 ) {
     val viewModel: SearchViewModel = viewModel()
-    val query by viewModel.query.collectAsState()
-    val filter by viewModel.filter.collectAsState()
-    val results by viewModel.results.collectAsState()
-    val albums by viewModel.albums.collectAsState()
-    val artists by viewModel.artists.collectAsState()
-    val searchedPlaylists by viewModel.playlists.collectAsState()
-    val suggestions by viewModel.suggestions.collectAsState()
-    val hasSearched by viewModel.hasSearched.collectAsState()
-    val recentQueries by viewModel.recentQueries.collectAsState(initial = emptyList())
+    // Drives the "now playing" equalizer badge on whichever row matches - see TrackRow's own doc.
+    val nowPlayingState by playerViewModel.state.collectAsStateWithLifecycle()
+    val query by viewModel.query.collectAsStateWithLifecycle()
+    val filter by viewModel.filter.collectAsStateWithLifecycle()
+    val summary by viewModel.summary.collectAsStateWithLifecycle()
+    val results by viewModel.results.collectAsStateWithLifecycle()
+    val videos by viewModel.videos.collectAsStateWithLifecycle()
+    val albums by viewModel.albums.collectAsStateWithLifecycle()
+    val artists by viewModel.artists.collectAsStateWithLifecycle()
+    val searchedPlaylists by viewModel.playlists.collectAsStateWithLifecycle()
+    val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
+    val hasSearched by viewModel.hasSearched.collectAsStateWithLifecycle()
+    val recommendationsStartAt by viewModel.recommendationsStartAt.collectAsStateWithLifecycle()
+    val isLoadingMoreSongs by viewModel.isLoadingMore.collectAsStateWithLifecycle()
+    val recentQueries by viewModel.recentQueries.collectAsStateWithLifecycle(initialValue = emptyList())
     val keyboard = LocalSoftwareKeyboardController.current
 
     val actionsViewModel: TrackActionsViewModel = viewModel()
-    val likedKeys by actionsViewModel.likedKeys.collectAsState()
-    val downloadedKeys by actionsViewModel.downloadedKeys.collectAsState()
-    val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsState()
+    val likedKeys by actionsViewModel.likedKeys.collectAsStateWithLifecycle()
+    val downloadedKeys by actionsViewModel.downloadedKeys.collectAsStateWithLifecycle()
+    val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsStateWithLifecycle()
 
     val selection = rememberTrackSelection()
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
+    var showRecents by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
 
-    // Only the Songs tab holds selectable rows, and only for the query that produced them - a new
+    // Songs and Videos hold selectable rows, and only for the query that produced them - a new
     // search or a switch to Albums renumbers everything underneath a positional selection.
-    val songResults = (results as? UiState.Success)?.data.orEmpty()
-    LaunchedEffect(filter, songResults) { selection.clear() }
+    val selectedResults = ((if (filter == SearchFilter.Videos) videos else results) as? UiState.Success)?.data.orEmpty()
+    LaunchedEffect(filter, selectedResults) { selection.clear() }
 
+    androidx.compose.runtime.CompositionLocalProvider(LocalSearchResultKey provides "search:$query:${filter.name}") {
     Column(modifier = modifier.fillMaxSize().statusBarsPadding()) {
         OutlinedTextField(
             value = query,
             onValueChange = viewModel::onQueryChange,
-            placeholder = { Text("Songs, artists, or a lyric you remember") },
+            placeholder = { Text("What do you want to hear?") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
                 if (query.isNotEmpty()) {
-                    IconButton(onClick = viewModel::clearQuery) {
+                    MicroIconButton(onClick = viewModel::clearQuery) {
                         Icon(Icons.Default.Close, contentDescription = "Clear search")
                     }
                 }
             },
             singleLine = true,
-            shape = RoundedCornerShape(16.dp),
+            shape = CircleShape,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(
                 onSearch = {
@@ -145,41 +171,21 @@ fun SearchScreen(
         // No backend chip: with the extractor picker removed from Settings there's only one
         // backend, so naming it was developer-facing noise rather than information.
 
-        // A browse entry point rather than a search result - shown above recents/suggestions
-        // (not inside that `when` below) so it's visible regardless of whether either has
-        // anything to show, the same way a real charts page is reachable independent of history.
-        //
-        // Charts/New releases rows are hidden (not deleted - onOpenCharts/onOpenNewReleases,
-        // ChartsScreen and NewReleasesScreen all still exist and are still routed) because both
-        // backends are broken: getChartsTracks() silently returns zero tracks and
-        // newReleaseAlbums() 404s. Both need real investigation (see full-gap-audit.md §2.9)
-        // rather than a UI-level fix, so the entry points are pulled until that's done instead of
-        // shipping a row that reliably shows an error.
+        // Browse entry points rather than search results - shown above recents/suggestions (not
+        // inside that `when` below) so they're visible regardless of whether either has anything
+        // to show, the same way a real charts page is reachable independent of history.
         if (query.isBlank()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpenExplore)
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-                    .testTag("search_open_explore"),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Explore,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = "Explore",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(start = 16.dp),
-                )
+            LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { FilterChip(!showRecents, { showRecents = false }, { Text("Explore") }, shape = CircleShape) }
+                item { FilterChip(false, onOpenCharts, { Text("Musechart") }, shape = CircleShape) }
+                item { FilterChip(false, onOpenNewReleases, { Text("Fresh drops") }, shape = CircleShape) }
+                item { FilterChip(showRecents, { showRecents = true }, { Text("Recent searches") }, shape = CircleShape) }
             }
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
             when {
+                query.isBlank() && !showRecents -> ExplorePreview(onOpenBrowse = onOpenBrowse, onBrowseAll = onOpenExplore)
                 suggestions.isNotEmpty() && query.isNotBlank() -> SuggestionList(
                     suggestions = suggestions,
                     onPick = {
@@ -205,7 +211,7 @@ fun SearchScreen(
                         // pointing at rows that are no longer on screen.
                         TrackSelectionHost(
                             selection = selection,
-                            tracks = songResults,
+                            tracks = selectedResults,
                             playerViewModel = playerViewModel,
                             actionsViewModel = actionsViewModel,
                         )
@@ -222,8 +228,22 @@ fun SearchScreen(
                     // Weighted, so the results area is what's left below the chips - the empty and
                     // loading states inside it centre on that space rather than on the whole
                     // screen and overflow past the bottom.
-                    Box(modifier = Modifier.weight(1f)) {
+                    Box(modifier = Modifier.weight(1f).contentMotion(filter)) {
                         when (filter) {
+                            SearchFilter.All -> AllResults(
+                                shelves = summary,
+                                emptyMessage = emptyMessage,
+                                onPlayTrack = onPlayTrack,
+                                likedKeys = likedKeys,
+                                downloadedKeys = downloadedKeys,
+                                downloadsInProgress = downloadsInProgress,
+                                onOpenMenu = { track -> selectedTrack = track },
+                                onGoToAlbum = onGoToAlbum,
+                                onGoToArtist = onGoToArtist,
+                                onGoToPlaylist = onGoToPlaylist,
+                                nowPlayingId = nowPlayingState.currentPlaybackId,
+                            )
+
                             SearchFilter.Songs -> TrackResults(
                                 results = results,
                                 emptyMessage = emptyMessage,
@@ -233,6 +253,25 @@ fun SearchScreen(
                                 downloadsInProgress = downloadsInProgress,
                                 onOpenMenu = { track -> selectedTrack = track },
                                 selection = selection,
+                                recommendationsStartAt = recommendationsStartAt,
+                                isLoadingMore = isLoadingMoreSongs,
+                                onLoadMore = viewModel::loadMoreSongs,
+                                nowPlayingId = nowPlayingState.currentPlaybackId,
+                            )
+
+                            SearchFilter.Videos -> TrackResults(
+                                results = videos,
+                                emptyMessage = emptyMessage,
+                                onPlayTrack = onPlayTrack,
+                                likedKeys = likedKeys,
+                                downloadedKeys = downloadedKeys,
+                                downloadsInProgress = downloadsInProgress,
+                                onOpenMenu = { track -> selectedTrack = track },
+                                selection = selection,
+                                recommendationsStartAt = null,
+                                isLoadingMore = false,
+                                onLoadMore = {},
+                                nowPlayingId = nowPlayingState.currentPlaybackId,
                             )
 
                             SearchFilter.Albums -> CollectionResults(
@@ -287,6 +326,8 @@ fun SearchScreen(
         }
     }
 
+    }
+
     TrackActionsHost(
         track = selectedTrack,
         onDismiss = { selectedTrack = null },
@@ -295,6 +336,40 @@ fun SearchScreen(
         onGoToArtist = onGoToArtist,
         onGoToAlbum = onGoToAlbum,
     )
+}
+
+@Composable
+private fun BrowseTile(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    testTag: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.bounceClick(onClick = onClick).testTag(testTag),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(start = 10.dp),
+            )
+        }
+    }
 }
 
 @Composable
@@ -315,6 +390,110 @@ private fun FilterChips(selected: SearchFilter, onSelect: (SearchFilter) -> Unit
     }
 }
 
+/**
+ * The "All" tab - YouTube Music's own mixed results page: Top result, Songs, Videos, Albums,
+ * Artists, Playlists shelves, in whichever titles/order/counts that response actually returned
+ * (see [com.example.SearchShelf]'s own doc - nothing here re-orders or re-groups them). Online
+ * song/video taps use the search-specific playback policy: the chosen recording then radio.
+ */
+@Composable
+private fun AllResults(
+    shelves: UiState<List<com.example.SearchShelf>>,
+    emptyMessage: String,
+    onPlayTrack: (TrackResult, List<TrackResult>) -> Unit,
+    likedKeys: Set<String>,
+    downloadedKeys: Set<String>,
+    downloadsInProgress: Map<String, Int>,
+    onOpenMenu: (TrackResult) -> Unit,
+    onGoToAlbum: (String) -> Unit,
+    onGoToArtist: (String) -> Unit,
+    onGoToPlaylist: (String, String, String, String?) -> Unit,
+    nowPlayingId: String? = null,
+) {
+    ResultsFrame(shelves, emptyMessage) { shelfList ->
+        LazyColumn(state = com.example.rememberRestoredLazyListState(LocalSearchResultKey.current, true), contentPadding = PaddingValues(bottom = 200.dp)) {
+            shelfList.forEachIndexed { shelfIndex, shelf ->
+                item(key = "shelf_header_$shelfIndex") {
+                    Text(
+                        text = shelf.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 8.dp),
+                    )
+                }
+                // Retain the source for offline/device rules. Online Search ignores these other
+                // search matches and builds a recommendation continuation from the selected ID.
+                val shelfSongs = shelf.items.filterIsInstance<com.example.SearchResultItem.Song>().map { it.track }
+                itemsIndexed(shelf.items, key = { itemIndex, _ -> "shelf_${shelfIndex}_item_$itemIndex" }) { _, resultItem ->
+                    when (resultItem) {
+                        is com.example.SearchResultItem.Song -> {
+                            val key = resultItem.track.downloadKey()
+                            TrackRow(
+                                title = resultItem.track.title,
+                                artist = resultItem.track.artist,
+                                imageUrl = resultItem.track.imageUrl,
+                                duration = resultItem.track.duration,
+                                onClick = { onPlayTrack(resultItem.track, shelfSongs) },
+                                isLiked = key in likedKeys,
+                                isDownloaded = key in downloadedKeys,
+                                downloadProgress = downloadsInProgress[key],
+                                isPlaying = resultItem.track.playbackId() == nowPlayingId,
+                                onOpenMenu = { onOpenMenu(resultItem.track) },
+                                modifier = Modifier.animateItem(),
+                            )
+                        }
+
+                        is com.example.SearchResultItem.AlbumRow -> CollectionRow(
+                            title = resultItem.album.title,
+                            subtitle = listOfNotNull(
+                                resultItem.album.artist.takeIf { it.isNotBlank() },
+                                resultItem.album.songCount?.let { "$it songs" },
+                            ).joinToString(" · "),
+                            imageUrl = resultItem.album.imageUrl,
+                            kind = CollectionKind.Album,
+                            onClick = { onGoToAlbum(resultItem.album.id) },
+                            modifier = Modifier.animateItem(),
+                        )
+
+                        is com.example.SearchResultItem.ArtistRow -> CollectionRow(
+                            title = resultItem.artist.name,
+                            subtitle = resultItem.artist.listenerCount ?: "Artist",
+                            imageUrl = resultItem.artist.imageUrl,
+                            kind = CollectionKind.Artist,
+                            onClick = { onGoToArtist(resultItem.artist.id) },
+                            modifier = Modifier.animateItem(),
+                        )
+
+                        is com.example.SearchResultItem.PlaylistRow -> CollectionRow(
+                            title = resultItem.playlist.title,
+                            subtitle = resultItem.playlist.subtitle,
+                            imageUrl = resultItem.playlist.imageUrl,
+                            kind = CollectionKind.Playlist,
+                            onClick = {
+                                onGoToPlaylist(
+                                    resultItem.playlist.id,
+                                    resultItem.playlist.title,
+                                    resultItem.playlist.subtitle,
+                                    resultItem.playlist.imageUrl,
+                                )
+                            },
+                            modifier = Modifier.animateItem(),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The Songs tab's result list - direct search matches, seamlessly extending into a personalized,
+ * effectively infinite recommendation feed once those run out (mirroring how YouTube's own search
+ * behaves). [recommendationsStartAt] marks where that switch happened so a section header can drop
+ * in at exactly that row; [onLoadMore] is called as the list is scrolled near its current end,
+ * regardless of which phase it's in - the caller (SearchViewModel) decides what "more" means.
+ */
 @Composable
 private fun TrackResults(
     results: UiState<List<TrackResult>>,
@@ -325,10 +504,31 @@ private fun TrackResults(
     downloadsInProgress: Map<String, Int>,
     onOpenMenu: (TrackResult) -> Unit,
     selection: TrackSelection,
+    recommendationsStartAt: Int?,
+    isLoadingMore: Boolean,
+    onLoadMore: () -> Unit,
+    nowPlayingId: String? = null,
 ) {
     ResultsFrame(results, emptyMessage) { tracks ->
-        LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
+        val listState = com.example.rememberRestoredLazyListState(LocalSearchResultKey.current, tracks.isNotEmpty())
+
+        // Fires as the list nears its current end - a fixed lookahead rather than "at the very
+        // last item", so the next batch has time to arrive before the user actually catches up to
+        // it. Re-armed whenever the track count changes, since a fetch that lands closes the
+        // window this snapshotFlow was watching for.
+        LaunchedEffect(listState, tracks.size) {
+            snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
+                .collect { lastVisible ->
+                    if (lastVisible != null && lastVisible >= tracks.size - 5) onLoadMore()
+                }
+        }
+
+        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 200.dp)) {
             itemsIndexed(tracks, key = { index, track -> "$index-${track.id}" }) { index, track ->
+                if (recommendationsStartAt == index) {
+                    RecommendationsHeader(modifier = Modifier.animateItem())
+                }
+
                 val key = track.toPlayableTrack(0).downloadKey()
                 TrackRow(
                     title = track.title,
@@ -345,9 +545,52 @@ private fun TrackResults(
                     isLiked = likedKeys.contains(key),
                     isDownloaded = downloadedKeys.contains(key),
                     downloadProgress = downloadsInProgress[key],
+                    isPlaying = track.playbackId() == nowPlayingId,
                     onOpenMenu = if (selection.active) null else { { onOpenMenu(track) } },
+                    modifier = Modifier.animateItem(),
                 )
             }
+
+            if (isLoadingMore) {
+                item(key = "loading_more") {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Drops into the Songs list right where direct search matches end and the personalized
+ * recommendation tail begins, so the transition reads as an intentional feature rather than search
+ * quietly getting worse. */
+@Composable
+private fun RecommendationsHeader(modifier: Modifier = Modifier) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Default.AutoAwesome,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = "Recommended for you",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(start = 10.dp),
+            )
         }
     }
 }
@@ -369,7 +612,7 @@ private fun <T> CollectionResults(
     onOpen: (T) -> Unit,
 ) {
     ResultsFrame(results, emptyMessage) { items ->
-        LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
+        LazyColumn(state = com.example.rememberRestoredLazyListState(LocalSearchResultKey.current, true), contentPadding = PaddingValues(bottom = 200.dp)) {
             // Position-based keys: YouTube can return the same browseId twice in one result set,
             // and a repeated Compose key is a crash rather than a cosmetic glitch.
             itemsIndexed(items, key = { index, _ -> index }) { _, item ->
@@ -379,6 +622,7 @@ private fun <T> CollectionResults(
                     imageUrl = imageUrl(item),
                     kind = kind,
                     onClick = { onOpen(item) },
+                    modifier = Modifier.animateItem(),
                 )
             }
         }
@@ -394,14 +638,9 @@ private fun <T> ResultsFrame(
     content: @Composable (List<T>) -> Unit,
 ) {
     when (results) {
-        is UiState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
+        is UiState.Loading -> ListPlaceholder()
 
-        is UiState.Error -> CenteredMessage(
-            text = results.message,
-            color = MaterialTheme.colorScheme.error,
-        )
+        is UiState.Error -> CenteredMessage(results.message, isError = true)
 
         is UiState.Success -> if (results.data.isEmpty()) {
             CenteredMessage(emptyMessage)
@@ -413,11 +652,12 @@ private fun <T> ResultsFrame(
 
 @Composable
 private fun SuggestionList(suggestions: List<String>, onPick: (String) -> Unit) {
-    LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
+    LazyColumn(contentPadding = PaddingValues(bottom = 200.dp)) {
         items(suggestions, key = { it }) { suggestion ->
             Row(
                 // Clickable before padding, so the whole row - not just the text - responds.
                 modifier = Modifier
+                    .animateItem()
                     .fillMaxWidth()
                     .clickable { onPick(suggestion) }
                     .padding(horizontal = 20.dp, vertical = 14.dp),
@@ -448,12 +688,13 @@ private fun RecentList(
     onPick: (String) -> Unit,
     onDelete: (String) -> Unit,
 ) {
-    LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
+    LazyColumn(contentPadding = PaddingValues(bottom = 200.dp)) {
         items(recents, key = { it }) { recent ->
             Row(
                 // Clickable before padding so the whole row responds, not just the text. The
                 // delete IconButton keeps its own handler and isn't swallowed by this.
                 modifier = Modifier
+                    .animateItem()
                     .fillMaxWidth()
                     .clickable { onPick(recent) }
                     .padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 4.dp)
@@ -475,7 +716,7 @@ private fun RecentList(
                         .weight(1f)
                         .padding(start = 14.dp),
                 )
-                IconButton(onClick = { onDelete(recent) }) {
+                MicroIconButton(onClick = { onDelete(recent) }) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Remove from history",
@@ -490,9 +731,11 @@ private fun RecentList(
 @Composable
 private fun CenteredMessage(
     text: String,
-    color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    isError: Boolean = false,
 ) {
-    Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-        Text(text = text, style = MaterialTheme.typography.bodyMedium, color = color, textAlign = TextAlign.Center)
-    }
+    com.example.ui.component.FeedbackMessage(
+        message = text,
+        isError = isError,
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+    )
 }

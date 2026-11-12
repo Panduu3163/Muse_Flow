@@ -60,7 +60,7 @@ class CrossfeedAudioProcessor : BaseAudioProcessor() {
         needsRebuild = false
     }
 
-    override fun isActive(): Boolean = enabled && amount > 0.0 && channelCount == 2
+    override fun isActive(): Boolean = super.isActive() && enabled && amount > 0.0 && channelCount == 2
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         if (needsRebuild) configureFilters()
@@ -91,7 +91,7 @@ class CrossfeedAudioProcessor : BaseAudioProcessor() {
         output.flip()
     }
 
-    override fun onFlush() {
+    override fun onFlush(streamMetadata: androidx.media3.common.audio.AudioProcessor.StreamMetadata) {
         lowPassLeft.reset()
         lowPassRight.reset()
     }

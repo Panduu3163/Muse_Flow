@@ -1,3 +1,12 @@
 <resources>
-    <string name="app_name">MuseFlow Beta</string>
+    <string name="app_name">MuseFlow</string>
+    <string name="widget_open">Open MuseFlow</string>
+    <string name="widget_choose">Choose a song or resume in the app</string>
+    <string name="widget_description">Your current song and playback controls</string>
+    <string name="control_play">Play remembered queue</string>
+    <string name="control_pause">Pause</string>
+    <string name="control_previous">Previous song</string>
+    <string name="control_next">Next song</string>
+    <string name="tile_pause">MuseFlow: tap to pause</string>
+    <string name="tile_open">MuseFlow: open the player to play</string>
 </resources>

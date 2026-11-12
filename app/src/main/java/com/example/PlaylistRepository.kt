@@ -1,4 +1,5 @@
 package com.example
+import androidx.room.withTransaction
 
 import android.content.Context
 import com.music.innertube.models.upgradeThumbnailSize
@@ -10,10 +11,10 @@ import kotlinx.coroutines.flow.map
  * "Playlists" tab, plus the tracks inside each one. A process-wide singleton, same pattern as
  * [DownloadRepository].
  */
-class PlaylistRepository private constructor(context: Context) {
-
-    private val dao = MuseFlowDatabase.getInstance(context.applicationContext).playlistDao()
-    private val trackDao = MuseFlowDatabase.getInstance(context.applicationContext).playlistTrackDao()
+class PlaylistRepository internal constructor(private val database: MuseFlowDatabase) {
+    private constructor(context: Context) : this(MuseFlowDatabase.getInstance(context.applicationContext))
+    private val dao = database.playlistDao()
+    private val trackDao = database.playlistTrackDao()
 
     // coverImageUrl is only set for an imported online playlist and only ever read (Library's row,
     // the mosaic cover's fallback) - upgraded here at read time for the same reason every other
@@ -22,10 +23,20 @@ class PlaylistRepository private constructor(context: Context) {
         playlists.map { it.copy(coverImageUrl = it.coverImageUrl?.let(::upgradeThumbnailSize)) }
     }
 
+    fun observeWithDownloads(): Flow<List<PlaylistEntity>> = dao.observeWithDownloads().map { playlists ->
+        playlists.map { it.copy(coverImageUrl = it.coverImageUrl?.let(::upgradeThumbnailSize)) }
+    }
+
     /** Creates an empty playlist and returns its new id, so callers (e.g. the "add songs" flow
      * right after naming a playlist) can immediately add tracks to it. */
     suspend fun create(name: String, coverImageUrl: String? = null): Long =
         dao.insert(PlaylistEntity(name = name, createdAt = System.currentTimeMillis(), coverImageUrl = coverImageUrl))
+
+    suspend fun createWithTracks(name: String, tracks: List<Track>): Long = database.withTransaction {
+        val id = create(name)
+        addTracks(id, tracks)
+        id
+    }
 
     fun observeTracks(playlistId: Long): Flow<List<Track>> =
         trackDao.observeForPlaylist(playlistId).map { entities -> entities.map { it.toTrack() } }
@@ -62,6 +73,26 @@ class PlaylistRepository private constructor(context: Context) {
         trackDao.delete(playlistId, key)
     }
 
+    /** Same one-time backfill as [LikedSongsRepository.backfillMissingArtistIds], for playlist
+     * tracks added before artistId/albumId were reliably threaded through - see its doc for the
+     * full reasoning (exact-videoId re-match, never a fuzzy guess). */
+    suspend fun backfillMissingArtistIds(context: Context) {
+        val missing = runCatching { trackDao.getAll() }.getOrNull().orEmpty()
+            .filter { it.artistId == null && it.sourceType == MusicSource.YOUTUBE_MUSIC.name && it.sourceId != null }
+        if (missing.isEmpty()) return
+
+        val router = MusicSearchRouter(context)
+        for (entity in missing) {
+            runCatching {
+                val results = router.searchTracks("${entity.title} ${entity.artist}")
+                val match = results.firstOrNull { it.id == entity.sourceId } ?: return@runCatching
+                if (match.artistId != null || match.albumId != null) {
+                    trackDao.updateArtistAndAlbumId(entity.key, match.artistId, match.albumId)
+                }
+            }
+        }
+    }
+
     suspend fun setPinned(playlistId: Long, pinned: Boolean) {
         dao.setPinned(playlistId, pinned)
     }
@@ -73,19 +104,20 @@ class PlaylistRepository private constructor(context: Context) {
         dao.setCustomCoverUri(playlistId, uri)
     }
 
-    /** Deletes the playlist and its tracks - two statements rather than a foreign-key cascade,
-     * since none is declared on [PlaylistTrackEntity] (see [PlaylistTrackDao.deleteAllForPlaylist]). */
-    suspend fun delete(playlistId: Long) {
+    /** Deletes metadata and tracks together; failure rolls back both statements. */
+    suspend fun delete(playlistId: Long) = database.withTransaction {
         trackDao.deleteAllForPlaylist(playlistId)
         dao.delete(playlistId)
     }
 
     /** Creates a new playlist pre-populated with [tracks] and a real [coverImageUrl] in one shot -
      * used by "Add to my library" on an online playlist's detail screen. */
-    suspend fun importOnlinePlaylist(name: String, coverImageUrl: String?, tracks: List<Track>): Long {
-        val id = create(name, coverImageUrl)
+    suspend fun importOnlinePlaylist(name: String, coverImageUrl: String?, tracks: List<Track>, remoteId: String? = null): Long = database.withTransaction {
+        val id = remoteId?.let { dao.findRemote(it)?.id } ?: dao.insert(
+            PlaylistEntity(name = name, coverImageUrl = coverImageUrl, createdAt = System.currentTimeMillis(), remoteId = remoteId)
+        )
         addTracks(id, tracks)
-        return id
+        id
     }
 
     companion object {

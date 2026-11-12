@@ -1,7 +1,15 @@
 package com.example
 
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 
+/**
+ * Every field is a `val` and every field type is itself stable (String/Int/enum/nullable
+ * primitives) - safe to assert as stable up front rather than let the Compose compiler infer it,
+ * so list composables that take a [Track] can skip recomposition when an unrelated field of the
+ * containing state changes.
+ */
+@Immutable
 data class Track(
     val title: String,
     val artist: String,
@@ -33,10 +41,8 @@ data class Track(
     val artistId: String? = null,
 )
 
-/** Stable identity for a track across sources (mock catalog, search results, or reconstructed
- * from a [DownloadedTrackEntity]) - title/artist is all any of them are guaranteed to share, so
- * downloads are looked up by this rather than by object equality. */
-fun Track.downloadKey(): String = "${title.trim().lowercase()}::${artist.trim().lowercase()}"
+/** Saved identity shared by downloads, likes, playlists and history; see [recordingStorageKey]. */
+fun Track.downloadKey(): String = recordingStorageKey(title, artist, sourceId, sourceType?.name)
 
 /** Parses a "m:ss" duration string into total seconds, falling back to 210s (3:30) if malformed. */
 fun parseDurationToSeconds(duration: String): Int {
@@ -50,6 +56,7 @@ fun parseDurationToSeconds(duration: String): Int {
     }
 }
 
+@Immutable
 data class Album(
     val title: String,
     val artist: String,
@@ -58,12 +65,14 @@ data class Album(
     val gradientIndex: Int
 )
 
+@Immutable
 data class Artist(
     val name: String,
     val followers: String,
     val gradientIndex: Int
 )
 
+@Immutable
 data class Playlist(
     val title: String,
     val trackCount: Int,

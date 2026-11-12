@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.utils.MicroIconButton
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,22 +23,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.AccessTime
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,14 +55,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.example.MusicSearchRouter
 import com.example.PlayerViewModel
 import com.example.TrackActionsViewModel
 import com.example.TrackResult
 import com.example.UiState
+import com.example.downloadKey
+import com.example.playbackId
 import com.example.loadAsUiState
+import com.example.shareYouTubePlaylistLink
 import com.example.toPlayableTrack
+import com.example.ui.component.RemotePlaylistActionsSheet
 import com.example.ui.component.TrackActionsHost
 import com.example.ui.component.TrackRow
 
@@ -89,20 +92,49 @@ fun RemotePlaylistScreen(
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit,
     playerViewModel: PlayerViewModel,
     onBack: () -> Unit,
+    modifier: Modifier = Modifier,
     onGoToArtist: (String) -> Unit = {},
     onGoToAlbum: (String) -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val router = remember { MusicSearchRouter(context) }
     val actionsViewModel: TrackActionsViewModel = viewModel()
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
-    var state by remember { mutableStateOf<UiState<List<TrackResult>>>(UiState.Loading) }
-    var addedToLibrary by remember { mutableStateOf(false) }
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    var menuOpen by remember { mutableStateOf(false) }
+    // Seeded from the in-memory cache when this exact playlist was already loaded once this
+    // session (e.g. returning from Now Playing), rather than always starting at Loading - a blank
+    // spinner flash on every remount was visually indistinguishable from "the scroll position got
+    // reset", even once rememberRestoredLazyListState below correctly restored it a moment later.
+    var state by remember {
+        mutableStateOf<UiState<List<TrackResult>>>(
+            RemotePlaylistTracksCache.get(playlistId)?.let { UiState.Success(it) } ?: UiState.Loading
+        )
+    }
+    val savedPlaylists by actionsViewModel.playlists.collectAsStateWithLifecycle()
+    val addedToLibrary = savedPlaylists.any { it.remoteId == playlistId }
+    // Restores wherever the user last scrolled to in this playlist - tapping a track to open Now
+    // Playing and pressing back used to always land back at the top instead. See
+    // rememberRestoredLazyListState's own doc for the two real gotchas this needs to dodge.
+    val listState = com.example.rememberRestoredLazyListState(
+        key = "remote_playlist:$playlistId",
+        isContentReady = state is UiState.Success,
+    )
+    // Same heart/download glyphs Library's own lists show - a remote playlist previously gave no
+    // way to tell a song you'd already liked or downloaded elsewhere apart from one you hadn't.
+    val likedKeys by actionsViewModel.likedKeys.collectAsStateWithLifecycle()
+    val downloadedKeys by actionsViewModel.downloadedKeys.collectAsStateWithLifecycle()
+    val downloadsInProgress by actionsViewModel.downloadsInProgress.collectAsStateWithLifecycle()
+    // Drives the "now playing" equalizer badge on whichever row matches - see TrackRow's own doc.
+    val nowPlayingState by playerViewModel.state.collectAsStateWithLifecycle()
 
-    LaunchedEffect(playlistId) {
-        state = loadAsUiState("Couldn't load this playlist.") { router.getPlaylistTracks(playlistId) }
+    var retryAttempt by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    var refreshError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(playlistId, retryAttempt) {
+        refreshError = null
+        val fresh = loadAsUiState("Couldn't load this playlist.") { router.getPlaylistTracks(playlistId) }
+        if (fresh is UiState.Success) RemotePlaylistTracksCache.put(playlistId, fresh.data)
+        if (fresh is UiState.Success || state !is UiState.Success) state = fresh
+        else if (fresh is UiState.Error) refreshError = "Showing saved content. " + fresh.message
     }
 
     // Same fade-and-slide-out as the Artist/Playlist screens' back button - see their comments.
@@ -132,12 +164,7 @@ fun RemotePlaylistScreen(
                 modifier = Modifier.fillMaxSize().padding(32.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = current.message,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
+                com.example.ui.component.FeedbackMessage(current.message, isError = true, onRetry = { retryAttempt++ })
             }
 
             is UiState.Success -> {
@@ -145,12 +172,15 @@ fun RemotePlaylistScreen(
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     state = listState,
-                    contentPadding = PaddingValues(bottom = 140.dp),
+                    contentPadding = PaddingValues(bottom = 200.dp),
                 ) {
                     item(key = "cover") {
                         RemotePlaylistCover(tracks = tracks, fallbackCoverUrl = imageUrl)
                     }
 
+                    if (refreshError != null) item(key = "refresh_status") {
+                        com.example.ui.component.FeedbackMessage(refreshError!!, modifier = Modifier.padding(16.dp), onRetry = { retryAttempt++ })
+                    }
                     item(key = "identity") {
                         Column(
                             modifier = Modifier
@@ -158,18 +188,12 @@ fun RemotePlaylistScreen(
                                 .padding(horizontal = 24.dp, vertical = 8.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            Text(
-                                text = title,
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.onBackground,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center,
-                            )
+                            com.example.ui.component.CollectionIdentityHeader(title, "Playlist")
 
                             if (tracks.isNotEmpty()) {
-                                Row(
-                                    modifier = Modifier.padding(top = 12.dp),
+                                androidx.compose.foundation.layout.FlowRow(
+                                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
                                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                                 ) {
                                     InfoCapsule(
@@ -215,18 +239,14 @@ fun RemotePlaylistScreen(
                                         prominent = true,
                                         onClick = { tracks.firstOrNull()?.let { onPlayTrack(it, tracks) } },
                                     )
+                                    // Save/Download/Share used to be three more circle buttons
+                                    // here, crowding Shuffle/Play into a five-button row - now
+                                    // collected behind one menu (see RemotePlaylistActionsSheet).
                                     CircleIconButton(
-                                        icon = if (addedToLibrary) Icons.Default.Check else Icons.AutoMirrored.Filled.PlaylistAdd,
-                                        contentDescription = if (addedToLibrary) "Added to Library" else "Add to Library",
-                                        testTag = "remote_playlist_add",
-                                        onClick = {
-                                            if (!addedToLibrary) {
-                                                val asTracks = tracks.map { it.toPlayableTrack(it.id.hashCode()) }
-                                                actionsViewModel.addRemotePlaylistToLibrary(title, imageUrl, asTracks)
-                                                addedToLibrary = true
-                                                Toast.makeText(context, "Added to your library", Toast.LENGTH_SHORT).show()
-                                            }
-                                        },
+                                        icon = Icons.Default.MoreVert,
+                                        contentDescription = "Playlist options",
+                                        testTag = "remote_playlist_menu",
+                                        onClick = { menuOpen = true },
                                     )
                                 }
                             }
@@ -249,12 +269,17 @@ fun RemotePlaylistScreen(
                         }
                     } else {
                         itemsIndexed(tracks, key = { index, _ -> index }) { _, track ->
+                            val key = track.downloadKey()
                             TrackRow(
                                 title = track.title,
                                 artist = track.artist,
                                 imageUrl = track.imageUrl,
                                 duration = track.duration,
                                 onClick = { onPlayTrack(track, tracks) },
+                                isLiked = key in likedKeys,
+                                isDownloaded = key in downloadedKeys,
+                                downloadProgress = downloadsInProgress[key],
+                                isPlaying = track.playbackId() == nowPlayingState.currentPlaybackId,
                                 onOpenMenu = { selectedTrack = track },
                             )
                         }
@@ -273,7 +298,7 @@ fun RemotePlaylistScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (topBarVisibility > 0.01f) {
-                IconButton(
+                MicroIconButton(
                     onClick = onBack,
                     modifier = Modifier
                         .graphicsLayer {
@@ -303,6 +328,34 @@ fun RemotePlaylistScreen(
         onGoToArtist = onGoToArtist,
         onGoToAlbum = onGoToAlbum,
     )
+
+    if (menuOpen) {
+        val currentTracks = (state as? UiState.Success)?.data.orEmpty()
+        RemotePlaylistActionsSheet(
+            title = title,
+            songCount = currentTracks.size,
+            imageUrl = imageUrl,
+            addedToLibrary = addedToLibrary,
+            onSaveToLibrary = {
+                if (!addedToLibrary) {
+                    val asTracks = currentTracks.map { it.toPlayableTrack(it.id.hashCode()) }
+                    actionsViewModel.addRemotePlaylistToLibrary(title, imageUrl, asTracks, playlistId)
+                    Toast.makeText(context, "Added to your library", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDownload = {
+                val asTracks = currentTracks.map { it.toPlayableTrack(it.id.hashCode()) }
+                if (addedToLibrary) {
+                    actionsViewModel.downloadAll(asTracks)
+                } else {
+                    actionsViewModel.saveAndDownloadPlaylist(title, imageUrl, asTracks, playlistId)
+                }
+                Toast.makeText(context, "Downloading playlist for offline listening", Toast.LENGTH_SHORT).show()
+            },
+            onShare = { context.shareYouTubePlaylistLink(title, playlistId) },
+            onDismiss = { menuOpen = false },
+        )
+    }
 }
 
 /** A full-bleed 2x2 mosaic of the playlist's first four track covers, fading into the page
@@ -472,23 +525,20 @@ private fun CircleIconButton(
     }
 }
 
-/** Same duration-summing logic as [com.example.totalDurationLabel] (`List<Track>`), duplicated for
- * `List<TrackResult>` rather than converting every track just to reuse it - this screen only ever
- * needs the one number. */
-private fun List<TrackResult>.totalDurationLabel(): String {
-    val totalSeconds = sumOf { track ->
-        val parts = track.duration?.split(":").orEmpty()
-        val minutes = parts.getOrNull(0)?.toIntOrNull() ?: 0
-        val seconds = parts.getOrNull(1)?.toIntOrNull() ?: 0
-        minutes * 60 + seconds
-    }
-    val totalMinutes = totalSeconds / 60
-    val hours = totalMinutes / 60
-    val minutes = totalMinutes % 60
-    return when {
-        hours > 0 && minutes > 0 -> "$hours hr $minutes min"
-        hours > 0 -> "$hours hr"
-        minutes > 0 -> "$minutes min"
-        else -> "Less than a minute"
-    }
+/**
+ * Last successfully loaded tracklist per remote playlist id, kept in memory only - lets a
+ * same-playlist remount (e.g. returning from Now Playing) show its content immediately instead of
+ * a blank loading spinner while a fresh fetch runs in the background, the same stale-while-
+ * revalidate treatment [ArtistScreen]/[AlbumScreen] get from their own Room page cache. This
+ * screen has no such cache (its own doc explains why - a remote playlist's header comes from nav
+ * args, not a re-fetchable id-only lookup), so this is the lightweight in-memory equivalent -
+ * enough to avoid the visible reload, not meant to survive process death.
+ */
+private object RemotePlaylistTracksCache {
+    private val cache = mutableMapOf<String, List<TrackResult>>()
+    fun get(playlistId: String): List<TrackResult>? = cache[playlistId]
+    fun put(playlistId: String, tracks: List<TrackResult>) { cache[playlistId] = tracks }
 }
+
+private fun List<TrackResult>.totalDurationLabel(): String =
+    com.example.durationSummaryLabel(map { it.duration })

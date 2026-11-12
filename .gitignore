@@ -16,6 +16,38 @@
 local.properties
 .env
 debug.keystore
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+.env.*
+!.env.example
+google-services.json
+**/google-services.json
+*service-account*.json
 .claude/settings.local.json
 .scratch/
 repo/
+
+# Local planning, research, and device verification notes.
+/docs/*
+!/docs/screenshots/
+!/docs/screenshots/**
+!/docs/BUILDING.md
+!/docs/VERIFICATION.md
+!/docs/SECURITY-AUDIT.md
+/tools/
+/metadata.json
+
+# Windows download metadata is not part of the project.
+*Zone.Identifier
+
+# Generated artifacts and private local test/output directories.
+**/build/
+/output/
+/tmp/
+/artifacts/
+*.apk
+*.aab
+*.hprof

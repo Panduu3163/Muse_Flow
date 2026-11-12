@@ -1,0 +1,6 @@
+Haze 2.1.0 (core and blur modules)
+Copyright Christopher Banes and the Haze project contributors.
+https://github.com/chrisbanes/haze
+
+Licensed under the Apache License, Version 2.0.
+See Haze-LICENSE.txt in this directory for the full license.

@@ -1,0 +1,55 @@
+name: Android checks
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2 # v5
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+      - name: Install the compile SDK
+        run: |
+          printf 'y\n%.0s' {1..100} | sdkmanager --licenses > /dev/null
+          sdkmanager "platforms;android-37.1" "build-tools;37.0.0"
+      - name: Create an ephemeral test signing key
+        run: >-
+          keytool -genkeypair -keystore debug.keystore -storepass android
+          -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048
+          -validity 2 -dname "CN=CI Test,O=MuseFlow,C=US"
+      - name: Test, lint and assemble
+        run: >-
+          ./gradlew testDebugUnitTest lintDebug assembleDebug
+          --no-daemon --max-workers=1 --console=plain
+      - name: Save verification reports
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: android-verification-reports
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            app/build/reports/
+            app/build/test-results/
+            innertube/build/reports/
+            innertube/build/test-results/

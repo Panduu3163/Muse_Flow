@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_metadata" android:layout_width="match_parent" android:layout_height="match_parent">
+    <ImageView android:id="@+id/widget_artwork" android:layout_width="match_parent" android:layout_height="match_parent"
+        android:src="@drawable/ic_widget_artwork" android:scaleType="fitXY" android:importantForAccessibility="no" />
+    <include layout="@layout/widget_controls" android:layout_width="match_parent" android:layout_height="48dp"
+        android:layout_alignParentBottom="true" android:layout_marginBottom="10dp" />
+    <TextView android:id="@+id/widget_artist" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_above="@id/widget_controls" android:layout_marginStart="14dp" android:layout_marginEnd="14dp" android:layout_marginBottom="6dp"
+        android:text="@string/widget_choose" android:textColor="#E5E1EE" android:textSize="12sp"
+        android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false" />
+    <TextView android:id="@+id/widget_title" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_above="@id/widget_artist" android:layout_marginStart="14dp" android:layout_marginEnd="14dp" android:layout_marginBottom="4dp"
+        android:text="@string/widget_open" android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold"
+        android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false" />
+</RelativeLayout>

@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.core.net.toUri
+
 import android.content.Intent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -92,7 +95,7 @@ fun OnboardingDialog(
                 OnboardingHobbyProjectNotice(
                     onClick = {
                         val intent = Intent(Intent.ACTION_SENDTO).apply {
-                            data = android.net.Uri.parse("mailto:$SUPPORT_EMAIL")
+                            data = ("mailto:$SUPPORT_EMAIL").toUri()
                             putExtra(Intent.EXTRA_SUBJECT, "MuseFlow bug report")
                         }
                         runCatching { context.startActivity(intent) }
@@ -105,7 +108,7 @@ fun OnboardingDialog(
                     onClick = { uriHandler.openUri(REPO_URL) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(50.dp)
+                        .heightIn(min = 50.dp)
                         .testTag("onboarding_star"),
                     shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(
@@ -126,7 +129,7 @@ fun OnboardingDialog(
                     onClick = onContinue,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(50.dp)
+                        .heightIn(min = 50.dp)
                         .testTag("onboarding_continue"),
                     shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(

@@ -26,6 +26,7 @@ internal fun parseCsvRows(text: String): List<List<String>> {
     var i = 0
 
     fun endField() {
+        if (row.size >= 256) throw CsvFormatException("Too many columns. Export a playlist with up to 256 columns.")
         row.add(field.toString())
         field.setLength(0)
     }
@@ -33,11 +34,15 @@ internal fun parseCsvRows(text: String): List<List<String>> {
     fun endRow() {
         endField()
         // A trailing newline shouldn't manufacture a blank row.
-        if (row.size > 1 || row.first().isNotBlank()) rows.add(row)
+        if (row.size > 1 || row.first().isNotBlank()) {
+            if (rows.size >= MAX_PLAYLIST_IMPORT_TRACKS + 1) throw CsvFormatException("Too many rows. Split this playlist into files of up to 5,000 tracks.")
+            rows.add(row)
+        }
         row = mutableListOf()
     }
 
     while (i < text.length) {
+        if (field.length > 16_384) throw CsvFormatException("A field is too long. Use track fields up to 16,384 characters.")
         val c = text[i]
         when {
             inQuotes && c == '"' && i + 1 < text.length && text[i + 1] == '"' -> {
@@ -55,6 +60,8 @@ internal fun parseCsvRows(text: String): List<List<String>> {
         }
         i++
     }
+    if (inQuotes) throw CsvFormatException("A quoted field is not closed. Export the CSV again.")
+    if (field.length > 16_384) throw CsvFormatException("A field is too long. Use track fields up to 16,384 characters.")
     if (field.isNotEmpty() || row.isNotEmpty()) endRow()
 
     return rows
@@ -68,7 +75,7 @@ private val ARTIST_HEADERS = listOf("artist name(s)", "artist name", "artist(s)"
 private val ALBUM_HEADERS = listOf("album name", "album")
 
 private fun List<String>.indexOfHeader(candidates: List<String>): Int {
-    val normalized = map { it.trim().lowercase().removePrefix("﻿") }
+    val normalized = map { it.trim().lowercase().removePrefix("\uFEFF") }
     // Exact match first: "album" would otherwise match "album artist" by prefix and steal the
     // artist column on exports that carry both.
     candidates.forEach { candidate ->
@@ -89,7 +96,11 @@ private fun List<String>.indexOfHeader(candidates: List<String>): Int {
  * differently. Rows missing a title or artist are dropped rather than imported as blanks - a row
  * with no artist can't be matched to anything, so keeping it would only produce a failure later.
  */
-fun parsePlaylistCsv(text: String): List<CsvTrack> {
+internal data class PlaylistParseResult(val tracks: List<CsvTrack>, val skippedRows: Int = 0)
+
+fun parsePlaylistCsv(text: String): List<CsvTrack> = parsePlaylistCsvReport(text).tracks
+
+internal fun parsePlaylistCsvReport(text: String): PlaylistParseResult {
     val rows = parseCsvRows(text)
     if (rows.isEmpty()) throw CsvFormatException("That file is empty.")
 
@@ -104,14 +115,16 @@ fun parsePlaylistCsv(text: String): List<CsvTrack> {
     }
     val albumIndex = header.indexOfHeader(ALBUM_HEADERS)
 
-    return rows.drop(1).mapNotNull { row ->
+    var skipped = 0
+    val tracks = rows.drop(1).mapNotNull { row ->
         val title = row.getOrNull(titleIndex)?.trim().orEmpty()
         val artist = row.getOrNull(artistIndex)?.trim().orEmpty()
-        if (title.isEmpty() || artist.isEmpty()) return@mapNotNull null
+        if (title.isEmpty() || artist.isEmpty()) { skipped++; return@mapNotNull null }
         CsvTrack(
             title = title,
             artist = artist,
             album = albumIndex.takeIf { it >= 0 }?.let { row.getOrNull(it)?.trim() }?.takeIf { it.isNotEmpty() },
         )
     }
+    return PlaylistParseResult(tracks, skipped)
 }

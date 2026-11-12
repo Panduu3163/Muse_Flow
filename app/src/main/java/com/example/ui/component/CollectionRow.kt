@@ -1,7 +1,7 @@
 package com.example.ui.component
 
+import com.example.ui.utils.feedbackClickable
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,10 +24,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.example.CollectionKind
+import com.example.ui.theme.MuseFlowSpacing
+import com.example.ui.theme.MuseFlowShapes
 
 /**
  * The row for anything that contains tracks rather than being one: an album, an artist, a playlist.
@@ -44,11 +47,12 @@ fun CollectionRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val largeText = LocalDensity.current.fontScale > 1.2f
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .feedbackClickable(onClick = onClick)
+            .padding(horizontal = MuseFlowSpacing.medium, vertical = MuseFlowSpacing.small)
             .testTag("collection_row_${title.lowercase().replace(" ", "_")}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -63,7 +67,7 @@ fun CollectionRow(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
+                maxLines = if (largeText) 2 else 1,
                 overflow = TextOverflow.Ellipsis,
             )
             if (subtitle.isNotBlank()) {
@@ -83,10 +87,10 @@ fun CollectionRow(
 fun CollectionArtwork(
     imageUrl: String?,
     kind: CollectionKind,
-    size: androidx.compose.ui.unit.Dp = 52.dp,
     modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 52.dp,
 ) {
-    val shape: Shape = if (kind == CollectionKind.Artist) CircleShape else RoundedCornerShape(10.dp)
+    val shape: Shape = if (kind == CollectionKind.Artist) CircleShape else RoundedCornerShape(MuseFlowShapes.control)
 
     Box(
         modifier = modifier

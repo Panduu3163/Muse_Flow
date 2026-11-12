@@ -3,6 +3,9 @@ package com.example.ui.component
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -31,7 +34,7 @@ fun TrackDetailsDialog(
         onDismissRequest = onDismiss,
         title = { Text("Details") },
         text = {
-            Column(modifier = Modifier.testTag("track_details_dialog")) {
+            SelectionContainer { Column(modifier = Modifier.verticalScroll(rememberScrollState()).testTag("track_details_dialog")) {
                 DetailRow("Title", track.title)
                 DetailRow("Artist", track.artist)
                 track.duration?.let { DetailRow("Duration", it) }
@@ -39,7 +42,7 @@ fun TrackDetailsDialog(
                 DetailRow("Liked", if (isLiked) "Yes" else "No")
                 DetailRow("Downloaded", if (isDownloaded) "Yes" else "No")
                 DetailRow("Track ID", track.id)
-            }
+            } }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Close") }
@@ -49,7 +52,7 @@ fun TrackDetailsDialog(
 
 @Composable
 private fun DetailRow(label: String, value: String) {
-    Row(modifier = Modifier.padding(vertical = 4.dp)) {
+    Column(modifier = Modifier.padding(vertical = 6.dp)) {
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,

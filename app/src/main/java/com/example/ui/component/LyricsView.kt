@@ -3,30 +3,50 @@ package com.example.ui.component
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -36,20 +56,22 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.VerticalAlignCenter
+import androidx.compose.material3.Icon
 import com.example.LyricLine
 import com.example.LyricWord
 import com.example.LyricsResult
 import com.example.LyricsTextPosition
 import com.example.WordAnimationStyle
 import com.example.activeLineIndex
+import com.example.ui.theme.LocalReducedMotion
 import kotlin.math.sin
 
 /**
  * The scrolling lyrics view.
  *
- * Synced lyrics track playback position and auto-scroll the active line to roughly a third from the
- * top - not the centre, because the lines a listener wants to read next are the ones *below* the
- * current one, so biasing upward shows more of them.
+ * Synced lyrics keep the active line at the vertical centre of the visible lyrics window.
  *
  * Tapping a line seeks to it when [tapToSeek] is on. Plain (unsynced) lyrics render as a static
  * block with no highlight, since there's nothing to sync against.
@@ -58,8 +80,11 @@ import kotlin.math.sin
 fun LyricsView(
     result: LyricsResult?,
     positionMs: Long,
-    onSeekTo: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    isPlaying: Boolean = false,
+    playbackSpeed: Float = 1f,
+    positionRevision: Int = 0,
+    onSeekTo: (Long) -> Unit,
     textSizeSp: Int = 20,
     lineSpacing: Float = 1.2f,
     textPosition: LyricsTextPosition = LyricsTextPosition.Center,
@@ -101,7 +126,7 @@ fun LyricsView(
                         fontSize = textSizeSp.sp,
                         lineHeight = (textSizeSp * lineSpacing * 1.3f).sp,
                     ),
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = LocalContentColor.current,
                     textAlign = alignment,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -111,6 +136,9 @@ fun LyricsView(
         is LyricsResult.Synced -> SyncedLyrics(
             lines = result.lines,
             positionMs = positionMs,
+            isPlaying = isPlaying,
+            playbackSpeed = playbackSpeed,
+            positionRevision = positionRevision,
             onSeekTo = onSeekTo,
             modifier = modifier,
             textSizeSp = textSizeSp,
@@ -129,6 +157,9 @@ fun LyricsView(
 private fun SyncedLyrics(
     lines: List<LyricLine>,
     positionMs: Long,
+    isPlaying: Boolean,
+    playbackSpeed: Float,
+    positionRevision: Int,
     onSeekTo: (Long) -> Unit,
     modifier: Modifier,
     textSizeSp: Int,
@@ -142,23 +173,58 @@ private fun SyncedLyrics(
 ) {
     val listState = rememberLazyListState()
     val activeIndex = remember(lines, positionMs) { lines.activeLineIndex(positionMs) }
+    val reducedMotion = LocalReducedMotion.current
+    var followLyrics by remember(lines) { mutableStateOf(true) }
+    val manualScrollConnection = remember(lines) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput) followLyrics = false
+                return Offset.Zero
+            }
+        }
+    }
 
-    LaunchedEffect(activeIndex, autoScroll) {
-        if (autoScroll && activeIndex >= 0) {
-            // Offset so the active line sits ~1/3 down rather than pinned to the very top.
-            listState.animateScrollToItem(
-                index = activeIndex.coerceAtLeast(0),
-                scrollOffset = -(textSizeSp * 6),
-            )
+    BoxWithConstraints(modifier.fillMaxSize()) {
+    val viewportHeight = with(LocalDensity.current) { maxHeight.roundToPx() }
+    LaunchedEffect(lines, activeIndex, positionRevision, autoScroll, followLyrics, reducedMotion,
+        viewportHeight) {
+        if (autoScroll && followLyrics && activeIndex >= 0) {
+            // Adjacent lines are already laid out. Animate their measured centre directly;
+            // animateScrollToItem followed by a second correction caused the down-then-up hop.
+            val wasVisible = listState.layoutInfo.visibleItemsInfo.any { it.index == activeIndex }
+            if (!wasVisible) {
+                // A long seek is different: jump to the sought line once, then position it
+                // exactly. No intermediate motion through unrelated verses.
+                listState.scrollToItem(activeIndex)
+                withFrameNanos { }
+            }
+            val layout = listState.layoutInfo
+            val item = layout.visibleItemsInfo.firstOrNull { it.index == activeIndex }
+            if (item != null) {
+                // LazyColumn item offsets use the *content* coordinate system. With half-height
+                // top/bottom padding, viewportStartOffset is negative and viewportEndOffset is
+                // correspondingly shorter; viewportSize/2 put the active line below the lyrics
+                // area's visual centre. The midpoint of the viewport offsets is the right target.
+                val centre = (layout.viewportStartOffset + layout.viewportEndOffset) / 2f
+                val correction = item.offset + item.size / 2f - centre
+                if (kotlin.math.abs(correction) > 1f) {
+                    if (reducedMotion || !wasVisible) listState.scrollBy(correction)
+                    else listState.animateScrollBy(correction, spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessLow,
+                    ))
+                }
+            }
         }
     }
 
     LazyColumn(
         state = listState,
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
+            .nestedScroll(manualScrollConnection)
             .testTag("lyrics_synced"),
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 120.dp),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = maxHeight / 2),
     ) {
         itemsIndexed(lines, key = { index, line -> "$index:${line.timeMs}" }) { index, line ->
             val isActive = index == activeIndex
@@ -167,18 +233,13 @@ private fun SyncedLyrics(
             // lot of wasted per-frame text layout in a list that already redraws several times a
             // second.
             //
-            // Real per-word timing ([LyricLine.words]) only ever comes from BetterLyrics's Kugou
-            // source, which in practice means it exists for close to no tracks outside Chinese-
-            // language ones - every *other* synced source (LRCLib included) only has line-level
-            // timing. Gating every animation style behind real word data would make all five
-            // styles silently do nothing for almost every track, which is worse than the plain
-            // line highlight it would otherwise replace. So when there's no word data, the line's
-            // own words are still split out and each given a slice of the line's on-screen window
-            // proportional to its character length - not one synthetic "word" spanning the whole
-            // line, which would make Bounce/Scale/Wave move the entire line as one blob instead of
-            // one word at a time. This is the same technique Echo Music's lyrics view uses for its
-            // own word-timing-less lines.
-            val words = remember(line, lines, index) { synthesizeWordTimings(line, lines.getOrNull(index + 1)) }
+            // Use source-provided word/syllable timestamps when available. For line-timed
+            // providers, estimated word pacing supplies a visual effect without claiming exact
+            // word sync; the source label above the lyrics makes that distinction visible.
+            val words = remember(line, lines, index) {
+                displayLyricWords(line, lines.getOrNull(index + 1))
+            }
+            val wordSeparator = remember(line, words) { lyricWordSeparator(line, words) }
             val karaoke = isActive
 
             // The in-progress word's sweep is driven by this Animatable, not by re-reading
@@ -194,45 +255,66 @@ private fun SyncedLyrics(
             val activeWord = words.getOrNull(activeWordIndex)
             val wordProgress = remember(line) { Animatable(0f) }
             if (karaoke && activeWord != null) {
-                // Keyed on the word itself (not positionMs) - restarting on every tick would reset
-                // the animation to a stutter instead of letting it free-run between ticks.
-                LaunchedEffect(activeWord) {
+                // Position ticks select a word, while Compose's frame clock fills the space
+                // between them. Pause/buffer, speed changes and seeks restart from the sampled
+                // player position; a seek within the same word is caught by positionRevision.
+                LaunchedEffect(activeWord, isPlaying, playbackSpeed, positionRevision, reducedMotion) {
                     val duration = (activeWord.endMs - activeWord.startMs).coerceAtLeast(1)
                     val elapsed = (positionMs - activeWord.startMs).coerceIn(0, duration)
                     wordProgress.snapTo(elapsed.toFloat() / duration)
                     val remaining = duration - elapsed
-                    if (remaining > 0) {
-                        wordProgress.animateTo(1f, tween(remaining.toInt(), easing = LinearEasing))
+                    if (isPlaying && !reducedMotion && remaining > 0) {
+                        wordProgress.animateTo(1f, tween(
+                            (remaining / playbackSpeed.coerceAtLeast(0.25f)).toInt().coerceAtLeast(1),
+                            easing = LinearEasing,
+                        ))
                     }
                 }
             }
 
+            val sampledProgress = activeWord?.let { word ->
+                ((positionMs - word.startMs).toFloat() / (word.endMs - word.startMs).coerceAtLeast(1))
+                    .coerceIn(0f, 1f)
+            } ?: 0f
+
+            // Fixed white/dimmed-white rather than the app's dynamic theme colours - a
+            // per-track/seed-driven accent can land close in hue or lightness to the inactive
+            // colour (the same low-contrast failure mode the Stats/Search screens had), which
+            // makes the sung-vs-upcoming word transition barely perceptible and leaves only the
+            // coarser line-level cues (bold weight, the active-line scale bump) visibly "doing"
+            // anything - reading as the whole line reacting at once instead of each word. A fixed
+            // white scale guarantees the per-word contrast regardless of theme/seed, and is what
+            // actually sells styles like Metro's tile/Vivi Music's gradient sweep.
             val color by animateColorAsState(
-                targetValue = if (isActive) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                targetValue = if (isActive) Color.White else Color.White.copy(alpha = 0.48f),
+                animationSpec = tween(if (reducedMotion) 0 else 320, easing = FastOutSlowInEasing),
                 label = "lyric_colour",
             )
             val scale by animateFloatAsState(
-                targetValue = if (isActive) 1f else 0.94f,
+                targetValue = if (reducedMotion || isActive) 1f else 0.98f,
+                animationSpec = tween(if (reducedMotion) 0 else 320, easing = FastOutSlowInEasing),
                 label = "lyric_scale",
             )
 
-            val activeTextColor = MaterialTheme.colorScheme.primary
-            val inactiveTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+            val activeTextColor = Color.White
+            val inactiveTextColor = Color.White.copy(alpha = 0.48f)
+            // Dark, not theme-driven either: Metro's "sung tile" is a solid block in sungColor
+            // (now white) with the character punched out in this colour - it needs to stay dark
+            // for the punched-out text to read against a white tile regardless of theme.
+            val metroTileTextColor = Color.Black
 
             Text(
                 text = if (karaoke) {
                     buildKaraokeText(
                         words = words,
+                        separator = wordSeparator,
                         activeWordIndex = activeWordIndex,
-                        activeWordProgress = wordProgress.value,
+                        activeWordProgress = if (reducedMotion) sampledProgress else wordProgress.value,
                         sungColor = activeTextColor,
                         upcomingColor = inactiveTextColor,
-                        style = wordAnimationStyle,
-                        glow = glow,
+                        style = if (reducedMotion) WordAnimationStyle.Fade else wordAnimationStyle,
+                        glow = glow && !reducedMotion,
+                        metroTileTextColor = metroTileTextColor,
                     )
                 } else {
                     AnnotatedString(line.text)
@@ -265,23 +347,53 @@ private fun SyncedLyrics(
             )
         }
     }
+    if (autoScroll && !followLyrics) {
+        Surface(
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp)
+                .clickable { followLyrics = true },
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.48f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.20f)),
+            shadowElevation = 3.dp,
+        ) {
+            Row(
+                Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.VerticalAlignCenter, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface)
+                Text("Follow lyrics", style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+    }
+    }
 }
 
 /**
  * Splits [line] into its own words with synthesized per-word timing, for a source that only gave
- * a line-level timestamp - each word gets a slice of the line's on-screen window (from its own
- * timestamp to [nextLine]'s, or a flat 4s guess for the last line) proportional to its character
- * length, matching how longer words plausibly take longer to sing than short ones. A line with no
- * spaces (a single "word", or a script that doesn't tokenize on whitespace) falls back to one
- * word spanning the whole window.
+ * a line-level timestamp. The original whitespace stays attached to its preceding token so
+ * rendering never changes punctuation, spacing, or line breaks. This is estimated pacing, not
+ * source-provided word timing. Scripts without spaces remain one timed segment.
  */
+internal fun displayLyricWords(line: LyricLine, nextLine: LyricLine?): List<LyricWord> =
+    line.words?.takeIf { it.isNotEmpty() } ?: synthesizeWordTimings(line, nextLine)
+
+internal fun lyricWordSeparator(line: LyricLine, words: List<LyricWord>): String =
+    if (words.joinToString("") { it.text }.trim() == line.text.trim()) "" else " "
+
 private fun synthesizeWordTimings(line: LyricLine, nextLine: LyricLine?): List<LyricWord> {
-    val lineEnd = nextLine?.timeMs ?: (line.timeMs + 4000L)
+    val lineEnd = line.endMs?.takeIf { it > line.timeMs } ?: nextLine?.timeMs?.takeIf { it > line.timeMs } ?: (line.timeMs + 4000L)
     val duration = (lineEnd - line.timeMs).coerceAtLeast(1L)
-    val tokens = line.text.split(" ").filter { it.isNotEmpty() }
+    val tokens = Regex("\\S+\\s*").findAll(line.text).map { it.value }.toList().toMutableList()
+    if (tokens.isNotEmpty()) {
+        val prefix = line.text.substringBefore(tokens.first())
+        tokens[0] = prefix + tokens[0]
+    }
     if (tokens.size <= 1) return listOf(LyricWord(line.timeMs, lineEnd, line.text))
 
-    val totalChars = tokens.sumOf { it.length }.coerceAtLeast(1)
+    val totalChars = tokens.sumOf { token -> token.count { !it.isWhitespace() } }.coerceAtLeast(1)
     var cursor = line.timeMs
     return tokens.mapIndexed { index, token ->
         val start = cursor
@@ -290,7 +402,7 @@ private fun synthesizeWordTimings(line: LyricLine, nextLine: LyricLine?): List<L
         val end = if (index == tokens.lastIndex) {
             lineEnd
         } else {
-            (start + (duration * token.length / totalChars).coerceAtLeast(1L)).coerceAtMost(lineEnd)
+            (start + (duration * token.count { !it.isWhitespace() } / totalChars).coerceAtLeast(1L)).coerceAtMost(lineEnd)
         }
         cursor = end
         LyricWord(start, end, token)
@@ -312,19 +424,21 @@ private fun synthesizeWordTimings(line: LyricLine, nextLine: LyricLine?): List<L
  */
 private fun buildKaraokeText(
     words: List<LyricWord>,
+    separator: String,
     activeWordIndex: Int,
     activeWordProgress: Float,
     sungColor: Color,
     upcomingColor: Color,
     style: WordAnimationStyle,
     glow: Boolean,
+    metroTileTextColor: Color,
 ): AnnotatedString = buildAnnotatedString {
     words.forEachIndexed { index, word ->
-        if (index > 0) append(" ")
+        if (index > 0) append(separator)
         when {
             index < activeWordIndex -> withStyle(sungSpan(sungColor, glow)) { append(word.text) }
             index > activeWordIndex -> withStyle(SpanStyle(color = upcomingColor)) { append(word.text) }
-            else -> appendInProgressWord(word.text, activeWordProgress, sungColor, upcomingColor, style, glow)
+            else -> appendInProgressWord(word.text, activeWordProgress, sungColor, upcomingColor, style, glow, metroTileTextColor)
         }
     }
 }
@@ -334,8 +448,7 @@ private fun sungSpan(color: Color, glow: Boolean) = SpanStyle(
     shadow = if (glow) Shadow(color = color, blurRadius = 18f) else null,
 )
 
-/** Renders the one word actually being sung right now, [fraction] (0f-1f) through its own
- * start/end window - the only place the four [WordAnimationStyle]s actually differ. */
+/** Renders the word being sung now, with each style using its own motion treatment. */
 private fun androidx.compose.ui.text.AnnotatedString.Builder.appendInProgressWord(
     text: String,
     fraction: Float,
@@ -343,51 +456,157 @@ private fun androidx.compose.ui.text.AnnotatedString.Builder.appendInProgressWor
     upcomingColor: Color,
     style: WordAnimationStyle,
     glow: Boolean,
+    metroTileTextColor: Color,
 ) {
+    val eased = fraction * fraction * (3f - 2f * fraction)
     when (style) {
         WordAnimationStyle.Karaoke -> {
-            // A literal sweep: the fraction of the word already "sung" is split at the character
-            // level, not just coloured as a whole - the classic karaoke-bar look.
-            val cut = (text.length * fraction).toInt().coerceIn(0, text.length)
-            if (cut > 0) withStyle(sungSpan(sungColor, glow)) { append(text.substring(0, cut)) }
-            if (cut < text.length) withStyle(SpanStyle(color = upcomingColor)) { append(text.substring(cut)) }
+            // A narrow colour edge travels continuously across the word. Character-based
+            // substring cuts stepped at each glyph and rebuilt text spans during playback.
+            val leading = (fraction - .035f).coerceIn(0f, 1f)
+            val trailing = (fraction + .035f).coerceIn(0f, 1f)
+            withStyle(SpanStyle(brush = Brush.horizontalGradient(
+                0f to sungColor, leading to sungColor,
+                trailing to upcomingColor, 1f to upcomingColor,
+            ))) { append(text) }
         }
 
         WordAnimationStyle.Bounce -> {
-            // A triangular envelope - rises to the peak at the word's midpoint, settles back down
-            // by the time it's fully sung - rather than a size that only ever grows.
-            val bounce = 1f - kotlin.math.abs(fraction - 0.5f) * 2f
+            // A gentle sine envelope peaks at the midpoint and settles without a sharp corner.
+            val bounce = kotlin.math.sin(fraction * Math.PI).toFloat()
             withStyle(
                 SpanStyle(
-                    color = lerp(upcomingColor, sungColor, fraction),
-                    fontSize = androidx.compose.ui.unit.TextUnit(1f + bounce * 0.22f, androidx.compose.ui.unit.TextUnitType.Em),
-                    shadow = if (glow) Shadow(color = sungColor, blurRadius = 14f) else null,
+                    color = lerp(upcomingColor, sungColor, eased),
+                    fontSize = androidx.compose.ui.unit.TextUnit(1f + bounce * 0.025f, androidx.compose.ui.unit.TextUnitType.Em),
+                    baselineShift = BaselineShift(bounce * 0.04f),
+                    shadow = if (glow) Shadow(color = sungColor.copy(alpha = .45f * bounce), blurRadius = 16f * bounce) else null,
                 )
             ) { append(text) }
         }
 
         WordAnimationStyle.Scale -> withStyle(
             SpanStyle(
-                color = lerp(upcomingColor, sungColor, fraction),
-                fontSize = androidx.compose.ui.unit.TextUnit(1f + fraction * 0.18f, androidx.compose.ui.unit.TextUnitType.Em),
-                shadow = if (glow) Shadow(color = sungColor, blurRadius = 14f) else null,
+                color = lerp(upcomingColor, sungColor, eased),
+                fontSize = androidx.compose.ui.unit.TextUnit(1f + eased * 0.025f, androidx.compose.ui.unit.TextUnitType.Em),
+                shadow = if (glow) Shadow(color = sungColor.copy(alpha = .4f * eased), blurRadius = 14f * eased) else null,
             )
         ) { append(text) }
 
         WordAnimationStyle.Wave -> withStyle(
             SpanStyle(
-                color = lerp(upcomingColor, sungColor, fraction),
-                baselineShift = BaselineShift(sin(fraction * Math.PI).toFloat() * 0.18f),
-                shadow = if (glow) Shadow(color = sungColor, blurRadius = 14f) else null,
+                color = lerp(upcomingColor, sungColor, eased),
+                baselineShift = BaselineShift(sin(fraction * Math.PI).toFloat() * 0.055f),
+                shadow = if (glow) Shadow(color = sungColor.copy(alpha = .35f * eased), blurRadius = 12f * eased) else null,
             )
         ) { append(text) }
 
         WordAnimationStyle.Fade -> withStyle(
             SpanStyle(
-                color = lerp(upcomingColor, sungColor, fraction),
-                shadow = if (glow) Shadow(color = sungColor, blurRadius = 14f * fraction) else null,
+                color = lerp(upcomingColor, sungColor, eased),
+                shadow = if (glow) Shadow(color = sungColor, blurRadius = 14f * eased) else null,
             )
         ) { append(text) }
+
+        // Adapted from Echo Music's METRO_LYRICS style (ui/component/MetroLyrics.kt), which
+        // renders lyrics on a raw Canvas with a hard per-character cut and bold, high-contrast
+        // glyphs - a blocky "tile" look rather than the smooth colour/size ramps every other
+        // style here uses. That canvas approach doesn't translate directly onto this
+        // AnnotatedString-based renderer, so the technique is adapted rather than ported
+        // verbatim: a hard (non-lerped) snap at the halfway point, a solid background "tile"
+        // behind the already-sung portion, and a jump straight to Black weight - no easing
+        // anywhere, on purpose.
+        WordAnimationStyle.Metro -> {
+            val cut = (text.length * fraction).toInt().coerceIn(0, text.length)
+            if (cut > 0) {
+                withStyle(
+                    SpanStyle(
+                        color = metroTileTextColor,
+                        background = sungColor,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = androidx.compose.ui.unit.TextUnit(0.5f, androidx.compose.ui.unit.TextUnitType.Sp),
+                    )
+                ) { append(text.substring(0, cut)) }
+            }
+            if (cut < text.length) {
+                withStyle(
+                    SpanStyle(
+                        color = upcomingColor,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = androidx.compose.ui.unit.TextUnit(0.5f, androidx.compose.ui.unit.TextUnitType.Sp),
+                    )
+                ) { append(text.substring(cut)) }
+            }
+        }
+
+        // Adapted from Echo Music's LYRICS_V2 ("Lyrics V2 (Fluid)") style
+        // (ui/component/LyricsV2.kt, AnimatedWordV2) - a continuous sine-driven float/scale
+        // bounce on the active word plus a soft-edged wipe (there it's a `drawWithContent`
+        // gradient mask; here the same "soft edge instead of a hard cut" idea is reproduced by
+        // ramping alpha smoothly over a couple of characters around the cut point instead of
+        // Karaoke's binary switch) - continuous motion rather than the discrete per-word jumps
+        // the other styles use.
+        WordAnimationStyle.Fluid -> {
+            val smooth = eased
+            val bounce = kotlin.math.sin(fraction * Math.PI).toFloat()
+            val cutPos = text.length * fraction
+            val edgeChars = 1.5f
+            text.forEachIndexed { i, c ->
+                val charAlpha = (((cutPos - i) / edgeChars) + 0.5f).coerceIn(0f, 1f)
+                withStyle(
+                    SpanStyle(
+                        color = lerp(upcomingColor, sungColor, charAlpha),
+                        baselineShift = BaselineShift(bounce * 0.025f),
+                        shadow = if (glow) Shadow(color = sungColor, blurRadius = 10f * smooth) else null,
+                    )
+                ) { append(c) }
+            }
+        }
+
+        // Adapted from Echo Music's "Vivi Music (Fluid)" style (echomusic_1 in
+        // constants/PreferenceKeys.kt, rendered by ui/component/EchoMusicLyrics.kt) - a
+        // horizontal gradient brush swept across the *whole word* as one span (rather than
+        // per-character, like Karaoke/Metro/Fluid above) with a glow shadow that intensifies as
+        // the sweep progresses, giving a soft "light passing through" look distinct from the
+        // hard/discrete styles.
+        WordAnimationStyle.ViviMusic -> withStyle(
+            SpanStyle(
+                brush = Brush.horizontalGradient(
+                    0f to sungColor,
+                    (fraction - 0.05f).coerceAtLeast(0f) to sungColor,
+                    (fraction + 0.05f).coerceAtMost(1f) to sungColor.copy(alpha = 0.45f),
+                    1f to upcomingColor.copy(alpha = 0.45f),
+                ),
+                fontWeight = FontWeight.ExtraBold,
+                shadow = Shadow(
+                    color = sungColor.copy(alpha = 0.6f * fraction),
+                    blurRadius = (12f * fraction).coerceAtLeast(0.1f),
+                ),
+            )
+        ) { append(text) }
+
+        // Adapted from Echo Music's APPLE style (ui/component/Lyrics.kt, the
+        // `LyricsAnimationStyle.APPLE` branch) - Apple Music's real lyrics UI ramps each word in
+        // with a smoothstep opacity/weight curve rather than a hard colour swap, so the sung
+        // word "settles in" instead of snapping - reproduced here as a smoothstep-eased alpha
+        // ramp (0.55 -> 1.0, matching Echo's own floor/ceiling) plus a weight step up to
+        // ExtraBold and a glow that grows with the smoothed progress squared, same as the
+        // source's `glowIntensity = smoothProgress * smoothProgress`.
+        WordAnimationStyle.AppleMusic -> {
+            val smooth = fraction * fraction * (3f - 2f * fraction)
+            val alpha = 0.55f + 0.45f * smooth
+            withStyle(
+                SpanStyle(
+                    color = sungColor.copy(alpha = alpha),
+                    fontWeight = FontWeight.SemiBold,
+                    shadow = if (glow) {
+                        Shadow(
+                            color = sungColor.copy(alpha = 0.2f + 0.4f * smooth * smooth),
+                            blurRadius = 10f + 12f * smooth * smooth,
+                        )
+                    } else null,
+                )
+            ) { append(text) }
+        }
     }
 }
 
@@ -402,7 +621,7 @@ private fun CenteredBox(modifier: Modifier, content: @Composable () -> Unit) {
 private fun CenteredMessage(
     modifier: Modifier,
     message: String,
-    color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    color: androidx.compose.ui.graphics.Color = LocalContentColor.current.copy(alpha = .72f),
 ) {
     Box(modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Text(

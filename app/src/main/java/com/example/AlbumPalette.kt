@@ -1,14 +1,17 @@
 package com.example
 
+import coil3.request.allowHardware
+
 import android.content.Context
-import android.graphics.drawable.BitmapDrawable
+import coil3.toBitmap
 import androidx.collection.LruCache
 import androidx.compose.ui.graphics.Color
 import androidx.palette.graphics.Palette
-import coil.imageLoader
-import coil.request.ImageRequest
+import coil3.imageLoader
+import coil3.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.materialkolor.score.Score
 
 /** Dominant/muted/vibrant colour triple extracted from a track's artwork via
  * [androidx.palette.graphics.Palette] - used to tint the Now Playing background for tracks that
@@ -16,7 +19,12 @@ import kotlinx.coroutines.withContext
  * [vibrant] falls back to [dominant] when Palette finds no vibrant swatch (common for muted/
  * grayscale artwork) rather than leaving it nullable - every caller wants three colours to work
  * with, not two-and-sometimes-a-third. */
-data class AlbumPalette(val dominant: Color, val muted: Color, val vibrant: Color = dominant)
+data class AlbumPalette(
+    val dominant: Color,
+    val muted: Color,
+    val vibrant: Color = dominant,
+    val accent: Color = vibrant,
+)
 
 /** In-memory cache of [AlbumPalette] by artwork URL - avoids re-running Palette (a real, if
  * small, CPU cost) every time the same track's Now Playing screen is revisited within a process
@@ -44,15 +52,19 @@ suspend fun extractAlbumPalette(context: Context, imageUrl: String): AlbumPalett
             .allowHardware(false)
             .build()
         val result = runCatching { context.imageLoader.execute(request) }.getOrNull() ?: return@withContext null
-        val bitmap = (result.drawable as? BitmapDrawable)?.bitmap ?: return@withContext null
+        val bitmap = result.image?.toBitmap(100, 100) ?: return@withContext null
 
         val palette = withContext(Dispatchers.Default) { Palette.from(bitmap).generate() }
         val dominantArgb = palette.getDominantColor(android.graphics.Color.TRANSPARENT)
         if (dominantArgb == android.graphics.Color.TRANSPARENT) return@withContext null
         val mutedArgb = palette.getMutedColor(dominantArgb)
         val vibrantArgb = palette.getVibrantColor(dominantArgb)
+        val rankedAccent = runCatching {
+            Score.score(palette.swatches.associate { it.rgb to it.population }).first()
+        }.getOrDefault(vibrantArgb)
 
-        AlbumPalette(dominant = Color(dominantArgb), muted = Color(mutedArgb), vibrant = Color(vibrantArgb))
+        AlbumPalette(dominant = Color(dominantArgb), muted = Color(mutedArgb),
+            vibrant = Color(vibrantArgb), accent = Color(rankedAccent))
             .also { AlbumPaletteCache.put(imageUrl, it) }
     }
 }

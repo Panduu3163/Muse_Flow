@@ -102,7 +102,7 @@ object YtCipherConfigStore {
         val request = Request.Builder().url(REMOTE_CONFIG_URL).build()
         val body = YtHttpClients.client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return emptyMap()
-            response.body?.string()
+            response.body.string()
         } ?: return emptyMap()
         return parseConfigsJson(body)
     }

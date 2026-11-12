@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible MuseFlow problem.
+body:
+  - type: markdown
+    attributes:
+      value: Please remove account details, tokens and private library data from logs or screenshots. Report exposed credentials privately using SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: App version and variant
+      placeholder: 1.8.0-beta (62)
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Phone, Android version and launcher
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include the song/source or widget size when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized logs or screenshots

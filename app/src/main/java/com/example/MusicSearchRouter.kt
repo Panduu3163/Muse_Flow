@@ -12,10 +12,21 @@ import android.content.Context
  */
 class MusicSearchRouter(private val context: Context) {
 
+    /** Regular YouTube uploads, including videos outside YouTube Music's catalog. */
+    suspend fun searchGeneralVideos(query: String): List<TrackResult> =
+        InnerTubeMusicProvider(context).searchGeneralVideos(query)
+
+    /** Home/radio discovery must not interleave unrestricted general-video results. */
+    suspend fun searchDiscoveryTracks(query: String): List<TrackResult> =
+        when (StreamResolverRouter.activeBackend(context)) {
+            ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).searchMusicCatalog(query)
+            ExtractorBackend.LEGACY -> YouTubeMusicProvider(context).search(query)
+        }
+
     suspend fun searchTracks(query: String): List<TrackResult> =
         when (StreamResolverRouter.activeBackend(context)) {
             ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).search(query)
-            ExtractorBackend.LEGACY -> YouTubeMusicProvider(context).search(query)
+            ExtractorBackend.LEGACY -> searchTracksPage(query).items
         }
 
     suspend fun searchAlbums(query: String): List<AlbumResult> =
@@ -81,6 +92,36 @@ class MusicSearchRouter(private val context: Context) {
             ExtractorBackend.LEGACY -> emptyList()
         }
 
+    /** First page of a songs search, with a continuation token for [searchTracksContinuation] to
+     * keep paging - what the Search screen's infinite scroll walks through before it runs out and
+     * blends into [getRadioTracksPage] recommendations. Only InnerTube exposes real pagination;
+     * the legacy provider's one-shot [searchTracks] result is treated as a single, final page. */
+    suspend fun searchTracksPage(query: String): TrackPage =
+        when (StreamResolverRouter.activeBackend(context)) {
+            ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).searchTracksPage(query)
+            ExtractorBackend.LEGACY -> {
+                val music = runCatching { YouTubeMusicProvider(context).search(query) }
+                val videos = runCatching { InnerTubeMusicProvider(context).searchGeneralVideos(query) }
+                if (music.isFailure && videos.isFailure) music.getOrThrow()
+                TrackPage(interleaveTrackResults(music.getOrNull().orEmpty(), videos.getOrNull().orEmpty()), continuation = null)
+            }
+        }
+
+    suspend fun searchTracksContinuation(continuation: String): TrackPage =
+        when (StreamResolverRouter.activeBackend(context)) {
+            ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).searchTracksContinuation(continuation)
+            ExtractorBackend.LEGACY -> TrackPage(emptyList(), continuation = null)
+        }
+
+    /** A page of a radio mix seeded from a track, with a continuation token - the paginated
+     * counterpart to [getRadioTracks], for a feed that keeps extending rather than taking one
+     * fixed batch. Only InnerTube exposes this. */
+    suspend fun getRadioTracksPage(videoId: String, continuation: String? = null): TrackPage =
+        when (StreamResolverRouter.activeBackend(context)) {
+            ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).getRadioTracksPage(videoId, continuation)
+            ExtractorBackend.LEGACY -> TrackPage(emptyList(), continuation = null)
+        }
+
     /** YouTube Music's own lyrics tab, plain text only. Only InnerTube exposes this. */
     suspend fun getLyricsText(videoId: String): String? =
         when (StreamResolverRouter.activeBackend(context)) {
@@ -104,7 +145,7 @@ class MusicSearchRouter(private val context: Context) {
         }
 
     /** New releases. Only InnerTube exposes these; the legacy provider returns none. */
-    suspend fun getNewReleases(): List<AlbumResult> =
+    suspend fun getNewReleases(): List<TrackResult> =
         when (StreamResolverRouter.activeBackend(context)) {
             ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).getNewReleases()
             ExtractorBackend.LEGACY -> emptyList()
@@ -121,6 +162,15 @@ class MusicSearchRouter(private val context: Context) {
     suspend fun getMoodAndGenres(): List<MoodGenreCategory> =
         when (StreamResolverRouter.activeBackend(context)) {
             ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).getMoodAndGenres()
+            ExtractorBackend.LEGACY -> emptyList()
+        }
+
+    /** The "everything" search results page - see [SearchShelf]'s own doc. Only InnerTube exposes
+     * this (it needs the raw unfiltered search response, which the legacy provider's per-type-only
+     * endpoints don't have an equivalent of). */
+    suspend fun searchSummary(query: String): List<SearchShelf> =
+        when (StreamResolverRouter.activeBackend(context)) {
+            ExtractorBackend.INNERTUBE -> InnerTubeMusicProvider(context).searchSummary(query)
             ExtractorBackend.LEGACY -> emptyList()
         }
 }

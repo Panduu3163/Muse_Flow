@@ -38,6 +38,7 @@ import com.example.PlaylistEntity
 @Composable
 fun AddToPlaylistDialog(
     playlists: List<PlaylistEntity>,
+    subject: String? = null,
     onPick: (Long) -> Unit,
     onCreate: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -49,12 +50,21 @@ fun AddToPlaylistDialog(
         title = { Text("Add to playlist") },
         text = {
             Column(modifier = Modifier.testTag("add_to_playlist_dialog")) {
+                Text(
+                    subject?.let { "Add $it to a playlist" } ?: "Choose where to save your selection",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 if (playlists.isNotEmpty()) {
                     LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
                         items(playlists, key = { it.id }) { playlist ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .heightIn(min = 48.dp)
                                     .clickable { onPick(playlist.id) }
                                     .padding(vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -76,12 +86,17 @@ fun AddToPlaylistDialog(
                             }
                         }
                     }
+                } else {
+                    Text("No playlists yet. Create one below to save this music.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp))
                 }
 
                 OutlinedTextField(
                     value = newPlaylistName,
                     onValueChange = { newPlaylistName = it },
-                    label = { Text("New playlist") },
+                    label = { Text("New playlist name") },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()

@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.music.innertube.models.upgradeThumbnailSize
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -51,15 +53,100 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _gridView = MutableStateFlow(false)
     val gridView: StateFlow<Boolean> = _gridView.asStateFlow()
 
-    fun setTrackSort(option: TrackSortOption) { _trackSort.value = option }
-    fun setPlaylistSort(option: PlaylistSortOption) { _playlistSort.value = option }
-    fun toggleDirection() { _ascending.value = !_ascending.value }
-    fun toggleGridView() { _gridView.value = !_gridView.value }
+    /** Filters belong to a section, just like its layout and sort choice. */
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
-    /** Applies the current sort to any track list. Kept as a function rather than pre-sorting each
-     * StateFlow so one sort selection governs every section without duplicating the plumbing. */
-    fun sortTracks(tracks: List<Track>): List<Track> =
+    private val viewPreferences = LibraryViewPreferences(application)
+    private val sectionViews = mutableMapOf<LibrarySection, LibraryViewPreference>()
+    private val preferencesReady = CompletableDeferred<Unit>()
+    private var saveViewJob: Job? = null
+
+    init {
+        viewModelScope.launch {
+            // A tap before the disk read finishes wins over older saved values.
+            val saved = runCatching { viewPreferences.read() }.getOrDefault(emptyMap())
+            saved.forEach { (section, preference) -> sectionViews.putIfAbsent(section, preference) }
+            restoreView(_section.value)
+            preferencesReady.complete(Unit)
+        }
+    }
+
+    private fun restoreView(section: LibrarySection) {
+        val view = sectionViews[section] ?: LibraryViewPreference()
+        _trackSort.value = view.trackSort
+        _playlistSort.value = view.playlistSort
+        _ascending.value = view.ascending
+        _gridView.value = view.grid
+        _searchQuery.value = view.query
+    }
+
+    private fun saveView() {
+        sectionViews[_section.value] = LibraryViewPreference(
+            _trackSort.value, _playlistSort.value, _ascending.value, _gridView.value, _searchQuery.value,
+        )
+        saveViewJob?.cancel()
+        saveViewJob = viewModelScope.launch {
+            preferencesReady.await()
+            delay(250) // Coalesce typing without blocking input or writing on every keystroke.
+            try { viewPreferences.write(sectionViews.toMap()) }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { ActionFeedback.post("Couldn't save Library view. Please try again.") }
+        }
+    }
+
+    fun setTrackSort(option: TrackSortOption) { _trackSort.value = option; saveView() }
+    fun setPlaylistSort(option: PlaylistSortOption) { _playlistSort.value = option; saveView() }
+    fun toggleDirection() { _ascending.value = !_ascending.value; saveView() }
+    fun toggleGridView() { _gridView.value = !_gridView.value; saveView() }
+    fun setSearchQuery(query: String) { _searchQuery.value = query.take(256); saveView() }
+
+    /** Applies the current search query, then the current sort, to any track list - filtering
+     * folded in here rather than as a separate call site covers every section that already routes
+     * through this function (Liked/Downloads/Top 50/Recent/On device) with this one change.
+     *
+     * While a search is active, relevance replaces the user's chosen sort entirely (same as any
+     * real search box - "closest match first" is the point, not an alphabetical/date ordering of
+     * whatever happened to match). The chosen sort still applies as-is once the query is cleared. */
+    fun sortTracks(tracks: List<Track>): List<Track> {
+        val query = _searchQuery.value.trim()
+        if (query.isBlank()) return tracks.sortedByLibraryOption(_trackSort.value, _ascending.value)
+        return tracks
+            .mapNotNull { track ->
+                val score = listOfNotNull(matchRank(track.title, query), matchRank(track.artist, query)).minOrNull()
+                score?.let { track to it }
+            }
+            .sortedBy { it.second }
+            .map { it.first }
+    }
+
+    /** The plain chosen sort, never the search-relevance reordering/filtering [sortTracks] folds
+     * in while a query is active - used to build the *queue* a tap starts, as opposed to what's
+     * displayed. Playing a search *hit* should still queue the section's real tracklist starting
+     * there, not just whatever few rows happened to match the search text - the latter is what
+     * made a tapped song "have nothing after it" while actually mid-playlist, since the on-screen
+     * search results were the entire queue. */
+    fun sortTracksIgnoringSearch(tracks: List<Track>): List<Track> =
         tracks.sortedByLibraryOption(_trackSort.value, _ascending.value)
+
+    /** Same query, applied to Playlists - the one section [sortTracks] doesn't cover, since a
+     * playlist isn't a [Track]. */
+    fun filterPlaylists(playlists: List<PlaylistEntity>): List<PlaylistEntity> {
+        val query = _searchQuery.value.trim()
+        if (query.isBlank()) return playlists
+        return playlists.mapNotNull { p -> matchRank(p.name, query)?.let { p to it } }
+            .sortedBy { it.second }
+            .map { it.first }
+    }
+
+    /** Same query, applied to Following. */
+    fun filterArtists(artists: List<FollowedArtistEntity>): List<FollowedArtistEntity> {
+        val query = _searchQuery.value.trim()
+        if (query.isBlank()) return artists
+        return artists.mapNotNull { a -> matchRank(a.name, query)?.let { a to it } }
+            .sortedBy { it.second }
+            .map { it.first }
+    }
 
     val playlists: StateFlow<List<PlaylistEntity>> = playlistRepository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -68,8 +155,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         .map { entities -> entities.map { it.toTrack() } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val downloads: StateFlow<List<Track>> = downloadedDao.observeCompleted()
-        .map { entities -> entities.map { it.toTrack() } }
+    val downloads: StateFlow<List<Track>> = DownloadRepository.getInstance(application).completedDownloads
+        .map { entities -> entities.map { it.toTrack(application) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val topPlayed: StateFlow<List<Track>> = historyRepository.observeTopPlayed(50)
@@ -83,6 +170,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     /** Backs Library's "Following" section - the list that "no way to see who you follow" gap
      * (follow/unfollow only ever existed on the artist sheet) was blocking on. */
     val followedArtists: StateFlow<List<FollowedArtistEntity>> = followedArtistsRepository.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** Local playlists whose every track has a completed offline file. */
+    val downloadedPlaylists: StateFlow<List<PlaylistEntity>> = playlistRepository.observeWithDownloads()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun unfollowArtist(artistId: String) = followedArtistsRepository.unfollow(artistId)
@@ -109,7 +200,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun scanLocalTracks() {
         localScanJob?.cancel()
         localScanJob = viewModelScope.launch {
-            _localTracks.value = UiState.Loading
+            // Stale-while-revalidate: keep showing whatever's already loaded while this rescan
+            // runs, rather than flashing to a loading placeholder first. This is called on every
+            // visit to the section (see this function's own doc) - including a mere return from
+            // Now Playing, where the momentary switch to UiState.Loading was wiping the section's
+            // LazyColumn down to a single placeholder item and, with it, its scroll position: a
+            // LazyColumn that briefly has 0 real rows clamps its scroll state to fit, and that
+            // clamp doesn't undo itself once the real rows come back a moment later.
+            if (_localTracks.value !is UiState.Success) _localTracks.value = UiState.Loading
             _localTracks.value = runCatching {
                 LocalAudioProvider(getApplication()).search("").map { it.toLocalTrack() }
             }.fold(
@@ -122,7 +220,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun selectSection(section: LibrarySection) {
+        if (_section.value == section) return
         _section.value = section
+        restoreView(section)
     }
 
     /**
@@ -156,8 +256,35 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     /** Also drops the playlist's own cached track flow - otherwise a new playlist created later
      * could reuse the freed id and inherit a stale [StateFlow] still holding the deleted tracks. */
     fun deletePlaylist(playlist: PlaylistEntity) {
-        viewModelScope.launch { playlistRepository.delete(playlist.id) }
-        playlistTrackFlows.remove(playlist.id)
+        viewModelScope.launch {
+            try {
+                playlistRepository.delete(playlist.id)
+                playlistTrackFlows.remove(playlist.id)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { ActionFeedback.post("Couldn't delete this playlist. Check storage and retry.") }
+        }
+    }
+}
+
+/**
+ * How well [text] matches [query], as a rank where lower is a better match - or null when it
+ * doesn't match at all. Plain substring-contains (what this used to be) ranks every match
+ * identically regardless of where it lands, so "Her" surfaced a song with "her" buried mid-title
+ * above the actual "Her" track, in whatever order the underlying list happened to already be in.
+ * This ranks an exact match first, then a prefix match, then a match at a word boundary (the start
+ * of any word, not just the whole string), then anywhere else - the same rough tiering a real
+ * search box uses, instead of "matched or didn't".
+ */
+private fun matchRank(text: String, query: String): Int? {
+    if (query.isEmpty()) return 0
+    val t = text.trim()
+    val q = query.trim()
+    return when {
+        t.equals(q, ignoreCase = true) -> 0
+        t.startsWith(q, ignoreCase = true) -> 1
+        Regex("\\b${Regex.escape(q)}", RegexOption.IGNORE_CASE).containsMatchIn(t) -> 2
+        t.contains(q, ignoreCase = true) -> 3
+        else -> null
     }
 }
 
@@ -182,16 +309,21 @@ private fun TrackResult.toLocalTrack(): Track = Track(
 )
 
 /** Rebuilds a playable [Track] from a completed download - [Track.streamUrl] points at the local
- * file, so playback never touches the network for a downloaded track. */
-fun DownloadedTrackEntity.toTrack(): Track = Track(
+ * file, so playback never touches the network for a downloaded track. [imageUrl] prefers the
+ * locally-saved cover ([DownloadRepository.localCoverFile]) over the original remote thumbnail -
+ * see that function's own doc for why the remote URL alone isn't reliable offline. */
+fun DownloadedTrackEntity.toTrack(context: android.content.Context): Track = Track(
     title = title,
     artist = artist,
     album = album,
     duration = duration,
     plays = "",
     gradientIndex = gradientIndex,
-    // Upgraded at read time - see PlaybackHistoryEntity.toTrack's comment on why.
-    imageUrl = imageUrl?.let(::upgradeThumbnailSize),
+    // A bare absolute path string (`File.absolutePath`) isn't reliably a Coil-loadable model -
+    // its String mapper resolves by URI scheme, and a path with no "file://" prefix doesn't
+    // parse as one. Android's Uri.fromFile is what actually gets a real, scheme-qualified URI.
+    imageUrl = DownloadRepository.localCoverFile(context, key, filePath)?.let { android.net.Uri.fromFile(it).toString() }
+        ?: imageUrl?.let(::upgradeThumbnailSize),
     streamUrl = filePath,
     sourceType = sourceType?.let { saved -> runCatching { MusicSource.valueOf(saved) }.getOrNull() },
     sourceId = sourceId,

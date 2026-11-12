@@ -1,0 +1,88 @@
+package com.example.ui.screens
+
+import com.example.ui.utils.MicroIconButton
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Gradient
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.AppSettingsViewModel
+import com.example.BackgroundStyle
+import com.example.ui.component.ListPreference
+import com.example.ui.component.ActionPreference
+import com.example.ui.component.MiniPlayerLivePreview
+import com.example.ui.component.PreferenceGroup
+
+/** The compact player docked above the bottom bar. */
+@Composable
+fun MiniPlayerSettingsScreen(
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val settingsViewModel: AppSettingsViewModel = viewModel()
+    val settings by settingsViewModel.state.collectAsStateWithLifecycle()
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .testTag("mini_player_settings_screen"),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            MicroIconButton(onClick = onBack, modifier = Modifier.testTag("mini_player_back")) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            Text(
+                text = "Mini player",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        Column(
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 200.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            MiniPlayerLivePreview(settings)
+            PreferenceGroup(title = "Mini player") {
+                ListPreference(
+                    title = "Background style",
+                    subtitle = "Artwork colours, blur, glow and Apple-inspired cover effects.",
+                    icon = Icons.Default.Gradient,
+                    selected = settings.miniPlayerBackgroundStyle,
+                    options = BackgroundStyle.entries,
+                    label = { it.label },
+                    onSelect = settingsViewModel::setMiniPlayerBackgroundStyle,
+                )
+                ActionPreference(
+                    title = "Reset mini player",
+                    subtitle = "Restore the default background.",
+                    onClick = settingsViewModel::resetMiniPlayer,
+                )
+            }
+        }
+    }
+}

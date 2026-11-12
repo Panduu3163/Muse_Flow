@@ -28,11 +28,12 @@ class TrackActionsViewModel(application: Application) : AndroidViewModel(applica
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
     val downloadedKeys: StateFlow<Set<String>> =
-        MuseFlowDatabase.getInstance(application).downloadedTrackDao().observeCompleted()
+        downloadRepository.completedDownloads
             .map { entities -> entities.map { it.key }.toSet() }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
     val downloadsInProgress: StateFlow<Map<String, Int>> = downloadRepository.inProgress
+    val downloadFailures = downloadRepository.failures
 
     val playlists: StateFlow<List<PlaylistEntity>> = playlistRepository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -56,21 +57,37 @@ class TrackActionsViewModel(application: Application) : AndroidViewModel(applica
      */
     fun setLiked(tracks: List<Track>, liked: Boolean) {
         viewModelScope.launch {
-            tracks.forEach { track ->
+            val result = runTrackBatch(tracks) { track ->
                 if (liked) likedRepository.like(track) else likedRepository.unlike(track)
             }
+            ActionFeedback.post(result.message(if (liked) "Liked" else "Unliked"))
         }
     }
 
-    fun download(track: Track) = downloadRepository.startDownload(track)
+    fun download(track: Track) {
+        if (!downloadRepository.startDownload(track)) ActionFeedback.post("Download cleanup is still running. Retry when it finishes.")
+    }
 
     /**
      * Queues a download for each of [tracks].
      *
-     * Already-downloaded tracks are the caller's to filter - the repository treats a repeat as a
-     * fresh download, so the bar drops them before calling.
+     * The repository skips completed tracks and deduplicates concurrent requests, so this is safe
+     * for a playlist that is only partly downloaded.
      */
-    fun downloadAll(tracks: List<Track>) = tracks.forEach(downloadRepository::startDownload)
+    fun downloadAll(tracks: List<Track>) {
+        val unique = tracks.distinctBy { it.downloadKey() }
+        val accepted = unique.count(downloadRepository::startDownload)
+        if (accepted > 0) ActionFeedback.post("Requested $accepted downloads. View progress in Library.")
+        if (accepted < unique.size) ActionFeedback.post("Download cleanup is running. ${unique.size - accepted} requests were not started; retry after cleanup.")
+    }
+
+    /** Makes an online playlist a real Library item and downloads all of its tracks. */
+    fun saveAndDownloadPlaylist(name: String, coverImageUrl: String?, tracks: List<Track>, remoteId: String? = null) {
+        viewModelScope.launch {
+            playlistRepository.importOnlinePlaylist(name, coverImageUrl, tracks, remoteId)
+            downloadAll(tracks)
+        }
+    }
 
     fun cancelDownload(track: Track) = downloadRepository.cancelDownload(track)
 
@@ -78,7 +95,10 @@ class TrackActionsViewModel(application: Application) : AndroidViewModel(applica
     fun deleteDownload(track: Track) = deleteDownloads(listOf(track))
 
     fun deleteDownloads(tracks: List<Track>) {
-        viewModelScope.launch { tracks.forEach { downloadRepository.deleteDownload(it) } }
+        viewModelScope.launch {
+            val result = runTrackBatch(tracks) { downloadRepository.deleteDownload(it) }
+            ActionFeedback.post(result.message("Deleted downloads for"))
+        }
     }
 
     fun removeFromPlaylist(playlistId: Long, track: Track) =
@@ -86,22 +106,32 @@ class TrackActionsViewModel(application: Application) : AndroidViewModel(applica
 
     fun removeFromPlaylist(playlistId: Long, tracks: List<Track>) {
         viewModelScope.launch {
-            tracks.forEach { playlistRepository.removeTrack(playlistId, it.downloadKey()) }
+            val result = runTrackBatch(tracks) { playlistRepository.removeTrack(playlistId, it.downloadKey()) }
+            ActionFeedback.post(result.message("Removed"))
         }
     }
 
     fun addToPlaylist(playlistId: Long, track: Track) = addToPlaylist(playlistId, listOf(track))
 
     fun addToPlaylist(playlistId: Long, tracks: List<Track>) {
-        viewModelScope.launch { playlistRepository.addTracks(playlistId, tracks) }
+        viewModelScope.launch {
+            try {
+                playlistRepository.addTracks(playlistId, tracks)
+                ActionFeedback.post("Saved ${tracks.size} ${if (tracks.size == 1) "song" else "songs"} to playlist.")
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { ActionFeedback.post("Couldn't save to playlist. Please try again.") }
+        }
     }
 
     fun createPlaylistWith(name: String, track: Track) = createPlaylistWith(name, listOf(track))
 
     fun createPlaylistWith(name: String, tracks: List<Track>) {
         viewModelScope.launch {
-            val id = playlistRepository.create(name)
-            playlistRepository.addTracks(id, tracks)
+            try {
+                playlistRepository.createWithTracks(name, tracks)
+                ActionFeedback.post("Created playlist with ${tracks.size} ${if (tracks.size == 1) "song" else "songs"}.")
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { ActionFeedback.post("Couldn't create playlist. Please try again.") }
         }
     }
 
@@ -109,7 +139,7 @@ class TrackActionsViewModel(application: Application) : AndroidViewModel(applica
      * under its own name and cover, no naming prompt. Unlike [createPlaylistWith], the name and
      * artwork are already known (they came from the source playlist itself), so there is nothing
      * for the user to decide here. */
-    fun addRemotePlaylistToLibrary(name: String, coverImageUrl: String?, tracks: List<Track>) {
-        viewModelScope.launch { playlistRepository.importOnlinePlaylist(name, coverImageUrl, tracks) }
+    fun addRemotePlaylistToLibrary(name: String, coverImageUrl: String?, tracks: List<Track>, remoteId: String? = null) {
+        viewModelScope.launch { playlistRepository.importOnlinePlaylist(name, coverImageUrl, tracks, remoteId) }
     }
 }

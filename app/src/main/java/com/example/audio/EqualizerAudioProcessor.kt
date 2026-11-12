@@ -87,7 +87,7 @@ class EqualizerAudioProcessor : BaseAudioProcessor() {
         }
     }
 
-    override fun isActive(): Boolean = enabled && sampleRate > 0 && channelCount > 0
+    override fun isActive(): Boolean = super.isActive() && enabled && sampleRate > 0 && channelCount > 0
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         if (needsRebuild) {
@@ -121,7 +121,7 @@ class EqualizerAudioProcessor : BaseAudioProcessor() {
         output.flip()
     }
 
-    override fun onFlush() {
+    override fun onFlush(streamMetadata: androidx.media3.common.audio.AudioProcessor.StreamMetadata) {
         // Seeks and track changes leave stale energy in the delay lines; clearing avoids a click.
         filters.forEach { channel -> channel.forEach(BiquadFilter::reset) }
     }

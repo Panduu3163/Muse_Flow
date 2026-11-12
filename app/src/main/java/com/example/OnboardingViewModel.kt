@@ -16,17 +16,31 @@ import kotlinx.coroutines.launch
 private val Context.onboardingDataStore by preferencesDataStore(name = "onboarding_prefs")
 private val LAST_SEEN_VERSION_CODE = intPreferencesKey("last_seen_version_code")
 
+/** Which first-launch dialog (if either) is due, from comparing the persisted last-seen version
+ * code against [BuildConfig.VERSION_CODE] - a missing value (nothing ever persisted) is a genuine
+ * fresh install, distinct from a real update (something lower than the current code was seen
+ * before). The two used to be treated identically (both just "haven't seen this version yet"),
+ * which meant an update showed the same hobby-project/support-email notice a fresh install needs,
+ * instead of an actual changelog of what changed. */
+enum class OnboardingKind { None, FreshInstall, Updated }
+
 /**
- * Drives [com.example.ui.screens.OnboardingDialog]'s "show once per version" behaviour - the same
- * persisted-last-seen-version-code pattern Echo Music's `WelcomeDialog` uses. A missing value
- * defaults to -1, so a fresh install (nothing ever persisted) shows it exactly like an update to a
- * newer [BuildConfig.VERSION_CODE] does - both are "the user hasn't seen this version's dialog yet."
+ * Drives [com.example.ui.screens.OnboardingDialog] (fresh install) and
+ * [com.example.ui.screens.ChangelogDialog] (update) - the same persisted-last-seen-version-code
+ * pattern Echo Music's own `WelcomeDialog` uses, split into the two cases it actually represents.
  */
 class OnboardingViewModel(application: Application) : AndroidViewModel(application) {
 
-    val shouldShow: StateFlow<Boolean> = application.onboardingDataStore.data
-        .map { prefs -> (prefs[LAST_SEEN_VERSION_CODE] ?: -1) < BuildConfig.VERSION_CODE }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val onboardingKind: StateFlow<OnboardingKind> = application.onboardingDataStore.data
+        .map { prefs ->
+            val lastSeen = prefs[LAST_SEEN_VERSION_CODE] ?: -1
+            when {
+                lastSeen == -1 -> OnboardingKind.FreshInstall
+                lastSeen < BuildConfig.VERSION_CODE -> OnboardingKind.Updated
+                else -> OnboardingKind.None
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), OnboardingKind.None)
 
     fun markSeen() {
         viewModelScope.launch {

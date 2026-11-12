@@ -1,232 +1,298 @@
 package com.example
 
 import android.content.Context
+import androidx.core.net.toUri
+import androidx.room.withTransaction
 import java.io.File
-import java.io.FileOutputStream
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import okhttp3.OkHttpClient
-import okhttp3.Request
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 
-/**
- * Downloads a track's audio to app-private storage (`filesDir/downloads`) for offline playback,
- * and tracks the outcome in Room via [DownloadedTrackDao] - that's the source of truth for
- * "is this downloaded" everywhere in the app (Library's Downloads tab, the Offline mode filter,
- * and [PlayerViewModel]'s decision to play from a local file instead of streaming). Per-byte
- * progress while a download is in flight is kept in memory only ([inProgress]); persisting that
- * to Room on every chunk would be pure churn for a number nothing needs after the download ends.
- *
- * A process-wide singleton (see [getInstance]) rather than a ViewModel-owned instance, since
- * downloads must keep running (and stay visible as "downloading") across whichever screen the
- * user navigates to next.
- */
-class DownloadRepository private constructor(context: Context) {
-
+/** Durable request journal plus the existing app-private, complete-file playback index. */
+class DownloadRepository internal constructor(
+    context: Context,
+    private val db: MuseFlowDatabase = MuseFlowDatabase.getInstance(context.applicationContext),
+    private val transfer: DownloadTransfer = HttpDownloadTransfer(),
+    private val resolver: suspend (Track, Boolean) -> StreamResolution? = { track, fresh -> resolveDownloadStream(context.applicationContext, track, fresh) },
+    private val startService: (Context) -> Unit = DownloadService::start,
+    private val online: (Context) -> Boolean = ::isOnline,
+    private val repositoryScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+) {
     private val appContext = context.applicationContext
-    private val dao = MuseFlowDatabase.getInstance(appContext).downloadedTrackDao()
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
-    private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val dao = db.downloadedTrackDao()
+    private val files = DownloadFiles(appContext)
+    private val journal = DownloadJournal(db, files)
+    private val initializeMutex = Mutex()
+    private var initialized = false
+    private val cleanupMutex = Mutex()
+    private val ownership = Any()
+    private var cleaning = false
     private val activeJobs = ConcurrentHashMap<String, Job>()
-
+    private val activeTracks = ConcurrentHashMap<String, Track>()
+    private val interruptions = ConcurrentHashMap<String, String>()
+    private val downloadSlots = Semaphore(3)
     private val _inProgress = MutableStateFlow<Map<String, Int>>(emptyMap())
-    /** Key -> percent complete (0..100), or -1 if the server didn't report a content length. */
-    val inProgress: StateFlow<Map<String, Int>> = _inProgress
+    val inProgress = _inProgress.asStateFlow()
+    private val transientFailures = MutableStateFlow<Map<String, String>>(emptyMap())
+    val requests: Flow<List<DownloadRequestEntity>> = journal.requests.observeAll()
+    val failures: StateFlow<Map<String, String>> = combine(requests, transientFailures, inProgress) { saved, transient, active ->
+        (saved.filter { it.error != null }.associate { it.key to it.error!! } + transient).filterKeys { it !in active }
+    }.stateIn(repositoryScope, SharingStarted.Eagerly, emptyMap())
 
-    private val _failures = MutableStateFlow<Map<String, String>>(emptyMap())
-    /** Key -> error message for the most recent failed download attempt, so the UI can tell the
-     * user *why* their download vanished instead of it just silently reverting to "not
-     * downloaded". Cleared as soon as that track's download is retried. */
-    val failures: StateFlow<Map<String, String>> = _failures
+    private val completedRequests = requests.map { saved ->
+        saved.filter { it.requestState == DownloadRequestState.COMPLETED }.associateBy { it.key }
+    }.distinctUntilChanged()
+    val completedDownloads: Flow<List<DownloadedTrackEntity>> = combine(dao.observeCompleted(), completedRequests) { entries, states ->
+        entries.filter { entry -> available(entry, states[entry.key]) }
+    }.flowOn(Dispatchers.IO)
 
-    val completedDownloads: Flow<List<DownloadedTrackEntity>> = dao.observeCompleted()
+    private fun available(entry: DownloadedTrackEntity, request: DownloadRequestEntity?): Boolean {
+        val file = File(entry.filePath)
+        return entry.status == DownloadStatus.COMPLETED.name && files.owns(file) && file.isFile && file.length() > 0 &&
+            (request?.requestState != DownloadRequestState.COMPLETED || request.totalBytes == null || file.length() == request.totalBytes)
+    }
 
-    /** One-shot lookup by [Track.downloadKey]/[TrackResult.downloadKey] - null when not
-     * downloaded (or download row exists but hasn't completed). Used to prefer a local file over
-     * streaming when the same track is played again from search/a shelf/a playlist. */
-    suspend fun getByKey(key: String): DownloadedTrackEntity? =
-        dao.getByKey(key)?.takeIf { it.status == DownloadStatus.COMPLETED.name }
+    suspend fun getByKey(key: String): DownloadedTrackEntity? = withContext(Dispatchers.IO) {
+        dao.getByKey(key)?.takeIf { available(it, journal.requests.get(key)) }
+    }
+
+    suspend fun initialize() = initializeMutex.withLock {
+        if (!initialized) { withContext(Dispatchers.IO) { journal.reconcileAtStartup() }; initialized = true }
+    }
 
     fun isDownloading(track: Track): Boolean = activeJobs.containsKey(track.downloadKey())
 
-    fun startDownload(track: Track) {
+    fun startDownload(track: Track): Boolean = synchronized(ownership) {
         val key = track.downloadKey()
-        if (activeJobs.containsKey(key)) return
-        _failures.update { it - key }
-        // Real foreground-service priority for as long as anything's downloading, so the OS
-        // doesn't kill this coroutine mid-transfer once the screen turns off - see DownloadService.
-        DownloadService.start(appContext)
-        activeJobs[key] = repositoryScope.launch {
-            // -1: no percent known yet (server hasn't reported a size, or the request hasn't
-            // opened yet) - both the in-app button and the system notification show an
-            // indeterminate spinner for this, distinct from an actual 0-99% in progress.
-            _inProgress.update { it + (key to -1) }
-            DownloadNotificationHelper.showProgress(appContext, track, percent = null)
-            try {
-                val stream = track.streamUrl?.let { StreamResolution(url = it) }
-                    ?: resolveStreamUrl(track)
-                    ?: error("No playable stream found for \"${track.title}\"")
-                val targetFile = File(downloadsDir(appContext), "$key.audio")
-                val contentType = downloadToFile(stream.url, targetFile, stream.userAgent) { percent ->
-                    _inProgress.update { it + (key to percent) }
-                    DownloadNotificationHelper.showProgress(appContext, track, percent)
-                }
-                // Best-effort, never blocks/fails the download itself - see AudioTagger's doc.
-                runCatching {
-                    val coverArtBytes = track.imageUrl?.let { fetchBytes(it) }
-                    AudioTagger.embedIfSupported(targetFile, contentType, track, coverArtBytes)
-                }
-                dao.upsert(
-                    DownloadedTrackEntity(
-                        key = key,
-                        title = track.title,
-                        artist = track.artist,
-                        album = track.album,
-                        duration = track.duration,
-                        gradientIndex = track.gradientIndex,
-                        imageUrl = track.imageUrl,
-                        filePath = targetFile.absolutePath,
-                        status = DownloadStatus.COMPLETED.name,
-                        updatedAt = System.currentTimeMillis(),
-                        sourceId = track.sourceId,
-                        sourceType = track.sourceType?.name,
-                        albumId = track.albumId,
-                        artistId = track.artistId,
-                    )
-                )
-                DownloadNotificationHelper.showCompleted(appContext, track)
-            } catch (e: CancellationException) {
-                // A user-initiated cancel (see cancelDownload) - not a failure, just clean up
-                // the partial file below and let the cancellation propagate as normal.
-                File(downloadsDir(appContext), "$key.audio").delete()
-                DownloadNotificationHelper.clear(appContext, key)
-                throw e
-            } catch (e: Exception) {
-                // Don't leave a stale/broken row around - a partial file is useless, and the user
-                // can just tap download again.
-                File(downloadsDir(appContext), "$key.audio").delete()
-                _failures.update { it + (key to (e.message ?: "Download failed")) }
-                DownloadNotificationHelper.clear(appContext, key)
-            } finally {
-                _inProgress.update { it - key }
-                activeJobs.remove(key)
+        if (cleaning) return@synchronized false
+        if (activeJobs.containsKey(key)) return@synchronized true
+        transientFailures.update { it - key }
+        val job = repositoryScope.launch(start = CoroutineStart.LAZY) { runDownload(track) }
+        activeJobs[key] = job
+        job.invokeOnCompletion {
+            synchronized(ownership) {
+                if (activeJobs.remove(key, job)) interruptions.remove(key)
             }
         }
+        job.start()
+        true
     }
 
-    fun cancelDownload(track: Track) {
-        activeJobs.remove(track.downloadKey())?.cancel()
+    private fun refreshNotification() {
+        val active = _inProgress.value.mapNotNull { (key, percent) -> activeTracks[key]?.let { key to (it to percent) } }.toMap()
+        runCatching { DownloadNotificationHelper.updateProgress(appContext, active) }
     }
 
-    suspend fun deleteDownload(track: Track) {
+    private suspend fun runDownload(track: Track) {
         val key = track.downloadKey()
-        cancelDownload(track)
-        dao.getByKey(key)?.let { File(it.filePath).delete() }
-        dao.deleteByKey(key)
-    }
-
-    /** The single download-resolution path, used by every caller of [startDownload] regardless of
-     * which screen triggered it (Search, an Album/Playlist/Artist tracklist, Now Playing, or a
-     * re-download from the Downloads list) - mirrors the exact priority `Track.toQueueMediaItem`
-     * (in PlayerViewModel.kt) already uses to resolve the very same track for *playback*, so a
-     * download never resolves a different recording than what the user actually sees/hears:
-     *
-     * 1. A known [Track.sourceId] on a [MusicSource.YOUTUBE_MUSIC] track resolves directly via
-     *    [YouTubeStreamResolver] - the exact video the track identifies, not a guess.
-     * 2. Otherwise (a mock-catalog track with no known source - the only remaining case, since
-     *    [Track.streamUrl] is already checked by the caller before this is ever called), fall back
-     *    to a fuzzy title+artist text search - JioSaavn first, then YouTube Music if JioSaavn
-     *    comes back empty or throws, same resilience pattern Search/Home use.
-     *
-     * A YouTube-resolved URL is short-lived (see [YouTubeStreamResolver] - it 403s within
-     * minutes), but that's fine here: it's read once, immediately, straight into a local file by
-     * [downloadToFile] below, never stored or reused.
-     */
-    private suspend fun resolveStreamUrl(track: Track): StreamResolution? {
-        val sourceId = track.sourceId
-        if (track.sourceType == MusicSource.YOUTUBE_MUSIC && sourceId != null) {
-            return runCatching { StreamResolverRouter.resolve(appContext, sourceId) }.getOrNull()
-        }
-
-        val query = "${track.title} ${track.artist}"
-        return runCatching {
-            val match = YouTubeMusicProvider(appContext).search(query).firstOrNull()
-            match?.let { StreamResolverRouter.resolve(appContext, it.id) }
-        }.getOrNull()
-    }
-
-    /** Returns the response's `Content-Type` header (e.g. `"audio/mp4"`), so the caller can decide
-     * whether [AudioTagger] supports this download's actual container - see
-     * [audioTagFileExtensionFor]. */
-    private fun downloadToFile(
-        url: String,
-        targetFile: File,
-        userAgent: String? = null,
-        onProgress: (Int) -> Unit,
-    ): String? {
-        // Same 403 rule as playback: YouTube ties a resolved URL to the User-Agent that resolved
-        // it, so the download request has to carry the same one.
-        val request = Request.Builder().url(url)
-            .apply { userAgent?.let { header("User-Agent", it) } }
-            .build()
-        httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error("Download failed: HTTP ${response.code}")
-            val body = response.body ?: error("Empty download response")
-            val contentLength = body.contentLength()
-            targetFile.parentFile?.mkdirs()
-            body.byteStream().use { input ->
-                FileOutputStream(targetFile).use { output ->
-                    val buffer = ByteArray(8 * 1024)
-                    var totalRead = 0L
-                    var lastReportedPercent = -1
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read == -1) break
-                        output.write(buffer, 0, read)
-                        totalRead += read
-                        if (contentLength > 0) {
-                            val percent = ((totalRead * 100) / contentLength).toInt()
-                            if (percent != lastReportedPercent) {
-                                lastReportedPercent = percent
-                                onProgress(percent)
-                            }
+        var request: DownloadRequestEntity? = null
+        var acquired = false
+        var promoted = false
+        var committed = false
+        try {
+            initialize()
+            getByKey(key)?.let { journal.keepExistingCompleted(it); return }
+            // A DB failure after promotion may leave a locally recoverable verification record.
+            journal.requests.get(key)?.takeIf { it.requestState == DownloadRequestState.VERIFYING }?.let { pending ->
+                if (journal.finishVerification(pending)) return
+                journal.save(pending.copy(state = DownloadRequestState.INTERRUPTED.name, error = "Retry the interrupted download."))
+            }
+            var current = journal.enqueue(track)
+            request = current
+            suspend fun checkpoint(updated: DownloadRequestEntity) {
+                current = updated
+                request = updated
+                journal.save(updated)
+            }
+            // A remembered online recording may still carry its removed download's file URI.
+            // Re-resolve its exact recording ID, while genuine device-only files stay local.
+            val localAddress = track.streamUrl?.let { it.startsWith("content:") || it.startsWith("file:") } == true
+            val remoteRecording = track.sourceId?.looksLikeYouTubeVideoId() == true
+            if (track.sourceType == MusicSource.LOCAL_DEVICE || (localAddress && !remoteRecording))
+                throw DownloadTransferFailure("This song is already on your device. Use its local file for playback.")
+            activeTracks[key] = track
+            _inProgress.update { it + (key to -1) }
+            startService(appContext)
+            refreshNotification()
+            downloadSlots.acquire(); acquired = true
+            var result: DownloadTransferResult? = null
+            for (retry in 0..1) {
+                try {
+                    if (!online(appContext)) throw DownloadTransferFailure("You are offline. Connect, then retry the download.")
+                    checkpoint(current.copy(state = DownloadRequestState.RESOLVING.name, error = null))
+                    val stream = resolver(track, retry > 0 || current.attempt > 1)
+                        ?: throw DownloadTransferFailure("No playable stream was found for this recording. Retry later.")
+                    currentCoroutineContext().ensureActive()
+                    checkpoint(current.copy(state = DownloadRequestState.DOWNLOADING.name, downloadedBytes = 0, totalBytes = null))
+                    result = transfer.fetch(stream, files.file(key, "part")) { bytes, total ->
+                        checkpoint(current.copy(downloadedBytes = bytes, totalBytes = total))
+                        _inProgress.update { it + (key to if (total != null && total > 0) (bytes.toDouble() / total * 100).toInt().coerceIn(0, 100) else -1) }
+                        refreshNotification()
+                    }
+                    break
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) {
+                    val retryable = (error as? DownloadTransferFailure)?.retryable ?: (error is IOException &&
+                        error.message?.contains("ENOSPC", ignoreCase = true) != true)
+                    if (retry == 1 || !retryable) throw error
+                    files.deletePartial(key)
+                    checkpoint(current.copy(state = DownloadRequestState.QUEUED.name, downloadedBytes = 0, totalBytes = null,
+                        attempt = (current.attempt.toLong() + 1).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), error = "Transfer interrupted. Retrying once."))
+                    _inProgress.update { it + (key to -1) }
+                    delay(1_000)
+                }
+            }
+            check(result != null)
+            val cover = track.imageUrl?.let { transfer.artwork(upgradeThumbnailUrl(it)) }
+            runCatching { AudioTagger.embedIfSupported(files.file(key, "part"), result.contentType, track, cover) }
+            currentCoroutineContext().ensureActive()
+            current = journal.prepareVerification(current)
+            request = current
+            currentCoroutineContext().ensureActive()
+            val target = files.file(key, "audio")
+            if (target.exists() || !files.file(key, "part").renameTo(target))
+                throw DownloadTransferFailure("Could not save the audio. Remove the unfinished download in Storage, then retry.")
+            promoted = true
+            // Promotion is the commit boundary. Late cancellation cannot undo an already-saved file.
+            withContext(NonCancellable) { journal.commit(current); committed = true }
+            if (cover != null) runCatching { writeCover(key, cover) }
+        } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) {
+                if (!committed) {
+                    val reason = interruptions[key]
+                    request?.let { saved ->
+                        runCatching {
+                            if (!promoted) files.deletePartial(key)
+                            journal.save(saved.copy(state = if (promoted) DownloadRequestState.VERIFYING.name else
+                                if (reason != null) DownloadRequestState.INTERRUPTED.name else DownloadRequestState.CANCELLED.name,
+                                downloadedBytes = if (promoted) saved.downloadedBytes else 0,
+                                totalBytes = if (promoted) saved.totalBytes else null, sha256 = if (promoted) saved.sha256 else null,
+                                error = if (promoted) "Audio is saved; retry to finish local recovery." else reason ?: "Download cancelled. Retry when you want to download it."))
                         }
                     }
                 }
             }
-            return response.header("Content-Type")
+            throw cancelled
+        } catch (error: Exception) {
+            val message = if (promoted) "Audio is saved; retry to finish local recovery." else
+                (error as? DownloadTransferFailure)?.message ?: "Download failed. Check your connection and free storage, then retry."
+            transientFailures.update { it + (key to message) }
+            request?.let { saved -> runCatching {
+                if (!promoted) files.deletePartial(key)
+                journal.save(saved.copy(state = if (promoted) DownloadRequestState.VERIFYING.name else DownloadRequestState.FAILED.name,
+                    downloadedBytes = if (promoted) saved.downloadedBytes else 0, totalBytes = if (promoted) saved.totalBytes else null,
+                    sha256 = if (promoted) saved.sha256 else null, error = message))
+            } }
+        } finally {
+            if (acquired) downloadSlots.release()
+            _inProgress.update { it - key }
+            activeTracks.remove(key)
+            interruptions.remove(key)
+            synchronized(ownership) { activeJobs.remove(key) }
+            refreshNotification()
         }
     }
 
-    /** Small best-effort fetch for cover art bytes to embed via [AudioTagger] - failures return
-     * null (caller already wraps this in [runCatching] regardless). */
-    private fun fetchBytes(url: String): ByteArray? {
-        val request = Request.Builder().url(url).build()
-        return httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) null else response.body?.bytes()
+    fun cancelDownload(track: Track) {
+        val key = track.downloadKey()
+        activeJobs[key]?.let { job ->
+            _inProgress.update { if (key in it) it + (key to -2) else it }
+            job.cancel()
         }
     }
+
+    /** Stop immediately for a service timeout/destruction. Old active rows also recover on restart. */
+    fun interruptAll(reason: String) = synchronized(ownership) {
+        activeJobs.forEach { (key, job) -> interruptions.putIfAbsent(key, reason); job.cancel() }
+    }
+
+    suspend fun deleteDownload(track: Track) = cleanupMutex.withLock {
+        withContext(NonCancellable + Dispatchers.IO) {
+            val key = track.downloadKey()
+            synchronized(ownership) { cleaning = true }
+            try {
+                activeJobs[key]?.let { it.cancelAndJoin() }
+                initialize()
+                dao.getByKey(key)?.let { entry ->
+                    localCoverFile(appContext, key, entry.filePath)?.let(files::delete)
+                    val audio = File(entry.filePath)
+                    if (files.owns(audio)) files.delete(audio)
+                }
+                files.deletePartial(key)
+                listOf("audio", "cover").forEach { files.delete(files.file(key, it)) }
+                db.withTransaction { dao.deleteByKey(key); journal.requests.delete(key) }
+                transientFailures.update { it - key }
+            } finally { synchronized(ownership) { cleaning = false } }
+        }
+    }
+
+    suspend fun deleteAllDownloads() = cleanupMutex.withLock {
+        withContext(NonCancellable + Dispatchers.IO) {
+            val jobs = synchronized(ownership) { cleaning = true; activeJobs.values.toList() }
+            try {
+                jobs.forEach { it.cancel() }; jobs.forEach { it.join() }
+                initialize()
+                files.directory.walkBottomUp().filter { it != files.directory }.forEach(files::delete)
+                db.withTransaction { dao.clearAll(); journal.requests.clear() }
+                transientFailures.value = emptyMap()
+            } finally { synchronized(ownership) { cleaning = false } }
+        }
+    }
+
+    suspend fun backfillMissingCovers() {
+        initialize()
+        if (!online(appContext)) return
+        for (entry in completedDownloads.first()) {
+            currentCoroutineContext().ensureActive()
+            if (localCoverFile(appContext, entry.key, entry.filePath) != null) continue
+            if (getByKey(entry.key) == null) continue
+            val url = entry.imageUrl ?: continue
+            transfer.artwork(upgradeThumbnailUrl(url))?.let { bytes ->
+                cleanupMutex.withLock {
+                    if (getByKey(entry.key) != null) runCatching { writeCover(entry.key, bytes) }
+                }
+            }
+        }
+    }
+
+    private fun writeCover(key: String, bytes: ByteArray) {
+        files.directory.mkdirs()
+        writeAtomicFile(files.file(key, "cover"), bytes)
+    }
+
+    private fun upgradeThumbnailUrl(raw: String) = raw.replace(Regex("=w\\d+-h\\d+.*$"), "=w544-h544-l90-rj")
 
     companion object {
-        fun downloadsDir(context: Context): File = File(context.filesDir, "downloads")
-
-        @Volatile private var instance: DownloadRepository? = null
-
-        fun getInstance(context: Context): DownloadRepository =
-            instance ?: synchronized(this) {
-                instance ?: DownloadRepository(context.applicationContext).also { instance = it }
+        fun downloadsDir(context: Context): File = DownloadFiles(context).directory
+        fun localCoverFile(context: Context, key: String, audioFilePath: String? = null): File? {
+            val paths = DownloadFiles(context)
+            val sibling = audioFilePath?.let { raw ->
+                val path = if (raw.startsWith("file:")) raw.toUri().path else raw
+                path?.let { File(it).let { audio -> File(audio.parentFile, audio.nameWithoutExtension + ".cover") } }
             }
+            return sequenceOf(paths.file(key, "cover"), sibling, File(paths.directory, "$key.cover"))
+                .filterNotNull().firstOrNull { it.isFile && it.length() > 0 && paths.owns(it) }
+        }
+        @Volatile private var instance: DownloadRepository? = null
+        fun getInstance(context: Context): DownloadRepository = instance ?: synchronized(this) {
+            instance ?: DownloadRepository(context.applicationContext).also { instance = it }
+        }
     }
+}
+
+private suspend fun resolveDownloadStream(context: Context, track: Track, fresh: Boolean): StreamResolution? {
+    val source = track.sourceId
+    if (source != null && (track.sourceType == MusicSource.YOUTUBE_MUSIC || source.looksLikeYouTubeVideoId())) {
+        if (fresh) StreamResolverRouter.invalidate(source)
+        return StreamResolverRouter.resolve(context, source, qualityOverride = AudioQualityMode.BestAvailable)
+    }
+    if (track.sourceType == MusicSource.LOCAL_DEVICE) return null
+    track.streamUrl?.takeIf { it.startsWith("https://") || it.startsWith("http://") }?.let { return StreamResolution(it) }
+    val match = MusicSearchRouter(context).searchTracks("${track.title} ${track.artist}").firstOrNull() ?: return null
+    if (fresh) StreamResolverRouter.invalidate(match.id)
+    return StreamResolverRouter.resolve(context, match.id, qualityOverride = AudioQualityMode.BestAvailable)
 }

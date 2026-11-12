@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.utils.MicroIconButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -12,17 +13,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,8 +38,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -44,8 +51,8 @@ import com.example.TrackActionsViewModel
 import com.example.TrackResult
 import com.example.UiState
 import com.example.loadAsUiState
+import com.example.ui.component.MediaGridCard
 import com.example.ui.component.TrackActionsHost
-import com.example.ui.component.TrackRow
 
 /**
  * YouTube Music's real charts feed - trending, then top songs, flattened to one list (see
@@ -53,25 +60,39 @@ import com.example.ui.component.TrackRow
  * split into shelves). Same read-only, no-local-cache shape as [ArtistScreen]/[AlbumScreen]: this
  * always hits the network, since a charts feed is the one kind of list where a stale cached copy
  * would be actively misleading.
+ *
+ * Grid-of-covers layout (adapted from Library's playlist grid, [com.example.ui.component.MediaGridCard])
+ * rather than a plain scrolling row list - a charts feed is a "browse the covers" experience, not
+ * a queue you scan text in.
  */
 @Composable
 fun ChartsScreen(
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit,
     playerViewModel: PlayerViewModel,
     onBack: () -> Unit,
+    modifier: Modifier = Modifier,
     onGoToArtist: (String) -> Unit = {},
     onGoToAlbum: (String) -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val router = remember { MusicSearchRouter(context) }
     val actionsViewModel: TrackActionsViewModel = viewModel()
     var selectedTrack by remember { mutableStateOf<TrackResult?>(null) }
-    var state by remember { mutableStateOf<UiState<List<TrackResult>>>(UiState.Loading) }
+    var state by remember { mutableStateOf<UiState<List<TrackResult>>>(
+        com.example.DiscoveryPageCache.get("charts")?.let { UiState.Success(it) } ?: UiState.Loading) }
+    var retryAttempt by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    var refreshError by remember { mutableStateOf<String?>(null) }
+    val gridState = com.example.rememberRestoredLazyGridState("charts", state is UiState.Success)
 
-    LaunchedEffect(Unit) {
-        state = UiState.Loading
-        state = loadAsUiState("Couldn't load charts.") { router.getChartsTracks() }
+    LaunchedEffect(retryAttempt) {
+        refreshError = null
+        if (state !is UiState.Success) state = UiState.Loading
+        val fresh = loadAsUiState("Couldn't load charts.") { router.getChartsTracks() }
+        if (fresh is UiState.Success) {
+            com.example.DiscoveryPageCache.put("charts", fresh.data)
+            state = fresh
+        } else if (state !is UiState.Success) state = fresh
+        else if (fresh is UiState.Error) refreshError = "Showing saved results. " + fresh.message
     }
 
     Column(
@@ -80,19 +101,15 @@ fun ChartsScreen(
             .statusBarsPadding()
             .testTag("charts_screen"),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack, modifier = Modifier.testTag("charts_back")) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+            MicroIconButton(onClick = onBack, modifier = Modifier.testTag("charts_back")) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
                     tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
-            Text(
-                text = "Charts",
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
+            Text("Musechart", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
         }
 
         when (val current = state) {
@@ -104,12 +121,7 @@ fun ChartsScreen(
                 modifier = Modifier.fillMaxSize().padding(32.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = current.message,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
+                com.example.ui.component.FeedbackMessage(current.message, isError = true, onRetry = { retryAttempt++ })
             }
 
             is UiState.Success -> {
@@ -127,36 +139,49 @@ fun ChartsScreen(
                         )
                     }
                 } else {
-                    Row(
-                        modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 4.dp),
+                    LazyVerticalGrid(
+                        state = gridState,
+                        columns = GridCells.Adaptive(if (androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.3f) 180.dp else 156.dp),
+                        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 200.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier.fillMaxWidth().weight(1f),
                     ) {
-                        PlayButton(
-                            icon = Icons.Default.PlayArrow,
-                            label = "Play",
-                            testTag = "charts_play_all",
-                            onClick = { tracks.firstOrNull()?.let { onPlayTrack(it, tracks) } },
-                        )
-                        PlayButton(
-                            icon = Icons.Default.Shuffle,
-                            label = "Shuffle",
-                            testTag = "charts_shuffle",
-                            onClick = {
-                                val shuffled = tracks.shuffled()
-                                shuffled.firstOrNull()?.let { onPlayTrack(it, shuffled) }
-                            },
-                        )
-                    }
-
-                    LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 140.dp)) {
-                        itemsIndexed(tracks, key = { index, _ -> index }) { _, track ->
-                            TrackRow(
+                        if (refreshError != null) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                            com.example.ui.component.FeedbackMessage(refreshError!!, onRetry = { retryAttempt++ })
+                        }
+                        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                            ChartsHero(trackCount = tracks.size)
+                        }
+                        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                            Row(
+                                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                PlayButton(
+                                    icon = Icons.Default.PlayArrow,
+                                    label = "Play",
+                                    testTag = "charts_play_all",
+                                    onClick = { tracks.firstOrNull()?.let { onPlayTrack(it, tracks) } },
+                                )
+                                PlayButton(
+                                    icon = Icons.Default.Shuffle,
+                                    label = "Shuffle",
+                                    testTag = "charts_shuffle",
+                                    onClick = {
+                                        val shuffled = tracks.shuffled()
+                                        shuffled.firstOrNull()?.let { onPlayTrack(it, shuffled) }
+                                    },
+                                )
+                            }
+                        }
+                        items(tracks, key = { it.id }) { track ->
+                            MediaGridCard(
                                 title = track.title,
-                                artist = track.artist,
+                                subtitle = track.artist,
                                 imageUrl = track.imageUrl,
-                                duration = track.duration,
+                                placeholder = Icons.Default.MusicNote,
                                 onClick = { onPlayTrack(track, tracks) },
-                                onOpenMenu = { selectedTrack = track },
                             )
                         }
                     }
@@ -173,6 +198,53 @@ fun ChartsScreen(
         onGoToArtist = onGoToArtist,
         onGoToAlbum = onGoToAlbum,
     )
+}
+
+/** A large, coloured hero card up top - matching the "big card with an icon badge" treatment
+ * Explore/Stats already use elsewhere in the app - rather than a bare text title, so a charts
+ * feed reads as a designed destination instead of a plain list screen. */
+@Composable
+private fun ChartsHero(trackCount: Int) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp, bottom = 8.dp),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.TrendingUp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(26.dp),
+                )
+            }
+            Column(modifier = Modifier.padding(start = 16.dp)) {
+                Text(
+                    text = "Charts",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                )
+                Text(
+                    text = "$trackCount trending tracks right now",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.85f),
+                )
+            }
+        }
+    }
 }
 
 @Composable

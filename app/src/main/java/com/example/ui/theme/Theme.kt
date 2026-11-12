@@ -1,11 +1,8 @@
 package com.example.ui.theme
 
 import android.graphics.Bitmap
-import android.os.Build
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
@@ -13,12 +10,12 @@ import androidx.compose.runtime.saveable.SaverScope
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.palette.graphics.Palette
 import com.materialkolor.PaletteStyle
 import com.materialkolor.dynamiccolor.ColorSpec
 import com.materialkolor.rememberDynamicColorScheme
 import com.materialkolor.score.Score
+import com.example.AppFontStyle
 
 /*
  * Seed-based theming, adapted from Echo-Music (GPL-3.0)
@@ -39,25 +36,17 @@ val DefaultThemeColor = Color(0xFF7C5CFF)
  * @param darkTheme dark colours (MuseFlow is dark-first, so this defaults to true).
  * @param pureBlack collapses surface/background to true black for AMOLED screens.
  * @param themeColor the seed colour the whole scheme is generated from. When it's left at
- *   [DefaultThemeColor] on Android 12+, the system wallpaper palette is used instead, so the app
- *   matches the device theme unless the user has deliberately picked their own accent.
+ *   [DefaultThemeColor] uses MuseFlow's default hue; album-art mode supplies a different seed.
  */
 @Composable
 fun MuseFlowTheme(
     darkTheme: Boolean = true,
     pureBlack: Boolean = false,
     themeColor: Color = DefaultThemeColor,
+    fontStyle: AppFontStyle = AppFontStyle.System,
     content: @Composable () -> Unit,
 ) {
-    val context = LocalContext.current
-
-    val useSystemDynamicColor =
-        themeColor == DefaultThemeColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-
-    val baseColorScheme = if (useSystemDynamicColor) {
-        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-    } else {
-        rememberDynamicColorScheme(
+    val baseColorScheme = rememberDynamicColorScheme(
             seedColor = themeColor,
             isDark = darkTheme,
             specVersion = ColorSpec.SpecVersion.SPEC_2025,
@@ -70,7 +59,6 @@ fun MuseFlowTheme(
             // as more muted/grey, matching what the square is for.
             style = PaletteStyle.Fidelity
         )
-    }
 
     val colorScheme = remember(baseColorScheme, pureBlack, darkTheme) {
         if (darkTheme && pureBlack) baseColorScheme.pureBlack(true) else baseColorScheme
@@ -78,7 +66,7 @@ fun MuseFlowTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = Typography,
+        typography = remember(fontStyle) { museFlowTypography(fontStyle) },
         content = content
     )
 }

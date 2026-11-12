@@ -265,7 +265,7 @@ class PoTokenWebView private constructor(
 
             val body = withContext(Dispatchers.IO) {
                 httpClient.newCall(request).execute().use { response ->
-                    if (response.code != 200) null else response.body?.string()
+                    if (response.code != 200) null else response.body.string()
                 }
             }
             if (body.isNullOrEmpty()) {
@@ -343,7 +343,8 @@ class PoTokenWebView private constructor(
                 withTimeout(INIT_TIMEOUT_MS) {
                     withContext(Dispatchers.Main) {
                         suspendCancellableCoroutine { cont ->
-                            val instance = PoTokenWebView(context, cont)
+                            val instance = PoTokenWebView(context.applicationContext, cont)
+                            cont.invokeOnCancellation { instance.close() }
                             created = instance
                             instance.loadHtmlAndStartChallenge()
                         }

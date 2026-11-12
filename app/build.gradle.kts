@@ -17,20 +17,13 @@ android {
     applicationId = "com.aistudio.museflow.kqfzyw"
     minSdk = 24
     targetSdk = 37
-    versionCode = 13
-    versionName = "1.1.2"
+    versionCode = 62
+    versionName = "1.8.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
   signingConfigs {
-    create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
-    }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
       storePassword = "android"
@@ -42,13 +35,22 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
+      isDebuggable = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("release")
+      // Existing sideloaded MuseFlow installs use this certificate. A new upload key would
+      // prevent an in-place update and discard access to their saved local data.
+      signingConfig = signingConfigs.getByName("debugConfig")
     }
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
     create("beta") {
       initWith(getByName("debug"))
+      // Keep beta performance and resource shrinking aligned with the release build.
+      isMinifyEnabled = true
+      isShrinkResources = true
+      isDebuggable = false
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Separate applicationId so this installs alongside any existing debug/release MuseFlow
       // build as its own app icon, rather than overwriting it.
       applicationIdSuffix = ".beta"
@@ -56,18 +58,27 @@ android {
       matchingFallbacks += listOf("debug")
       signingConfig = signingConfigs.getByName("debugConfig")
     }
+    create("verification") {
+      initWith(getByName("beta"))
+      applicationIdSuffix = ".verification"
+      versionNameSuffix = "-verification"
+      matchingFallbacks += listOf("debug")
+    }
   }
   compileOptions {
     // Required by :innertube, which uses java.time and other API 26+ library types while this
     // app still supports minSdk 24.
     isCoreLibraryDesugaringEnabled = true
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
   }
   buildFeatures {
     compose = true
     buildConfig = true
   }
+  // Android resolves streams through native WebViews/Rhino APIs, not desktop JSR-223.
+  // Keep the Rhino interpreter; exclude only its unsupported JVM service-registration resource.
+  packaging.resources.excludes += "META-INF/services/javax.script.ScriptEngineFactory"
   testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 
@@ -81,10 +92,16 @@ secrets {
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
 
 // Robolectric's Android SDK 36 sandbox requires Java 21, but the rest of this build
-// (AGP/Kotlin toolchain, gradle.properties org.gradle.java.home) stays on Java 17.
+// runs on the same installed JDK 21. Android source and bytecode target Java 17.
 // Point just the unit-test JVM at a toolchain-provisioned JDK 21 instead of the daemon JVM.
 tasks.withType<Test>().configureEach {
   javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+  // Robolectric 4.17's Android shared-memory bridge calls this JDK-internal descriptor API.
+  // Export is confined to the desktop test JVM; it changes no Android app permissions.
+  jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
+  // Robolectric's Android jar URL handling on Windows can misread spaces in the user profile.
+  // A short-path override affects only the test JVM; normal builds and app storage are unchanged.
+  System.getenv("MUSEFLOW_TEST_HOME")?.let { systemProperty("user.home", it) }
 }
 
 // Some unused dependencies are commented out below instead of being removed.
@@ -103,6 +120,8 @@ dependencies {
   implementation(libs.androidx.compose.material3)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)
+  implementation(libs.haze.core)
+  implementation(libs.haze.blur)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.datastore.preferences)
@@ -117,6 +136,8 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
+  implementation(libs.coil.network)
+  implementation(libs.coil.cache.control)
   implementation(libs.androidx.palette.ktx)
   implementation(libs.material.kolor)
   implementation(project(":innertube"))

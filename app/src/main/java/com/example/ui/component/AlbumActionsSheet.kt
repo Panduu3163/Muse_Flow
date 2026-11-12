@@ -1,7 +1,7 @@
 package com.example.ui.component
 
+import com.example.ui.utils.feedbackClickable
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,7 +38,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 
 /**
  * Long-press/overflow actions for an album - the menu the audit's "album menu: entirely missing"
@@ -68,6 +68,10 @@ fun AlbumActionsSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(
+            topStart = com.example.ui.theme.MuseFlowShapes.sheet,
+            topEnd = com.example.ui.theme.MuseFlowShapes.sheet,
+        ),
     ) {
         Column(
             modifier = Modifier
@@ -202,7 +206,7 @@ private fun AlbumActionPill(icon: ImageVector, label: String, onClick: () -> Uni
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.primaryContainer)
-            .clickable(onClick = onClick)
+            .feedbackClickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 10.dp)
             .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically,
@@ -233,7 +237,7 @@ private fun AlbumSheetAction(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .feedbackClickable(onClick = onClick)
             .padding(horizontal = 24.dp, vertical = 14.dp)
             .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically,

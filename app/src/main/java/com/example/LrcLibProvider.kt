@@ -5,8 +5,6 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -18,7 +16,18 @@ data class LyricWord(val startMs: Long, val endMs: Long, val text: String)
 /** A single synced lyric line, in playback order, ready to be time-matched against position.
  * [words], when present, lets [NowPlayingScreen]'s lyrics view highlight word-by-word instead of
  * just line-by-line - null for sources with only line-level timing (e.g. LRCLib's LRC format). */
-data class LyricLine(val timeMs: Long, val text: String, val words: List<LyricWord>? = null)
+data class LyricLine(
+    val timeMs: Long,
+    val text: String,
+    val words: List<LyricWord>? = null,
+    val endMs: Long? = null,
+    val sourceKey: String? = null,
+    val agent: String? = null,
+    val language: String? = null,
+    val translation: String? = null,
+    val romanization: String? = null,
+    val backgroundText: String? = null,
+)
 
 sealed interface LyricsResult {
     data class Synced(val lines: List<LyricLine>) : LyricsResult
@@ -56,43 +65,39 @@ class LrcLibProvider {
         withContext(Dispatchers.IO) {
             try {
                 getExact(title, artist, durationSeconds)
-                    ?: searchFallback(title, artist)
+                    ?: searchFallback(title, artist, durationSeconds)
                     ?: LyricsResult.NotFound
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 LyricsResult.Error(e.message ?: "Unknown error")
             }
         }
 
-    private fun getExact(title: String, artist: String, durationSeconds: Int?): LyricsResult? {
+    private suspend fun getExact(title: String, artist: String, durationSeconds: Int?): LyricsResult? {
         val url = buildString {
-            append("${Api.BASE_URL}/get")
-            append("?track_name=${encode(title)}")
-            append("&artist_name=${encode(artist)}")
+            append("${Api.BASE_URL}/get?track_name=${encode(title)}&artist_name=${encode(artist)}")
             if (durationSeconds != null && durationSeconds > 0) append("&duration=$durationSeconds")
         }
-        val response = execute(url) ?: return null
-        response.use {
-            if (!it.isSuccessful) return null
-            val body = it.body?.string() ?: return null
-            return parseTrackObject(JSONObject(body))
-        }
+        val track = httpClient.fetchLyricsJson(url) ?: return null
+        return if (matchScore(track, title, artist, durationSeconds) != null) parseTrackObject(track) else null
     }
 
-    private fun searchFallback(title: String, artist: String): LyricsResult? {
+    private suspend fun searchFallback(title: String, artist: String, durationSeconds: Int?): LyricsResult? {
         val url = "${Api.BASE_URL}/search?track_name=${encode(title)}&artist_name=${encode(artist)}"
-        val response = execute(url) ?: return null
-        response.use {
-            if (!it.isSuccessful) return null
-            val body = it.body?.string() ?: return null
-            val candidates = JSONArray(body)
-            val parsed = (0 until candidates.length()).mapNotNull { i ->
-                candidates.optJSONObject(i)?.let(::parseTrackObject)
-            }
-            return parsed.firstOrNull { it is LyricsResult.Synced }
-                ?: parsed.firstOrNull { it is LyricsResult.Instrumental }
-                ?: parsed.firstOrNull { it is LyricsResult.PlainOnly }
-        }
+        val candidates = JSONArray(httpClient.fetchLyricsBody(url) ?: return null)
+        return (0 until candidates.length()).mapNotNull { index ->
+            val track = candidates.optJSONObject(index) ?: return@mapNotNull null
+            val score = matchScore(track, title, artist, durationSeconds) ?: return@mapNotNull null
+            val result = parseTrackObject(track)
+            if (lyricResultRank(result) > 0) Triple(score, lyricResultRank(result), result) else null
+        }.sortedWith(compareByDescending<Triple<Double, Int, LyricsResult>> { it.first }.thenByDescending { it.second })
+            .firstOrNull()?.third
     }
+
+    private fun matchScore(track: JSONObject, title: String, artist: String, durationSeconds: Int?): Double? =
+        lyricsRecordingMatchScore(title, artist, durationSeconds, track.optString("trackName"),
+            track.optString("artistName"), track.optDouble("duration", -1.0).takeIf { it > 0 }?.toInt())
 
     private fun parseTrackObject(track: JSONObject): LyricsResult {
         if (track.optBoolean("instrumental")) return LyricsResult.Instrumental
@@ -103,15 +108,6 @@ class LrcLibProvider {
             return LyricsResult.PlainOnly(it)
         }
         return LyricsResult.NotFound
-    }
-
-    private fun execute(url: String): Response? {
-        val request = Request.Builder().url(url).header("User-Agent", Api.USER_AGENT).build()
-        return try {
-            httpClient.newCall(request).execute()
-        } catch (e: Exception) {
-            null
-        }
     }
 
     private fun encode(value: String) = URLEncoder.encode(value, "UTF-8")

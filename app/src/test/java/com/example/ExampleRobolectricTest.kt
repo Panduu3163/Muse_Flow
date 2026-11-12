@@ -16,6 +16,7 @@ class ExampleRobolectricTest {
   fun `read string from context`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("MuseFlow", appName)
+    // Debug deliberately installs alongside beta and uses its own visible label.
+    assertEquals("MuseFlow Debug", appName)
   }
 }

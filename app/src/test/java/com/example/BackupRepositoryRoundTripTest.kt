@@ -18,6 +18,16 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class BackupRepositoryRoundTripTest {
 
+    @Test fun `legacy backups normalize known recording keys without merging versions`() {
+        val first = org.json.JSONObject().put("key", "song::artist").put("title", "Song").put("artist", "Artist")
+            .put("sourceId", "audio000001").put("sourceType", "YOUTUBE_MUSIC")
+        val second = org.json.JSONObject(first.toString()).put("sourceId", "video000001")
+        assertEquals("yt:audio000001", first.toLikedSongEntity()!!.key)
+        assertEquals("yt:audio000001", first.toPlaylistTrackEntity(1)!!.key)
+        org.junit.Assert.assertNotEquals(first.toLikedSongEntity()!!.key, second.toLikedSongEntity()!!.key)
+    }
+
+
     @Test
     fun `a fully-populated liked song survives a json round trip`() {
         val original = LikedSongEntity(
@@ -36,7 +46,8 @@ class BackupRepositoryRoundTripTest {
 
         val restored = original.toBackupJson().toLikedSongEntity()
 
-        assertEquals(original, restored)
+        assertEquals(original.copy(streamUrl = null), restored)
+        org.junit.Assert.assertFalse(original.toBackupJson().toString().contains("stream.m4a"))
     }
 
     @Test
@@ -95,7 +106,7 @@ class BackupRepositoryRoundTripTest {
         // call (a fresh id, not the original one).
         val restored = original.toBackupJson().toPlaylistTrackEntity(playlistId = 99L)
 
-        assertEquals(original.copy(playlistId = 99L), restored)
+        assertEquals(original.copy(playlistId = 99L, streamUrl = null), restored)
     }
 
     @Test

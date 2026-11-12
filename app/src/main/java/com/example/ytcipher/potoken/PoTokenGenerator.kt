@@ -41,7 +41,12 @@ object PoTokenGenerator {
     private val mutex = Mutex()
     private var sessionId: String? = null
     private var sessionPoToken: String? = null
-    private var webView: PoTokenWebView? = null
+    private val resourceScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
+    private val retained = com.example.IdleResource<PoTokenWebView>(resourceScope) { holder ->
+        mutex.withLock {
+            if (holder.isUnused()) withContext(kotlinx.coroutines.NonCancellable) { closeWebViewLocked() }
+        }
+    }
 
     private val recoveryPolicy = WebViewRecoveryPolicy()
 
@@ -54,6 +59,7 @@ object PoTokenGenerator {
      */
     suspend fun generate(context: Context, videoId: String, sessionId: String): PoTokenResult? =
         withContext(Dispatchers.IO) {
+            retained.acquire()
             try {
                 withTimeout(TOTAL_TIMEOUT_MS) {
                     generateInternal(context, videoId, sessionId, forceRecreate = false)
@@ -65,10 +71,12 @@ object PoTokenGenerator {
             } catch (e: BadWebViewException) {
                 Log.e(TAG, "This device's WebView implementation can't run the BotGuard challenge", e)
                 null
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 Log.e(TAG, "PoToken generation failed", e)
                 null
-            }
+            } finally { retained.release() }
         }
 
     private suspend fun generateInternal(
@@ -80,9 +88,9 @@ object PoTokenGenerator {
         val (activeWebView, activeSessionPoToken, wasRecreated) = mutex.withLock {
             val needsRecreate = poTokenSessionNeedsRecreate(
                 forceRecreate = forceRecreate,
-                hasWebView = webView != null,
-                isExpired = webView?.isExpired ?: false,
-                isDead = webView?.isDead ?: false,
+                hasWebView = retained.value != null,
+                isExpired = retained.value?.isExpired ?: false,
+                isDead = retained.value?.isDead ?: false,
                 currentSessionId = this.sessionId,
                 requestedSessionId = sessionId
             )
@@ -93,7 +101,7 @@ object PoTokenGenerator {
                 }
                 closeWebViewLocked()
                 val created = try {
-                    PoTokenWebView.create(context)
+                    PoTokenWebView.create(context.applicationContext)
                 } catch (t: Throwable) {
                     recoveryPolicy.onFailure()
                     throw t
@@ -104,20 +112,21 @@ object PoTokenGenerator {
                     created.generatePoToken(sessionId)
                 } catch (t: Throwable) {
                     recoveryPolicy.onFailure()
-                    withContext(Dispatchers.Main) { created.close() }
+                    withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) { created.close() }
                     throw t
                 }
                 recoveryPolicy.onSuccess()
-                webView = created
+                retained.value = created
                 sessionPoToken = mintedSessionToken
                 this.sessionId = sessionId
             }
-            Triple(webView!!, sessionPoToken!!, needsRecreate)
+            Triple(retained.value!!, sessionPoToken!!, needsRecreate)
         }
 
         val videoPoToken = try {
             activeWebView.generatePoToken(videoId)
         } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
             if (wasRecreated) throw t
             // The WebView might just be stale (e.g. the app was backgrounded and its render
             // process reclaimed) - one retry from a fresh instance before giving up.
@@ -131,8 +140,8 @@ object PoTokenGenerator {
         // WebView.destroy() must run on the main thread like every other WebView method - this
         // function always runs under Dispatchers.IO (via the public generate() entry point above),
         // so without this explicit switch, close() would run on IO and throw.
-        webView?.let { stale -> withContext(Dispatchers.Main) { stale.close() } }
-        webView = null
+        retained.value?.let { stale -> withContext(Dispatchers.Main) { stale.close() } }
+        retained.value = null
         sessionPoToken = null
         this.sessionId = null
     }

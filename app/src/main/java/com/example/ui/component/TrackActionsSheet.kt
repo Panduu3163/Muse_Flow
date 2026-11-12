@@ -1,7 +1,8 @@
 package com.example.ui.component
 
+import com.example.ui.utils.MicroIconButton
+import com.example.ui.utils.feedbackClickable
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -21,6 +23,9 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Downloading
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -32,10 +37,12 @@ import androidx.compose.material.icons.filled.PlaylistRemove
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -44,12 +51,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 
 /**
  * Long-press/overflow actions for a track.
@@ -73,6 +82,11 @@ fun TrackActionsSheet(
      * ever read when [onGoToAlbum] is non-null. */
     albumLabel: String? = null,
     isLiked: Boolean,
+    /** False for a track already on the device - liking it left it stuck in Liked with no
+     * reliable way back to playing it from there (see LibraryScreen's own note on that gap), so
+     * the action is removed rather than offered and broken. Hides both the header's quick-toggle
+     * and the "Add to Liked" row below, not just one. */
+    likeAvailable: Boolean = true,
     isDownloaded: Boolean,
     downloadProgress: Int?,
     onPlayNext: () -> Unit,
@@ -88,7 +102,7 @@ fun TrackActionsSheet(
     onRemoveFromPlaylist: (() -> Unit)? = null,
     /** Absent unless a completed download exists to delete. */
     onDeleteDownload: (() -> Unit)? = null,
-    /** Absent for local files, which have no public URL. */
+    /** Local files share their title and artist; online tracks can include a public URL. */
     onShare: (() -> Unit)? = null,
     /** Present only from the History screen - the row's own dedicated remove button was folded
      * into the sheet once the row's trailing slot was needed for the menu button instead. */
@@ -103,17 +117,30 @@ fun TrackActionsSheet(
      * track that's already playing was confusing more than useful. Every other call site keeps
      * these, unchanged. */
     showQueueActions: Boolean = true,
+    showPlayNext: Boolean = true,
     /** False only from Now Playing's own menu: the like state already has its own header/footer
      * control there, so a second one in the sheet was a pure duplicate. */
     showLikeAction: Boolean = true,
     /** False only from Now Playing's own menu, same reasoning as [showLikeAction] - Now Playing
      * already has its own download control. */
     showDownloadAction: Boolean = true,
+    queueContext: Boolean = false,
+    durationLabel: String? = null,
+    onRefetch: (() -> Unit)? = null,
     /** Present only when opened from Now Playing with lyrics on screen - folds the lyrics panel's
      * own former menu into this one instead of two separate "⋮" buttons stacked on the same
      * screen. Null (and hidden) everywhere else. */
     onCopyLyrics: (() -> Unit)? = null,
     onSearchLyricsOnline: (() -> Unit)? = null,
+    lyricsSourceLabel: String? = null,
+    lyricsTimingLabel: String? = null,
+    onChooseLyricsSource: (() -> Unit)? = null,
+    onAdjustLyricsTiming: (() -> Unit)? = null,
+    onShareLyricsCard: (() -> Unit)? = null,
+    onFindLyrics: (() -> Unit)? = null,
+    onSleepTimer: (() -> Unit)? = null,
+    onEqualizer: (() -> Unit)? = null,
+    onAmbient: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -121,6 +148,10 @@ fun TrackActionsSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(
+            topStart = com.example.ui.theme.MuseFlowShapes.sheet,
+            topEnd = com.example.ui.theme.MuseFlowShapes.sheet,
+        ),
     ) {
         Column(
             modifier = Modifier
@@ -178,19 +209,28 @@ fun TrackActionsSheet(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (queueContext && !durationLabel.isNullOrBlank()) Text(
+                        text = durationLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
 
                 // Same duplicate-entry-point pattern as the playlist sheet's header pin: this
                 // toggles the exact flag the "Add to Liked"/"Remove from Liked" row below does,
-                // just reachable without scrolling past queue actions first.
-                IconButton(
+                // just reachable without scrolling past queue actions first. Absent entirely (not
+                // just disabled) when likeAvailable is false, same as any other inapplicable action
+                // in this sheet.
+                if (likeAvailable) MicroIconButton(
                     onClick = onToggleLike,
-                    modifier = Modifier.testTag("action_header_like"),
+                    modifier = Modifier.testTag("action_header_like").then(if (isLiked) Modifier.drawBehind {
+                        drawCircle(Color(0xFFFFA8C8).copy(alpha = .25f), radius = size.minDimension * .43f)
+                    } else Modifier),
                 ) {
                     Icon(
                         imageVector = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = if (isLiked) "Remove from Liked" else "Add to Liked",
-                        tint = if (isLiked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = if (isLiked) Color(0xFFFF6F9C) else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -200,7 +240,19 @@ fun TrackActionsSheet(
             // The three most common actions as pills, matching the playlist sheet's Shuffle pill.
             // Fewer than three renders fine - a pill is simply omitted when its action is absent
             // for this track, rather than shown disabled.
-            Row(
+            if (queueContext) Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                QueueActionPill(Icons.Default.Radio, "Radio", onStartRadio,
+                    RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp, topEnd = 5.dp, bottomEnd = 5.dp),
+                    Modifier.weight(1f), onDismiss)
+                QueueActionPill(Icons.AutoMirrored.Filled.PlaylistAdd, "Add to playlist", onAddToPlaylist,
+                    RoundedCornerShape(5.dp), Modifier.weight(1f), onDismiss)
+                QueueActionPill(Icons.Default.Share, "Share", onShare,
+                    RoundedCornerShape(topStart = 5.dp, bottomStart = 5.dp, topEnd = 24.dp, bottomEnd = 24.dp),
+                    Modifier.weight(1f), onDismiss)
+            } else Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -234,17 +286,25 @@ fun TrackActionsSheet(
 
             SheetDivider()
 
-            if (showQueueActions) {
+            if (showQueueActions && showPlayNext) {
                 SheetAction(
                     icon = Icons.AutoMirrored.Filled.PlaylistPlay,
                     label = "Play next",
-                    supporting = "Add to the top of your queue",
+                    supporting = if (queueContext) "Move this song after the current one" else "Add to the top of your queue",
                     onClick = { onPlayNext(); onDismiss() },
                     testTag = "action_play_next",
                 )
             }
 
-            if (showLikeAction) {
+            if (queueContext) SheetAction(Icons.AutoMirrored.Filled.QueueMusic, "Add to queue",
+                { onAddToQueue(); onDismiss() }, "action_add_to_queue_row",
+                supporting = "Keep another copy for later")
+
+            if (!queueContext) onSleepTimer?.let { action -> SheetAction(Icons.Default.Timer, "Sleep timer", { action(); onDismiss() }, "action_sleep_timer") }
+            if (!queueContext) onEqualizer?.let { action -> SheetAction(Icons.Default.GraphicEq, "Audio quality / EQ", { action(); onDismiss() }, "action_equalizer") }
+            if (!queueContext) onAmbient?.let { action -> SheetAction(Icons.Default.AutoAwesome, "Ambient mode", { action(); onDismiss() }, "action_ambient") }
+
+            if (showLikeAction && likeAvailable) {
                 SheetAction(
                     icon = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                     label = if (isLiked) "Remove from Liked" else "Add to Liked",
@@ -278,14 +338,14 @@ fun TrackActionsSheet(
                     else -> SheetAction(
                         icon = Icons.Default.Download,
                         label = "Download",
-                        supporting = "Make available for offline playback",
+                        supporting = "Save for offline playback",
                         onClick = { onDownload(); onDismiss() },
                         testTag = "action_download",
                     )
                 }
             }
 
-            SheetAction(
+            if (!queueContext) SheetAction(
                 icon = Icons.AutoMirrored.Filled.PlaylistAdd,
                 label = "Add to playlist",
                 onClick = { onAddToPlaylist(); onDismiss() },
@@ -314,7 +374,7 @@ fun TrackActionsSheet(
                 SheetAction(
                     icon = Icons.Default.Person,
                     label = "View artist",
-                    supporting = artist,
+                    supporting = if (queueContext) "Open this artist's page" else artist,
                     onClick = { goToArtist(); onDismiss() },
                     testTag = "action_view_artist",
                 )
@@ -324,7 +384,7 @@ fun TrackActionsSheet(
                 SheetAction(
                     icon = Icons.Default.Album,
                     label = "View album",
-                    supporting = albumLabel,
+                    supporting = if (queueContext) "Open this album's page" else albumLabel,
                     onClick = { goToAlbum(); onDismiss() },
                     testTag = "action_view_album",
                 )
@@ -339,6 +399,23 @@ fun TrackActionsSheet(
                 )
             }
 
+            onChooseLyricsSource?.let { action ->
+                SheetAction(Icons.Default.Subtitles, "Lyrics source", { action(); onDismiss() },
+                    "action_lyrics_source", supporting = lyricsSourceLabel)
+            }
+            onAdjustLyricsTiming?.let { action ->
+                SheetAction(Icons.Default.Tune, "Lyrics timing", { action(); onDismiss() },
+                    "action_lyrics_timing", supporting = lyricsTimingLabel)
+            }
+            onShareLyricsCard?.let { action ->
+                SheetAction(Icons.Default.Share, "Share lyric card", { action(); onDismiss() },
+                    "action_share_lyric_card")
+            }
+            onFindLyrics?.let { action ->
+                SheetAction(Icons.Default.Refresh, "Find lyrics again", { action(); onDismiss() },
+                    "action_find_lyrics")
+            }
+
             onSearchLyricsOnline?.let { searchLyrics ->
                 SheetAction(
                     icon = Icons.Default.Search,
@@ -346,6 +423,11 @@ fun TrackActionsSheet(
                     onClick = { searchLyrics(); onDismiss() },
                     testTag = "action_search_lyrics_online",
                 )
+            }
+
+            if (queueContext) onRefetch?.let { refetch ->
+                SheetAction(Icons.Default.Refresh, "Refetch", { refetch(); onDismiss() },
+                    "action_refetch", supporting = "Resolve the stream again when played")
             }
 
             SheetAction(
@@ -356,6 +438,33 @@ fun TrackActionsSheet(
                 testTag = "action_details",
             )
         }
+    }
+}
+
+@Composable
+private fun QueueActionPill(
+    icon: ImageVector,
+    label: String,
+    action: (() -> Unit)?,
+    shape: RoundedCornerShape,
+    modifier: Modifier,
+    onDismiss: () -> Unit,
+) {
+    val available = action != null
+    Row(
+        modifier = modifier.height(54.dp).clip(shape)
+            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = if (available) 1f else .4f))
+            .then(action?.let { enabledAction -> Modifier.feedbackClickable { enabledAction(); onDismiss() } } ?: Modifier)
+            .padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.onPrimaryContainer)
+        Text(label, modifier = Modifier.padding(start = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onPrimaryContainer, maxLines = 2,
+            overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -379,7 +488,9 @@ private fun SheetAction(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 2.dp)
+            .liquidSurface(20.dp)
+            .feedbackClickable(onClick = onClick)
             .padding(horizontal = 24.dp, vertical = 14.dp)
             .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically,
@@ -419,7 +530,7 @@ private fun ActionPill(
             .padding(horizontal = 6.dp)
             .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.primaryContainer)
-            .clickable(onClick = onClick)
+            .feedbackClickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 10.dp)
             .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically,

@@ -3,7 +3,7 @@
  *
  * Ported from Echo-Music (GPL-3.0) - https://github.com/EchoMusicApp/Echo-Music
  * MuseFlow is GPL-3.0 as well, so this reuse keeps the same licence. Build config is adjusted to
- * match MuseFlow's toolchain (minSdk 24, Java 11) rather than Echo's (minSdk 26, Java 21).
+ * match MuseFlow's toolchain (minSdk 24, Java 17) rather than Echo's (minSdk 26, Java 21).
  */
 plugins {
     // Unversioned: AGP is already on the build classpath via the root project.
@@ -23,8 +23,8 @@ android {
     compileOptions {
         // java.time and other API 26+ library types this module uses are backported by this.
         isCoreLibraryDesugaringEnabled = true
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 }
 

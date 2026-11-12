@@ -1,10 +1,18 @@
 package com.example
 
+import coil3.request.crossfade
+
+import coil3.request.allowHardware
+
 import android.app.Application
-import coil.ImageLoader
-import coil.ImageLoaderFactory
-import coil.disk.DiskCache
-import coil.memory.MemoryCache
+import okio.Path.Companion.toOkioPath
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.network.cachecontrol.CacheControlCacheStrategy
+import coil3.ImageLoader
+import coil3.SingletonImageLoader
+import android.content.Context
+import coil3.disk.DiskCache
+import coil3.memory.MemoryCache
 import com.music.innertube.YouTube
 import com.music.innertube.models.YouTubeLocale
 import java.util.Locale
@@ -18,13 +26,14 @@ import kotlinx.coroutines.launch
  * ([YtHttpClients]), initializes the InnerTube client's locale/guest session, supplies a cached
  * [ImageLoader], and re-arms [AutoBackupWorker] if it was left enabled - before anything else in
  * the app runs. */
-class MuseFlowApplication : Application(), ImageLoaderFactory {
+class MuseFlowApplication : Application(), SingletonImageLoader.Factory {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
         super.onCreate()
         CrashHandler.install(this)
         YtHttpClients.init(this)
+        appScope.launch { BackupRepository.getInstance(this@MuseFlowApplication).recoverPendingSettings() }
 
         // Never set before this session: every InnerTube request went out with the module's own
         // default locale (`hl` built from `toLanguageTag()`, e.g. "en-US" - InnerTube expects a
@@ -57,6 +66,39 @@ class MuseFlowApplication : Application(), ImageLoaderFactory {
                 ArtistReleaseCheckWorker.schedule(this@MuseFlowApplication)
             }
         }
+
+        // Backfills a local cover file for any download made before that fix existed (or one
+        // whose cover fetch failed the first time) - see DownloadRepository.backfillMissingCovers's
+        // own doc for why this is safe to just run on every launch rather than needing a
+        // "have I done this already" flag.
+        appScope.launch {
+            runCatching { DownloadRepository.getInstance(this@MuseFlowApplication).backfillMissingCovers() }
+        }
+
+        // Best-effort, once-per-cold-start check for a newer GitHub release than what's
+        // installed - see UpdateChecker's own doc for why this is safe as a bare launch-time
+        // fire-and-forget (no WorkManager/polling) and how repeat notifications for the same
+        // release are prevented.
+        appScope.launch {
+            runCatching { UpdateChecker.checkForUpdate(this@MuseFlowApplication) }
+        }
+        appScope.launch {
+            runCatching { InstalledReleaseNotes.prefetch(this@MuseFlowApplication) }
+        }
+
+        // Backfills artistId/albumId for likes/playlist tracks added before that plumbing was
+        // reliably wired through the like/add-to-playlist write path - those rows have both
+        // permanently null otherwise, which is what silently broke Now Playing's "tap the artist
+        // name" for anything liked/added before this fix, not just anything played fresh. Same
+        // "safe to just run on every launch" reasoning as backfillMissingCovers above - each
+        // query only selects rows still missing the field, so a fully-backfilled library is a
+        // no-op read on every later launch.
+        appScope.launch {
+            runCatching { LikedSongsRepository.getInstance(this@MuseFlowApplication).backfillMissingArtistIds(this@MuseFlowApplication) }
+        }
+        appScope.launch {
+            runCatching { PlaylistRepository.getInstance(this@MuseFlowApplication).backfillMissingArtistIds(this@MuseFlowApplication) }
+        }
     }
 
     /**
@@ -66,17 +108,18 @@ class MuseFlowApplication : Application(), ImageLoaderFactory {
      * `newImageLoader` (`App.kt`), minus the DataStore-configurable cache-size preference this
      * app doesn't have a settings UI for - 250MB is a fixed, reasonable default instead.
      */
-    override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
+    override fun newImageLoader(context: Context): ImageLoader = ImageLoader.Builder(context)
+        .components { add(OkHttpNetworkFetcherFactory(cacheStrategy = { CacheControlCacheStrategy() })) }
         .crossfade(true)
         .allowHardware(true)
         .memoryCache {
-            MemoryCache.Builder(this)
-                .maxSizePercent(0.25)
+            MemoryCache.Builder()
+                .maxSizePercent(context, 0.25)
                 .build()
         }
         .diskCache {
             DiskCache.Builder()
-                .directory(cacheDir.resolve("image_cache"))
+                .directory(cacheDir.resolve("image_cache").toOkioPath())
                 .maxSizeBytes(250L * 1024 * 1024)
                 .build()
         }

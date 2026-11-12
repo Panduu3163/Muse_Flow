@@ -1,0 +1,5 @@
+<resources>
+    <!-- Overrides src/main's app_name for the debug build type only, so it's distinguishable by
+         label when installed alongside the beta/release build. -->
+    <string name="app_name">MuseFlow Debug</string>
+</resources>

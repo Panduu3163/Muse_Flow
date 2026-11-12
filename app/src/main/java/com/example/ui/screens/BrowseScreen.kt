@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.utils.MicroIconButton
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +15,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -62,9 +62,9 @@ fun BrowseScreen(
     onPlayTrack: (TrackResult, List<TrackResult>) -> Unit,
     playerViewModel: PlayerViewModel,
     onBack: () -> Unit,
+    modifier: Modifier = Modifier,
     onGoToArtist: (String) -> Unit = {},
     onGoToAlbum: (String) -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val router = remember { MusicSearchRouter(context) }
@@ -88,7 +88,7 @@ fun BrowseScreen(
             .testTag("browse_screen"),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack, modifier = Modifier.testTag("browse_back")) {
+            MicroIconButton(onClick = onBack, modifier = Modifier.testTag("browse_back")) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
@@ -137,7 +137,7 @@ fun BrowseScreen(
                         )
                     }
                 } else {
-                    LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 140.dp)) {
+                    LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 200.dp)) {
                         sections.forEachIndexed { sectionIndex, section ->
                             if (section.title != null) {
                                 item(key = "title_$sectionIndex") {
