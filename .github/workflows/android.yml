@@ -30,8 +30,9 @@ jobs:
           cache-read-only: ${{ github.event_name == 'pull_request' }}
       - name: Install the compile SDK
         run: |
-          printf 'y\n%.0s' {1..100} | sdkmanager --licenses > /dev/null
-          sdkmanager "platforms;android-37.1" "build-tools;37.0.0"
+          sdkmanager="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          printf 'y\n%.0s' {1..100} | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" "platforms;android-37.1" "build-tools;37.0.0"
       - name: Create an ephemeral test signing key
         run: >-
           keytool -genkeypair -keystore debug.keystore -storepass android
